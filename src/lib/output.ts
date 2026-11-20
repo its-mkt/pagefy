@@ -1,0 +1,138 @@
+// Claude 응답 해석(계획 <plan>/<style>/<notes>/<report>, 섹션 <section_html>/<section_css>/<section_notes>) + 자동 점검
+import type { Plan, PsdSummary } from '../../shared/types';
+
+/** 합친 결과 (점검·미리보기·저장에 쓰는 모양) */
+export interface ParsedOutput {
+  plan: Plan | null;
+  planError?: string;
+  html: string;
+  report: string;
+}
+
+function block(text: string, tag: string): string | null {
+  const open = text.indexOf(`<${tag}>`);
+  if (open < 0) return null;
+  const close = text.indexOf(`</${tag}>`, open);
+  return text.slice(open + tag.length + 2, close < 0 ? undefined : close).trim();
+}
+
+const stripFence = (s: string) => s.replace(/^```[a-z]*\s*|\s*```$/g, '').trim();
+
+export interface ParsedPlan {
+  plan: Plan | null;
+  error?: string;
+  style: string;
+  notes: string;
+  report: string;
+}
+
+export function parsePlanOutput(text: string): ParsedPlan {
+  const raw = block(text, 'plan');
+  let plan: Plan | null = null;
+  let error: string | undefined;
+  if (raw) {
+    try {
+      plan = JSON.parse(stripFence(raw));
+      if (!Array.isArray(plan?.sections) || !plan.sections.length) throw new Error('sections 가 비어 있음');
+      if (!Array.isArray(plan.images)) plan.images = [];
+    } catch (e) {
+      plan = null;
+      error = `계획 JSON 해석 실패: ${(e as Error).message}`;
+    }
+  } else error = '응답에 <plan> 블록이 없습니다.';
+  return { plan, error, style: stripFence(block(text, 'style') ?? ''), notes: block(text, 'notes') ?? '', report: block(text, 'report') ?? '' };
+}
+
+export interface ParsedSection {
+  html: string;
+  css: string;
+  notes: string;
+  error?: string;
+}
+
+export function parseSectionOutput(text: string): ParsedSection {
+  const html = stripFence(block(text, 'section_html') ?? '');
+  return { html, css: stripFence(block(text, 'section_css') ?? ''), notes: block(text, 'section_notes') ?? '', error: html ? undefined : '응답에 <section_html> 블록이 없습니다.' };
+}
+
+export const COPY_START = '▼▼▼';
+export const COPY_END = '▲▲▲';
+
+/** 담당자가 붙여넣을 복사 구간만 */
+export function copySection(html: string): string {
+  const s = html.indexOf(COPY_START);
+  const e = html.indexOf(COPY_END);
+  if (s < 0 || e < 0) return html;
+  const from = html.indexOf('-->', s) + 3;
+  const to = html.lastIndexOf('<!--', e);
+  return html.slice(from, to).trim();
+}
+
+const FILE_RE = /^s\d{2}_(bg|img|txt|ico|gif)\d+(-[a-z0-9]+(-[a-z0-9]+)*)?\.(jpg|png|gif)$/;
+
+export interface Check {
+  level: 'error' | 'warn' | 'ok';
+  message: string;
+}
+
+/** 규칙 6-1·7절·8-4 중 코드로 확인할 수 있는 것만 자동 점검 (화면 대조는 사람이 한다) */
+export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: string): Check[] {
+  const checks: Check[] = [];
+  const add = (level: Check['level'], message: string) => checks.push({ level, message });
+  const { plan, html } = out;
+  if (out.planError) add('error', out.planError);
+  if (!html) add('error', '응답에 <html> 블록이 없습니다.');
+
+  if (plan) {
+    const files = new Set<string>();
+    for (const im of plan.images || []) {
+      if (!FILE_RE.test(im.file)) add('error', `파일명 규칙(6-1) 위반: ${im.file}`);
+      if (files.has(im.file)) add('error', `파일명 중복: ${im.file}`);
+      files.add(im.file);
+      if (!(im.x0 >= 0 && im.y0 >= 0 && im.x1 <= summary.width && im.y1 <= summary.height && im.x1 > im.x0 && im.y1 > im.y0)) add('error', `${im.file}: 자르기 영역이 문서 밖이거나 비어 있음 (${im.x0},${im.y0}~${im.x1},${im.y1})`);
+      if (im.y1 - im.y0 > 3000) add('warn', `${im.file}: 세로 ${im.y1 - im.y0}px — 3,000px 넘으면 나누기 (6절)`);
+      if (im.source === 'layer' && im.layerId == null) add('error', `${im.file}: source "layer" 인데 layerId 없음`);
+      if (im.source === 'composite') {
+        const hit = summary.texts.filter((t) => !(t.b[3] <= im.y0 || t.b[1] >= im.y1 || t.b[2] <= im.x0 || t.b[0] >= im.x1));
+        const baked = new Set((plan.bakedTexts || []).map((b) => b.layerId));
+        const live = hit.filter((t) => !baked.has(t.id));
+        if (live.length) add('warn', `${im.file}: 글자 포함 원본 합성인데 HTML 글자 ${live.length}개와 영역이 겹침 → 글자가 두 번 보일 수 있음 (${live.slice(0, 3).map((t) => t.lines[0]).join(' / ')})`);
+      }
+      if (html && !html.includes(`${baseUrl}/${im.file}`)) add('warn', `${im.file}: plan 에는 있는데 HTML 에서 쓰지 않음`);
+      if (im.kind === 'gif') add('warn', `${im.file}: 움직이는 GIF 는 자동으로 만들 수 없어 정지 이미지로 저장합니다. 원본 GIF 로 바꿔 주세요.`);
+    }
+    if (html) {
+      const used = [...html.matchAll(/https:\/\/[^"')\s]+/g)].map((m) => m[0]).filter((u) => u.startsWith(baseUrl + '/'));
+      for (const u of new Set(used)) {
+        const f = u.slice(baseUrl.length + 1);
+        if (!files.has(f)) add('error', `HTML 이 plan 에 없는 이미지를 씀: ${f}`);
+      }
+    }
+  }
+
+  if (html) {
+    const copy = copySection(html);
+    const h1 = (copy.match(/<h1[\s>]/gi) || []).length;
+    if (h1) add('error', `복사 구간에 <h1> ${h1}개 (8-2: 쓰지 않음)`);
+    if (/<script[\s>]/i.test(copy)) add('error', '복사 구간에 <script> (7-1 금지)');
+    if (/<iframe[\s>]|<form[\s>]/i.test(copy)) add('error', '복사 구간에 <iframe>/<form> (7-1 금지)');
+    if (/position\s*:\s*absolute/i.test(copy)) add('error', 'position:absolute 사용 (5절·7-1 금지)');
+    if (/naver\.me|bit\.ly|han\.gl/i.test(copy)) add('error', '외부 단축 URL (7-1 금지)');
+    const imgs = [...copy.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0]);
+    const noAlt = imgs.filter((t) => !/\salt=/.test(t));
+    const noSize = imgs.filter((t) => !/\swidth=/.test(t) || !/\sheight=/.test(t));
+    if (noAlt.length) add('error', `alt 없는 <img> ${noAlt.length}개`);
+    if (noSize.length) add('warn', `width·height 속성 없는 <img> ${noSize.length}개 (7-1)`);
+    const h2 = (copy.match(/<h2[\s>]/gi) || []).length;
+    if (!h2) add('warn', '<h2> 가 하나도 없음 (8-2 제목 구조)');
+    if (/display\s*:\s*none|font-size\s*:\s*0(px)?\s*[;"]/i.test(copy)) add('warn', '숨긴 글자 의심 (display:none / font-size:0) — 8-2 9항');
+    // 텍스트 누락 검사 (9절 4항): 보이는 텍스트 레이어 첫 줄이 HTML 글자나 alt 에 있는지
+    const plain = copy.replace(/<br\s*\/?>/gi, '\n').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+    const norm = (s: string) => s.replace(/\s+/g, '');
+    const hay = norm(plain.replace(/<[^>]+>/g, ' ')) + norm([...copy.matchAll(/alt="([^"]*)"/g)].map((m) => m[1]).join(' '));
+    const missing = summary.texts.filter((t) => t.lines.some((l) => l.trim() && !hay.includes(norm(l))));
+    if (missing.length) add('warn', `HTML 글자·alt 에서 못 찾은 텍스트 레이어 ${missing.length}개: ${missing.slice(0, 5).map((t) => `"${t.lines.find((l) => l.trim())?.slice(0, 20)}"`).join(', ')}${missing.length > 5 ? ' …' : ''}`);
+    if (!checks.some((c) => c.level !== 'ok')) add('ok', '자동 점검 통과 (화면 대조·실제 채널 등록은 사람이 확인)');
+  }
+  return checks;
+}
