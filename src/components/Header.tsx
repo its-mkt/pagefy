@@ -13,8 +13,17 @@ export default function Header({ health, error, email, onLogout }: Props) {
   return (
     <header className="header">
       <div className="header__title">
-        <h1>Pagefy</h1>
-        <p>통이미지 디자인(PSD)을 팀 규칙(detail_to_markup.md)대로 HTML 마크업으로 바꿔 줍니다.</p>
+        <i className="header__mark" aria-hidden="true">
+          {/* 통이미지 한 장을 HTML 블록 여러 개로 나눈다 */}
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square">
+            <rect x="4" y="3" width="16" height="18" />
+            <path d="M4 9h16M4 15h16" />
+          </svg>
+        </i>
+        <div>
+          <h1>Pagefy</h1>
+          <p>통이미지 디자인(PSD)을 팀 규칙(detail_to_markup.md)대로 HTML 마크업으로 바꿔 줍니다.</p>
+        </div>
       </div>
       <div className="header__status">
         {error && <span className="badge badge--error">{error}</span>}

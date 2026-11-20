@@ -1,14 +1,43 @@
-// 디자인 토큰
-$bg: #f4f5f7;
-$surface: #ffffff;
-$line: #e2e5ea;
-$text: #1d2129;
-$muted: #6b7380;
-$primary: #2f5bea;
-$primary-dark: #2449c2;
-$ok: #1f9d55;
-$warn: #c77700;
-$error: #d93636;
-$radius: 10px;
-$font: 'Pretendard', 'Noto Sans KR', 'Malgun Gothic', sans-serif;
+// 디자인 토큰 — 광고 인사이트(ad-insight) 와 같은 값. 플랫: 모서리 0, 그림자 없음, 면은 테두리 없이 바탕 대비로 구분
+$font: 'Pretendard Variable', 'Pretendard', 'Malgun Gothic', system-ui, sans-serif;
 $mono: 'D2Coding', Consolas, 'Courier New', monospace;
+
+@mixin light {
+  --bg: #f4f6f9;
+  --card: #fff;
+  --ink: #1b2230;
+  --ink2: #394255;
+  --sub: #586174;
+  --line: #e4e8ee;
+  --line2: #cfd5de;
+  --acc: #2d5fd1;
+  --accbg: #e6edfb;
+  --accink: #2449a8;
+  --ok: #13803a;
+  --err: #c62a37;
+  --warn: #7a4a00;
+  --warnbg: #fbeccb;
+  --stage: #2a2d33; // 미리보기 뒤 어두운 판
+  --code-bg: #1e2128;
+  color-scheme: light;
+}
+
+@mixin dark {
+  --bg: #12151b;
+  --card: #1b2029;
+  --ink: #eef1f6;
+  --ink2: #cdd3de;
+  --sub: #9aa3b2;
+  --line: #283040;
+  --line2: #374156;
+  --acc: #4a74dc;
+  --accbg: #1f2a44;
+  --accink: #a8c0f5;
+  --ok: #3ecf5f;
+  --err: #ff6369;
+  --warn: #f0c060;
+  --warnbg: #3a2f14;
+  --stage: #0d0f13;
+  --code-bg: #0d0f13;
+  color-scheme: dark;
+}

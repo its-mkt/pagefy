@@ -8,7 +8,7 @@ import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from '../sh
 import { buildPlanMessages, buildSectionMessages, buildSystem } from '../core/prompt.ts';
 import { runClaude } from '../core/run.ts';
 import { validatePlan, validateSection } from '../core/validate.ts';
-import { EFFORT, MODEL, RUN, describeError, getClient } from './claude.ts';
+import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude.ts';
 import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
 import { loadRules } from './rules.ts';
 
@@ -57,6 +57,17 @@ async function streamTo(res: express.Response, work: (send: (e: StreamEvent) => 
   }
 }
 
+/** 단계별 걸린 시간을 서버 콘솔에 남긴다 (Supabase 150초 제한 안에 드는지 보려고) */
+function timed(label: string, effort: string, send: (e: StreamEvent) => void) {
+  const t0 = Date.now();
+  let first = 0;
+  return (e: StreamEvent) => {
+    if (!first && e.type === 'text') first = Date.now();
+    if (e.type === 'done') console.log(`[${label}] ${((Date.now() - t0) / 1000).toFixed(1)}s (첫 글자 ${first ? ((first - t0) / 1000).toFixed(1) : '-'}s) effort=${effort} out=${e.usage.output} cacheRead=${e.usage.cacheRead} $${e.usage.costUsd}`);
+    send(e);
+  };
+}
+
 function precheck(res: express.Response, problem: string | null) {
   if (problem) {
     res.status(400).json({ error: problem });
@@ -77,7 +88,7 @@ api.post('/plan', express.json({ limit: '80mb' }), async (req, res) => {
     const rules = loadRules();
     send({ type: 'status', message: `규칙: ${rules.source}${rules.fallback ? ' (공유 폴더 접근 불가 → 사본 사용)' : ''}` });
     send({ type: 'status', message: `계획 요청 중… (타일 ${body.tiles.length}장, 텍스트 ${body.summary.texts.length}개)` });
-    await runClaude(getClient(), RUN, buildSystem(rules.text), buildPlanMessages(body), send, signal);
+    await runClaude(getClient(), PLAN_RUN, buildSystem(rules.text), buildPlanMessages(body), timed('plan', PLAN_RUN.effort, send), signal);
   });
 });
 
@@ -86,7 +97,7 @@ api.post('/section', express.json({ limit: '40mb' }), async (req, res) => {
   if (!precheck(res, validateSection(body))) return;
   await streamTo(res, async (send, signal) => {
     if (MOCK) return mockStream(mockSectionOutput(body), send, signal);
-    await runClaude(getClient(), RUN, buildSystem(loadRules().text), buildSectionMessages(body), send, signal);
+    await runClaude(getClient(), RUN, buildSystem(loadRules().text), buildSectionMessages(body), timed(`section ${body.sectionId}`, RUN.effort, send), signal);
   });
 });
 

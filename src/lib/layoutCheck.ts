@@ -20,6 +20,8 @@ export interface LayoutResult {
   items: LayoutItem[];
   notFound: number;
   overflow360: number;
+  /** 7-5 비율 축소: 좁은 폭 높이 − PC 높이×비율 (px, 폭별) */
+  scaleGap: { width: number; gap: number }[];
   checks: Check[];
   feedback: string;
 }
@@ -171,10 +173,21 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
       items.push({ id: t.id, text: tg.key.slice(0, 20), dy: Math.round(best.dy * 10) / 10, dx: best.dx == null ? null : Math.round(best.dx * 10) / 10, ok });
     }
 
+    // 7-5 비율 축소 비교용 PSD 폭 높이 (글자 위치 표식이 들어간 같은 상태에서 잰다)
+    const pageHeight = () => doc.body.getBoundingClientRect().height;
+    const hPc = pageHeight();
+
     // 모바일 360px 가로 스크롤 (9절 5항)
     f.style.width = '360px';
     await new Promise((r) => setTimeout(r, 200));
     const overflow360 = Math.max(0, (doc.scrollingElement?.scrollWidth ?? 360) - 360);
+    // 7-5 모바일 = 이미지처럼 비율 축소: 높이도 폭 비율대로 줄어야 한다 (360px 폰 → 고도몰 상세 영역 약 323px)
+    const scaleGap: { width: number; gap: number }[] = [];
+    for (const w of [360, 323]) {
+      f.style.width = `${w}px`;
+      await new Promise((r) => setTimeout(r, 200));
+      scaleGap.push({ width: w, gap: Math.round((pageHeight() - (hPc * w) / W) * 10) / 10 });
+    }
 
     const found = items.filter((i) => i.dy != null);
     const pass = found.filter((i) => i.ok).length;
@@ -188,6 +201,14 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
       });
     }
     if (notFound) checks.push({ level: 'warn', message: `위치 대조 못 한 텍스트 ${notFound}개 (HTML 글자에서 첫 줄을 못 찾음 — 이미지로 구웠거나 빠짐)` });
+    // 반올림·이미지 높이 차이로 0.5% 또는 3px 까지는 같은 것으로 본다
+    const offScale = scaleGap.filter((g) => Math.abs(g.gap) > Math.max(3, ((hPc * g.width) / W) * 0.005));
+    if (hPc > 0)
+      checks.push(
+        offScale.length
+          ? { level: 'warn', message: `모바일 비율 축소 아님 (7-5): ${offScale.map((g) => `${g.width}px 폭에서 높이가 비율보다 ${g.gap > 0 ? '+' : ''}${g.gap}px`).join(', ')} — 글자·여백이 폭 비율대로 줄지 않는 곳이 있음` }
+          : { level: 'ok', message: `모바일 비율 축소 확인 (360·323px 폭 높이 = PC 높이 × 비율)` },
+      );
     checks.push(overflow360 > 0 ? { level: 'error', message: `모바일 360px 에서 가로 스크롤 ${overflow360}px 생김 (9절 5항)` } : { level: 'ok', message: '모바일 360px 가로 스크롤 없음' });
 
     const feedback = bad.length
@@ -196,7 +217,7 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
           .map((i) => `- #${i.id} "${i.text}": ${fmt(i)}`)
           .join('\n')}\n위치를 PSD 값(texts 의 baseline·anchorX)에 맞게 고쳐 줘. 가로가 "줄바꿈 다름"이면 PSD와 같은 위치에서 줄을 바꿔 줘.`
       : '';
-    return { items, notFound, overflow360, checks, feedback };
+    return { items, notFound, overflow360, scaleGap, checks, feedback };
   } finally {
     f.remove();
   }
