@@ -41,6 +41,8 @@ async function loadRules() {
 const MODEL = Deno.env.get('PAGEFY_MODEL') || 'claude-opus-5-5';
 const EFFORT = (Deno.env.get('PAGEFY_EFFORT') || 'medium') as Effort;
 const RUN: RunConfig = { model: MODEL, effort: EFFORT, maxTokens: 32000, timeLimitMs: 140_000 };
+/** 계획은 섹션 경계·이미지 목록만 정하므로 가볍게 (2026-11-20: 작은 PSD 도 medium 은 140초 초과) */
+const PLAN_RUN: RunConfig = { ...RUN, effort: (Deno.env.get('PAGEFY_PLAN_EFFORT') || 'low') as Effort, maxTokens: 16000 };
 const hasKey = () => !!Deno.env.get('ANTHROPIC_API_KEY');
 
 let client: Anthropic | null = null;
@@ -155,7 +157,7 @@ Deno.serve(async (req) => {
     if (problem) return json(req, 400, { error: problem });
     return sse(req, async (send, signal) => {
       send({ type: 'status', message: `계획 요청 중… (타일 ${b.tiles.length}장, 텍스트 ${b.summary.texts.length}개)` });
-      await runClaude(getClient(), RUN, buildSystem((await loadRules()).text), buildPlanMessages(b), send, signal);
+      await runClaude(getClient(), PLAN_RUN, buildSystem((await loadRules()).text), buildPlanMessages(b), send, signal);
     });
   }
 
