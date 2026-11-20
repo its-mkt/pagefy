@@ -36,6 +36,7 @@
     "typecheck": "tsc -b",
     "check:psd": "tsx scripts/check-psd.ts",
     "sync:rules": "tsx scripts/sync-rules.ts",
-    "build:function": "tsx scripts/build-function.ts"
+    "build:function": "tsx scripts/build-function.ts",
+    "gen:fonts": "tsx scripts/gen-font-subsets.ts"
   }
 }

@@ -1,5 +1,6 @@
 // Claude 응답 해석(계획 <plan>/<style>/<notes>/<report>, 섹션 <section_html>/<section_css>/<section_notes>) + 자동 점검
 import type { Plan, PsdSummary } from '../../shared/types';
+import { fontFaces, pretendardChars } from './fontLock';
 
 /** 합친 결과 (점검·미리보기·저장에 쓰는 모양) */
 export interface ParsedOutput {
@@ -126,6 +127,17 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     const h2 = (copy.match(/<h2[\s>]/gi) || []).length;
     if (!h2) add('warn', '<h2> 가 하나도 없음 (8-2 제목 구조)');
     if (/display\s*:\s*none|font-size\s*:\s*0(px)?\s*[;"]/i.test(copy)) add('warn', '숨긴 글자 의심 (display:none / font-size:0) — 8-2 9항');
+    // 7-5 모바일 = 이미지처럼 비율 축소만 (화면 폭에 따른 재배치·최소 글자 크기 금지)
+    if (/@media\b[^{]*\b(max|min)-width|@container\b/i.test(copy)) add('warn', '@media 폭 조건·@container 규칙 사용 — 7-5: 휴대폰에서도 비율 축소만 (재배치·글자 크기 변경 금지)');
+    if (/max\(\s*\d+(\.\d+)?px\s*,\s*calc\(/i.test(copy)) add('warn', 'max(…px, calc(…)) 최소 글자 크기 — 7-5: 글자만 커지면 배경과 어긋나므로 쓰지 않음');
+    const goodomall = /<style[\s>]/i.test(copy);
+    if (goodomall) {
+      // 7-2-1: 아이티켓 스킨이 상세 영역 h3 를 숨김 (.item_goods_sec h3{display:none})
+      const h3 = (copy.match(/<h3[\s>]/gi) || []).length;
+      if (h3) add('error', `복사 구간에 <h3> ${h3}개 — 아이티켓 스킨이 상세 영역 h3 를 숨김 (7-2-1). 소제목은 <p role="heading" aria-level="3">`);
+      // 5절 9항 폰트 고정 — 조각에 없는 글자는 대체 폰트로 그려진다
+      for (const m of fontFaces(pretendardChars(summary)).missing) add('warn', `폰트 조각에 없는 글자 (굵기 ${m.weight}): ${m.chars.slice(0, 20)} → 'Pretendard' 대체로 표시 (5절 9항)`);
+    }
     // 텍스트 누락 검사 (9절 4항): 보이는 텍스트 레이어 첫 줄이 HTML 글자나 alt 에 있는지
     const plain = copy.replace(/<br\s*\/?>/gi, '\n').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
     const norm = (s: string) => s.replace(/\s+/g, '');

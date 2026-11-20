@@ -2,6 +2,7 @@
 // 생성은 두 단계: 1) 계획(plan)  2) 섹션별 마크업(section). 무료 Supabase 함수 150초 제한 안에 끝나도록 나눴다.
 import type Anthropic from '@anthropic-ai/sdk';
 import type { GenerateMeta, PlanRequest, SectionRequest, Tile } from '../shared/types.ts';
+import { trimRules } from './rules.ts';
 
 /** 두 단계 공통 지시 (시스템 프롬프트 앞부분). 규칙 본문은 원본 그대로 뒤에 붙인다 → 두 단계가 같은 캐시를 쓴다 */
 const SERVICE_PREFACE = `너는 통이미지 디자인(상품 상세페이지·랜딩·콘텐츠) PSD를 HTML 마크업으로 바꾸는 웹 서비스 "Pagefy" 안에서 일한다.
@@ -15,6 +16,9 @@ const SERVICE_PREFACE = `너는 통이미지 디자인(상품 상세페이지·�
 - 이미지 업로드(6절 FTP)와 9절 검증(브라우저 대조·URL 200 확인)은 사람과 프로그램이 한다. 너는 하지 않고, 보고의 "미검증 항목"에 적는다.
 - 작업은 두 단계로 나뉜다 (서버 실행 시간 제한 때문). ① 계획: 섹션·이미지·공통 스타일·작성 지침을 정한다. ② 섹션: 계획을 받아 섹션 하나의 마크업만 쓴다.
   섹션들은 따로 동시에 만들어진 뒤 프로그램이 순서대로 합친다. 그래서 섹션끼리 겹치는 이름·스타일은 계획 단계에서 정하고, 섹션 단계는 그것을 그대로 따른다.
+- 고도몰 폰트 고정(5절 9항)은 프로그램이 한다: 'dp-pretendard' @font-face(쓴 글자만 담은 조각)·버전 고정 Pretendard @import·font-synthesis·text-size-adjust·color-scheme·전화번호 링크 방지를 <style> 맨 앞에 넣고,
+  CSS·인라인 style 의 font-family 가 'Pretendard' 로 시작하면 앞에 'dp-pretendard' 를 붙인다. 너는 Pretendard @import·@font-face 와 그 고정 속성을 쓰지 말고 font-family 는 'Pretendard', … 로만 쓴다. Paperlogy 등 다른 웹폰트 @import 는 네가 쓴다.
+- 모바일은 이미지처럼 비율 축소만 한다(7-5): 모든 크기를 calc(N * var(--u)) 로. @media·@container 로 재배치·글자 크기 변경, max(12px, …) 최소 글자 크기를 쓰지 않는다.
 - 네가 따를 핵심: 1절 기본 원칙, 4절·4-1 변환, 5절 레이아웃·폰트, 6-1 파일명·경로, 7절 HTML 작성 방식(채널별), 8절 검색 최적화, 10절 하지 말 것.
 
 자료 해석:
@@ -34,7 +38,7 @@ const SERVICE_PREFACE = `너는 통이미지 디자인(상품 상세페이지·�
 </service_context>`;
 
 export function buildSystem(rulesText: string): Anthropic.Beta.BetaTextBlockParam[] {
-  return [{ type: 'text', text: `${SERVICE_PREFACE}\n\n<rules>\n${rulesText}\n</rules>`, cache_control: { type: 'ephemeral' } }];
+  return [{ type: 'text', text: `${SERVICE_PREFACE}\n\n<rules>\n${trimRules(rulesText)}\n</rules>`, cache_control: { type: 'ephemeral' } }];
 }
 
 export function imageBaseUrl(meta: GenerateMeta) {
@@ -76,6 +80,7 @@ const extraBlock = (extra?: string) =>
 
 const PLAN_TASK = `<task>
 지금은 ① 계획 단계다. 마크업은 쓰지 말고 아래 네 블록만 출력한다 (블록 밖에 다른 글 없이).
+세부 마크업 고민은 섹션 단계가 한다. 여기서는 섹션 경계·이미지 영역·공통 이름만 빠르게 정한다 (서버 시간 제한이 있다).
 
 <plan>
 {"prefix":"dp-...","sections":[{"id":"s00","name":"메인 비주얼","y0":0,"y1":1300}],
@@ -85,12 +90,12 @@ const PLAN_TASK = `<task>
  "wrapperStyle":"(오픈마켓일 때만: 바깥 div 의 인라인 style. 고도몰이면 빼라)"}
 </plan>
 <style>
-(고도몰: 복사 구간 맨 앞 <style> 에 들어갈 공통 CSS — 웹폰트 @import, 최상위 .prefix 와 --u 정의(7-2), 스킨 CSS 방어, 섹션들이 같이 쓸 공통 클래스.
+(고도몰: 복사 구간 맨 앞 <style> 에 들어갈 공통 CSS — Pretendard 외 웹폰트 @import, 최상위 .prefix 와 --u 정의(7-2), 스킨 CSS 방어, 섹션들이 같이 쓸 공통 클래스.
  섹션별 CSS 는 넣지 않는다. 모든 선택자는 .prefix 로 시작. 오픈마켓이면 이 블록은 비워 둔다)
 </style>
 <notes>
 (섹션 단계 작성자에게 줄 지침, 짧게: 색·글자 크기 체계, 반복 요소와 그 클래스 이름(또는 오픈마켓 인라인 스타일 패턴),
- 섹션별로 무엇을 h2/h3 로 할지와 표·목록으로 만들 부분, 이미지별 쓰임(배경/img), 섹션 사이 간격 처리)
+ 섹션별로 무엇을 h2(복사 구간 제목)·소제목(p role="heading" aria-level="3", 7-2-1: 고도몰은 h3 금지)으로 할지와 표·목록으로 만들 부분, 이미지별 쓰임(배경/img), 섹션 사이 간격 처리)
 </notes>
 <report>
 (계획 단계 보고: 섹션 수와 나눈 근거, 이미지로 구울 텍스트와 사유, 폰트 매핑, CSS로 못 옮겨 이미지 처리할 효과, 검색 최적화 제안(8-3 4항), 미검증 항목)
