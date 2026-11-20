@@ -7,3 +7,6 @@ dist
 # Supabase 함수 배포용 복사본 (yarn build:function 이 core/·shared/ 에서 만든다)
 supabase/functions/pagefy/core/
 supabase/functions/pagefy/shared/
+
+# Playwright MCP 작업 기록
+.playwright-mcp/

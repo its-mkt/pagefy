@@ -1,101 +1,159 @@
 @use 'tokens' as *;
 
+:root { @include light; }
+:root[data-theme='dark'] { @include dark; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) { @include dark; }
+}
+
 *,
 *::before,
 *::after { box-sizing: border-box; }
 
+html { min-width: 360px; }
+
 body {
   margin: 0;
-  background: $bg;
-  color: $text;
-  font: 14px/1.6 $font;
+  background: var(--bg);
+  color: var(--ink);
+  font: 0.875rem/1.55 $font;
+  letter-spacing: -0.005em;
   word-break: keep-all;
+  overflow-wrap: break-word;
+  -webkit-font-smoothing: antialiased;
 }
 
 button, input, select, textarea { font: inherit; color: inherit; }
 
+:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
 .app__main {
   max-width: 1400px;
   margin: 0 auto;
-  padding: 20px 24px 80px;
+  padding: 2rem 2rem 5rem;
   display: grid;
-  gap: 16px;
+  gap: 1rem;
+
+  @media (max-width: 640px) { padding: 1rem 1rem 4rem; }
 }
 
-// 머리
+// 머리 — 광고 인사이트 상단바와 같은 높이·선
 .header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 0.5rem 1rem;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
-  background: $surface;
-  border-bottom: 1px solid $line;
+  min-height: 4rem;
+  padding: 0.75rem 2rem;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
 
-  h1 { margin: 0; font-size: 20px; }
-  p { margin: 2px 0 0; color: $muted; font-size: 13px; }
+  // 좁은 화면에선 뱃지가 줄바꿈돼 높아지므로 고정하지 않는다
+  @media (max-width: 640px) { position: static; padding: 0.75rem 1rem; }
 
-  &__status { display: flex; flex-wrap: wrap; gap: 6px; }
+  &__title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
+  &__mark {
+    width: 2rem;
+    height: 2rem;
+    flex: none;
+    display: grid;
+    place-items: center;
+    background: var(--acc);
+    color: #fff;
+    svg { width: 1.125rem; height: 1.125rem; }
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.3;
+  }
+  p { margin: 0; color: var(--sub); font-size: 0.75rem; }
+
+  &__status { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 }
 
 .badge {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: $bg;
-  border: 1px solid $line;
-  font-size: 12px;
-  color: $muted;
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.5rem;
+  padding: 0 0.5rem;
+  background: var(--bg);
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--sub);
+  white-space: nowrap;
 
-  &--ok { color: $ok; border-color: rgba($ok, 0.35); background: rgba($ok, 0.07); }
-  &--warn { color: $warn; border-color: rgba($warn, 0.35); background: rgba($warn, 0.07); }
-  &--error { color: $error; border-color: rgba($error, 0.35); background: rgba($error, 0.07); }
+  &--ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  &--warn { color: var(--warn); background: var(--warnbg); }
+  &--error { color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
+  &--acc { color: var(--accink); background: var(--accbg); }
 }
 
-// 패널
+// 패널 — 테두리 없이 흰 면
 .panel {
-  background: $surface;
-  border: 1px solid $line;
-  border-radius: $radius;
-  padding: 18px 20px;
+  background: var(--card);
+  padding: 1.25rem;
 
   &__title {
-    margin: 0 0 14px;
-    font-size: 16px;
-    small { color: $muted; font-weight: 400; }
+    margin: 0 0 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    small { margin-left: 0.5rem; color: var(--sub); font-size: 0.75rem; font-weight: 400; }
   }
 }
 
-h3 { margin: 14px 0 6px; font-size: 13px; color: $muted; }
+h3 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink2);
+  &:first-child { margin-top: 0; }
+}
 
-.hint { color: $muted; font-size: 12px; }
+.hint { color: var(--sub); font-size: 0.75rem; }
 
 .msg {
-  margin: 10px 0 0;
-  &--error { color: $error; }
+  margin: 0.75rem 0 0;
+  &--error { color: var(--err); }
 }
 
 // 업로드
 .drop {
-  border: 2px dashed $line;
-  border-radius: $radius;
-  padding: 28px;
+  border: 1px dashed var(--line2);
+  background: var(--bg);
+  padding: 2rem;
   text-align: center;
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
 
-  &:hover, &--over { border-color: $primary; background: rgba($primary, 0.04); }
+  &:hover, &--over { border-color: var(--acc); background: var(--accbg); }
   &--busy { cursor: progress; }
-  &__msg { margin: 0; font-weight: 600; display: inline-flex; gap: 8px; align-items: center; }
-  &__hint { margin: 6px 0 0; color: $muted; font-size: 12px; }
+  &__msg { margin: 0; font-weight: 600; display: inline-flex; gap: 0.5rem; align-items: center; }
+  &__hint { margin: 0.375rem 0 0; color: var(--sub); font-size: 0.75rem; }
 }
 
 .spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba($primary, 0.25);
-  border-top-color: $primary;
+  border: 2px solid color-mix(in srgb, var(--acc) 25%, transparent);
+  border-top-color: var(--acc);
   border-radius: 50%;
   display: inline-block;
   flex: none;
@@ -108,7 +166,7 @@ h3 { margin: 14px 0 6px; font-size: 13px; color: $muted; }
 .summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 20px;
+  gap: 1.25rem;
 
   @media (max-width: 900px) { grid-template-columns: 1fr; }
 }
@@ -116,12 +174,14 @@ h3 { margin: 14px 0 6px; font-size: 13px; color: $muted; }
 .facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 8px;
+  gap: 1px;
   margin: 0;
+  background: var(--line);
+  border: 1px solid var(--line);
 
-  div { background: $bg; border-radius: 8px; padding: 8px 12px; }
-  dt { font-size: 12px; color: $muted; }
-  dd { margin: 0; font-weight: 600; }
+  div { background: var(--card); padding: 0.5rem 0.75rem; }
+  dt { font-size: 0.75rem; color: var(--sub); }
+  dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 }
 
 .fonts {
@@ -130,71 +190,77 @@ h3 { margin: 14px 0 6px; font-size: 13px; color: $muted; }
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 0.25rem;
 
-  li { padding: 2px 10px; border: 1px solid $line; border-radius: 6px; font-size: 13px; }
-  small { color: $muted; }
-  .is-bad { border-color: $error; color: $error; }
-  em { font-style: normal; font-size: 12px; }
+  li { margin: 0; padding: 0.125rem 0.5rem; background: var(--bg); font-size: 0.8125rem; }
+  small { color: var(--sub); }
+  .is-bad { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+  em { font-style: normal; font-size: 0.75rem; }
 }
 
 .warnings {
   margin: 0;
-  padding-left: 18px;
-  color: $warn;
-  li + li { margin-top: 4px; }
+  padding: 0.75rem 0.75rem 0.75rem 2rem;
+  background: var(--warnbg);
+  color: var(--warn);
+  li + li { margin-top: 0.25rem; }
 }
 
 .baked {
-  margin-top: 12px;
-  summary { cursor: pointer; color: $muted; font-size: 13px; }
-  ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+  margin-top: 0.75rem;
+  summary { cursor: pointer; color: var(--sub); font-size: 0.8125rem; }
+  ul { margin: 0.375rem 0 0; padding-left: 1.25rem; font-size: 0.8125rem; }
 }
 
 .texts {
   width: 100%;
-  margin-top: 8px;
+  margin-top: 0.5rem;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 0.75rem;
 
-  th, td { border-bottom: 1px solid $line; padding: 4px 6px; text-align: left; vertical-align: top; }
-  th { color: $muted; font-weight: 500; }
+  th, td { border-bottom: 1px solid var(--line); padding: 0.375rem 0.5rem; text-align: left; vertical-align: top; }
+  th { color: var(--sub); font-weight: 500; background: var(--bg); }
 }
 
 .swatch {
   display: inline-block;
   width: 10px;
   height: 10px;
-  border: 1px solid $line;
-  margin-right: 4px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+  margin-right: 0.25rem;
   vertical-align: -1px;
 }
 
 .scrollimg {
   height: 520px;
   overflow: auto;
-  border: 1px solid $line;
-  border-radius: 8px;
-  background: #222;
+  background: var(--stage);
 
   img { display: block; width: 100%; height: auto; }
 }
 
+// 세그먼트 — 광고 인사이트 .seg
 .seg {
   display: inline-flex;
-  border: 1px solid $line;
-  border-radius: 8px;
-  overflow: hidden;
-  margin-bottom: 8px;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  margin-bottom: 0.5rem;
 
   button {
     border: 0;
-    background: $surface;
-    padding: 5px 12px;
+    background: none;
+    color: var(--sub);
+    height: 1.5rem;
+    padding: 0 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 500;
     cursor: pointer;
-    font-size: 13px;
-    & + button { border-left: 1px solid $line; }
-    &.is-on { background: $primary; color: #fff; }
+    transition: background-color 0.15s, color 0.15s;
+
+    &:hover:not(.is-on) { color: var(--ink); background: var(--bg); }
+    &.is-on { background: var(--acc); color: #fff; font-weight: 600; }
   }
 }
 
@@ -202,72 +268,87 @@ h3 { margin: 14px 0 6px; font-size: 13px; color: $muted; }
 .form {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px 16px;
+  gap: 0.75rem 1rem;
 
-  label { display: grid; gap: 4px; align-content: start; }
-  label > span { font-size: 12px; color: $muted; }
-  small { color: $muted; font-size: 12px; word-break: break-all; }
+  label { display: grid; gap: 0.25rem; align-content: start; }
+  label > span { font-size: 0.75rem; color: var(--sub); font-weight: 500; }
+  small { color: var(--sub); font-size: 0.75rem; word-break: break-all; }
   &__wide { grid-column: 1 / -1; }
 
   input, select, textarea {
     width: 100%;
-    border: 1px solid $line;
-    border-radius: 8px;
-    padding: 7px 10px;
-    background: $surface;
-    &:focus { outline: 2px solid rgba($primary, 0.35); border-color: $primary; }
-    &.is-bad { border-color: $error; }
+    border: 1px solid var(--line2);
+    padding: 0.5rem 0.75rem;
+    background: var(--card);
+    &:focus { outline: none; border-color: var(--acc); }
+    &.is-bad { border-color: var(--err); }
   }
+  input, select { height: 2.25rem; padding-block: 0; }
   textarea { resize: vertical; }
-  .msg--error { color: $error; }
+  .msg--error { color: var(--err); }
 }
 
 .actions {
-  margin-top: 14px;
+  margin-top: 1rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 0.75rem;
   align-items: center;
 }
 
+// 버튼 — 광고 인사이트 .btn (테두리 없는 면, 마우스를 올리면 연한 강조 바탕)
 .btn {
-  border: 1px solid $line;
-  background: $surface;
-  border-radius: 8px;
-  padding: 8px 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  height: 2.25rem;
+  padding: 0 1rem;
+  border: 1px solid var(--line2);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
-  font-weight: 600;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
 
-  &:hover:not(:disabled) { border-color: $primary; color: $primary; }
+  &:hover:not(:disabled) { background: var(--accbg); color: var(--accink); border-color: var(--accbg); }
   &:disabled { opacity: 0.45; cursor: not-allowed; }
   &--primary {
-    background: $primary;
-    border-color: $primary;
+    background: var(--acc);
+    border-color: var(--acc);
     color: #fff;
-    &:hover:not(:disabled) { background: $primary-dark; color: #fff; }
+    font-weight: 600;
+    &:hover:not(:disabled) {
+      background: color-mix(in srgb, var(--acc) 88%, #000);
+      border-color: transparent;
+      color: #fff;
+    }
   }
-  &--ghost { background: transparent; }
-  &--sm { padding: 3px 10px; font-size: 12px; }
+  &--ghost { background: transparent; border-color: transparent; color: var(--ink2); }
+  &.is-danger, &.is-danger:hover:not(:disabled) { background: var(--err); border-color: var(--err); color: #fff; }
+  &--sm { height: 1.75rem; padding: 0 0.625rem; font-size: 0.75rem; }
 }
 
 // 결과
 .progress {
   &__log {
     margin: 0;
-    padding-left: 18px;
-    color: $muted;
-    font-size: 13px;
+    padding-left: 1.25rem;
+    color: var(--sub);
+    font-size: 0.8125rem;
   }
-  &__now { display: flex; gap: 10px; align-items: center; font-weight: 600; }
+  &__now { display: flex; gap: 0.625rem; align-items: center; font-weight: 600; }
   &__thinking {
-    margin: 8px 0 0;
+    margin: 0.5rem 0 0;
     max-height: 140px;
     overflow: auto;
-    background: $bg;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 12px;
-    color: $muted;
+    background: var(--bg);
+    padding: 0.625rem 0.75rem;
+    font-size: 0.75rem;
+    color: var(--sub);
     white-space: pre-wrap;
   }
 }
@@ -275,64 +356,67 @@ h3 { margin: 14px 0 6px; font-size: 13px; color: $muted; }
 .result-head {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 1rem;
   justify-content: space-between;
   align-items: flex-start;
 
-  &__side { display: grid; gap: 8px; justify-items: end; }
+  &__side { display: grid; gap: 0.5rem; justify-items: end; }
 }
 
-.usage { margin: 0; font-size: 12px; color: $muted; }
+.usage { margin: 0; font-size: 0.75rem; color: var(--sub); font-variant-numeric: tabular-nums; }
 
 .checks {
   margin: 0;
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 4px;
+  gap: 2px;
   flex: 1 1 480px;
 }
 
+// 대조 결과 한 줄 — 왼쪽 굵은 선이 상태, 바탕은 옅은 같은 색
 .check {
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
   border-left: 3px solid;
 
-  &--ok { border-color: $ok; background: rgba($ok, 0.06); }
-  &--warn { border-color: $warn; background: rgba($warn, 0.06); }
-  &--error { border-color: $error; background: rgba($error, 0.06); }
+  &--ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  &--warn { border-color: var(--warn); background: var(--warnbg); }
+  &--error { border-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
 }
 
 .tabs {
-  margin: 16px 0 10px;
+  margin: 1.25rem 0 0.75rem;
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
-  border-bottom: 1px solid $line;
+  border-bottom: 1px solid var(--line);
 
   button {
     border: 0;
     background: none;
-    padding: 8px 14px;
+    padding: 0.625rem 1rem;
+    margin-bottom: -1px;
     cursor: pointer;
     border-bottom: 2px solid transparent;
-    color: $muted;
-    &.is-on { color: $text; border-color: $primary; font-weight: 600; }
+    color: var(--sub);
+    font-weight: 500;
+    &:hover:not(.is-on) { color: var(--ink); background: var(--bg); }
+    &.is-on { color: var(--ink); border-color: var(--acc); font-weight: 600; }
   }
 }
 
 .preview {
-  &__bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 8px; .seg { margin: 0; } }
+  &__bar { display: flex; flex-wrap: wrap; gap: 0.625rem; align-items: center; margin-bottom: 0.5rem; .seg { margin: 0; } }
+  &__select { b { color: var(--ink); font-weight: 600; } }
+  &__hint { margin: 0 0 0.5rem; }
   &__cols {
     display: flex;
-    gap: 16px;
+    gap: 1rem;
     align-items: flex-start;
     overflow: auto;
     max-height: 3200px;
-    background: #2a2d33;
-    padding: 16px;
-    border-radius: 8px;
+    background: var(--stage);
+    padding: 1rem;
   }
   &__col {
     flex: none;
@@ -344,105 +428,152 @@ h3 { margin: 14px 0 6px; font-size: 13px; color: $muted; }
 
 .zoom {
   display: inline-flex;
-  gap: 6px;
+  gap: 0.375rem;
   align-items: center;
-  font-size: 13px;
-  select { border: 1px solid $line; border-radius: 6px; padding: 2px 6px; }
+  font-size: 0.8125rem;
+  color: var(--sub);
+  select { height: 2rem; border: 1px solid var(--line2); background: var(--card); padding: 0 0.5rem; color: var(--ink); }
 }
 
 .pre {
   margin: 0;
   max-height: 640px;
   overflow: auto;
-  background: $bg;
-  border-radius: 8px;
-  padding: 14px;
-  font: 13px/1.6 $font;
+  background: var(--bg);
+  padding: 0.875rem;
+  font: 0.8125rem/1.6 $font;
   white-space: pre-wrap;
   word-break: break-all;
 
-  &--code { font: 12px/1.55 $mono; background: #1e2128; color: #e6e6e6; }
+  &--code { font: 0.75rem/1.55 $mono; background: var(--code-bg); color: #e6e6e6; }
 }
 
 .images {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
+  gap: 0.75rem;
 
   figure {
     margin: 0;
-    border: 1px solid $line;
-    border-radius: 8px;
-    overflow: hidden;
-    &.is-big { border-color: $warn; }
+    background: var(--bg);
+    &.is-big { box-shadow: inset 0 0 0 2px var(--warn); }
   }
   img { display: block; width: 100%; height: 160px; object-fit: contain; background: repeating-conic-gradient(#eee 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
   figcaption {
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 0.375rem 0.625rem;
+    font-size: 0.75rem;
     display: grid;
     gap: 2px;
     word-break: break-all;
-    span { color: $muted; }
+    span { color: var(--sub); }
   }
 }
 
 .revise {
-  margin-top: 16px;
+  margin-top: 1rem;
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 0.625rem;
   align-items: flex-end;
 
   textarea {
-    flex: 1;
-    border: 1px solid $line;
-    border-radius: 8px;
-    padding: 8px 10px;
+    flex: 1 1 320px;
+    border: 1px solid var(--line2);
+    background: var(--card);
+    padding: 0.5rem 0.75rem;
     resize: vertical;
+    &:focus { outline: none; border-color: var(--acc); }
+  }
+
+  select {
+    height: 2.25rem;
+    border: 1px solid var(--line2);
+    padding: 0 0.5rem;
+    background: var(--card);
+    max-width: 220px;
   }
 }
 
 // 섹션별 진행
 .secs {
-  margin: 10px 0 0;
+  margin: 0.625rem 0 0;
   padding: 0;
   list-style: none;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 6px;
+  gap: 2px;
 }
 
 .sec {
-  padding: 6px 10px;
-  border-radius: 6px;
-  border-left: 3px solid $line;
-  background: $bg;
-  font-size: 13px;
-  small { color: $muted; margin-left: 4px; }
-  &--run { border-color: $primary; }
-  &--done { border-color: $ok; }
-  &--error { border-color: $error; background: rgba($error, 0.06); }
+  margin: 0;
+  padding: 0.375rem 0.625rem;
+  border-left: 3px solid var(--line2);
+  background: var(--bg);
+  font-size: 0.8125rem;
+  small { color: var(--sub); margin-left: 0.25rem; }
+  &--run { border-color: var(--acc); background: var(--accbg); }
+  &--done { border-color: var(--ok); }
+  &--error { border-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
 }
 
 // 로그인
 .login {
+  width: 100%;
   max-width: 520px;
-  &__form { grid-template-columns: 1fr; margin-top: 12px; }
+  justify-self: center;
+  margin-top: 2rem;
+  &__form { grid-template-columns: 1fr; margin-top: 0.75rem; }
 }
 
 .link-btn {
   border: 0;
   background: none;
-  padding: 0 0 0 8px;
-  color: $primary;
+  padding: 0 0 0 0.5rem;
+  color: var(--accink);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-decoration: underline;
 }
 
-.revise select {
-  border: 1px solid $line;
-  border-radius: 8px;
-  padding: 7px 8px;
-  background: $surface;
-  max-width: 220px;
+// 작업 목록 — 한 줄에 한 작업, 지금 열린 작업은 왼쪽 강조선
+.jobs {
+  &__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+
+  &__row {
+    margin: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto 6rem 5.5rem auto;
+    gap: 0.75rem;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg);
+    border-left: 3px solid transparent;
+
+    &.is-cur { border-color: var(--acc); background: var(--accbg); }
+
+    @media (max-width: 720px) {
+      grid-template-columns: auto 1fr auto;
+      .jobs__name { grid-column: 1 / -1; }
+    }
+  }
+
+  &__name {
+    display: grid;
+    min-width: 0;
+    b, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    b { font-weight: 600; }
+    small { color: var(--sub); font-size: 0.75rem; }
+  }
+
+  &__prog, &__time { font-size: 0.75rem; color: var(--sub); font-variant-numeric: tabular-nums; }
+  &__acts { display: flex; gap: 0.25rem; justify-content: flex-end; align-items: center; }
+  &__cur { font-size: 0.75rem; font-weight: 600; color: var(--accink); padding: 0 0.625rem; }
+}
+
+// 완료 보고 아래 접어 둔 응답 원문
+.raw {
+  margin-top: 0.75rem;
+  summary { cursor: pointer; color: var(--sub); font-size: 0.8125rem; padding: 0.25rem 0; }
+  .pre { margin-top: 0.5rem; }
 }

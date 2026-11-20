@@ -17,13 +17,18 @@ interface Props {
   baseUrl: string;
   canGenerate: boolean;
   running: boolean;
-  onGenerate: () => void;
+  /** 저장된 계획으로 이어서 만들 수 있음 (남은 섹션 수) */
+  resume: { missing: number; total: number } | null;
+  /** 저장된 계획이 있지만 설정이 바뀌어 처음부터 만들어야 함 */
+  resumeChanged: boolean;
+  /** fresh = 저장된 계획을 버리고 처음부터 */
+  onGenerate: (fresh?: boolean) => void;
   onCancel: () => void;
   health: HealthInfo | null;
   tileCount: number;
 }
 
-export default function SettingsPanel({ settings: s, onChange, baseUrl, canGenerate, running, onGenerate, onCancel, health, tileCount }: Props) {
+export default function SettingsPanel({ settings: s, onChange, baseUrl, canGenerate, running, resume, resumeChanged, onGenerate, onCancel, health, tileCount }: Props) {
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => onChange({ ...s, [k]: v });
   const slugOk = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s.slug);
   const revOk = /^\d{8}(-\d+)?$/.test(s.rev);
@@ -69,11 +74,20 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
       <div className="actions">
         {running ? (
           <button className="btn btn--ghost" onClick={onCancel}>취소</button>
+        ) : resume ? (
+          <>
+            <button className="btn btn--primary" disabled={!canGenerate} onClick={() => onGenerate()}>이어서 만들기 (남은 섹션 {resume.missing}개)</button>
+            <button className="btn" disabled={!canGenerate} onClick={() => onGenerate(true)}>처음부터 다시</button>
+          </>
         ) : (
-          <button className="btn btn--primary" disabled={!canGenerate} onClick={onGenerate}>마크업 생성</button>
+          <button className="btn btn--primary" disabled={!canGenerate} onClick={() => onGenerate(true)}>마크업 생성</button>
         )}
         <span className="hint">
-          {health?.mock ? 'MOCK 모드라 비용이 들지 않습니다.' : `PSD 렌더 타일 ${tileCount}장 + 레이어 정보를 보냅니다. 1회 대략 $0.5~2 (PSD 크기에 따라 다름).`}
+          {resume
+            ? `저장된 계획(섹션 ${resume.total - resume.missing}/${resume.total}개 완료)에서 이어갑니다. 남은 섹션만 요청하므로 비용이 적게 듭니다.`
+            : resumeChanged
+              ? '설정이 저장된 계획을 만들 때와 달라 처음부터 다시 만듭니다.'
+              : health?.mock ? 'MOCK 모드라 비용이 들지 않습니다.' : `PSD 렌더 타일 ${tileCount}장 + 레이어 정보를 보냅니다. 1회 대략 $0.5~2 (PSD 크기에 따라 다름).`}
         </span>
       </div>
     </section>
