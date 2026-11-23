@@ -358,7 +358,7 @@ export default function App() {
     let file = picked ?? (await getFile(job.fileKey).catch(() => undefined));
     if (!file) {
       setLoading(null);
-      setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 골라 열기」로 같은 PSD를 골라 주세요.');
+      setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 고르기」로 같은 PSD를 골라 주세요.');
       return;
     }
     if (picked) {

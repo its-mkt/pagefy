@@ -155,7 +155,7 @@ export default function JobsPanel(props: Props) {
                         picker.current?.click();
                       }}
                     >
-                      PSD 골라 열기
+                      PSD 고르기
                     </button>
                     </>
                   ) : (

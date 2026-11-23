@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import type { HealthInfo } from '../../shared/types';
 import { CLOUD } from '../lib/api';
 import ProfileMenu, { type ProfileUser } from './ProfileMenu';
+import logo from '../assets/pagefy.svg';
 
 interface Props {
   health: HealthInfo | null;
@@ -36,13 +37,8 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
           onHome();
         }}
       >
-        <i className="header__mark" aria-hidden="true">
-          {/* 통이미지 한 장을 HTML 블록 여러 개로 나눈다 */}
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square">
-            <rect x="4" y="3" width="16" height="18" />
-            <path d="M4 9h16M4 15h16" />
-          </svg>
-        </i>
+        {/* 파비콘과 같은 로고 (its.itket.com icons/pagefy.svg — 보라 네모 + 변환 화살표) */}
+        <img className="header__mark" src={logo} alt="" aria-hidden="true" />
         <div>
           <h1>Pagefy</h1>
           <p>상세페이지 PSD 를 쇼핑몰에 붙여넣을 HTML 로 바꿔 줍니다.</p>
