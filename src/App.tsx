@@ -526,7 +526,11 @@ export default function App() {
   const trashOpenRef = useRef(false);
   trashOpenRef.current = trash !== null;
   /** 지금 화면에 맞는 주소 */
-  const currentRoute = (): Route => (viewJobRef.current ? routeOf(viewJobRef.current, true) : jobRef.current ? routeOf(jobRef.current) : trashOpenRef.current ? { trash: true } : {});
+  // 연 작업의 주소는 지금 화면 설정(슬러그·rev)으로 만든다 — 작업 기록(jobRef)의 설정은 0.5초 늦게 저장된다
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const currentRoute = (): Route =>
+    viewJobRef.current ? routeOf(viewJobRef.current, true) : jobRef.current ? routeOf({ ...jobRef.current, settings: settingsRef.current }) : trashOpenRef.current ? { trash: true } : {};
   function syncUrl(replace = false) {
     const want = routeUrl(currentRoute());
     if (want === window.location.pathname + window.location.search) return;
@@ -541,9 +545,13 @@ export default function App() {
   /** 주소대로 화면 맞추기 (처음 열 때·뒤로/앞으로 가기) */
   async function applyRoute(r: Route) {
     if (running || loading) {
-      // 만드는 중엔 떠나지 않는다 — 주소를 지금 화면으로 되돌린다
-      syncUrl();
+      // 만드는 중엔 떠나지 않는다 — 주소를 지금 화면으로 되돌린다 (기록을 새로 쌓지 않고 바꿔서 「앞으로」가 끊기지 않게)
+      syncUrl(true);
       setLoadError('만드는 중에는 다른 화면으로 갈 수 없습니다. 멈추거나 끝난 뒤에 이동하세요.');
+  // 같은 작업에서 슬러그·rev 만 바뀌면(「새 rev」·설정 고침) 기록을 쌓지 않고 주소만 바꾼다 — 안 바꾸면 새로고침 때 옛 rev 로 찾다 못 찾음
+  useEffect(() => {
+    if (routeReady.current && !routeBusy.current && jobRef.current) syncUrl(true);
+  }, [settings.slug, settings.rev]); // eslint-disable-line react-hooks/exhaustive-deps
       return;
     }
     routeBusy.current = true;

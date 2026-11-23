@@ -434,13 +434,14 @@ export async function jobById(id: string): Promise<Job | null> {
   const mark = (j: Job): Job => ({ ...j, noFile: !keys.has(j.fileKey) });
   const usableLocal = local && !local.deletedAt && (!uid || !local.owner || local.owner === uid) ? mark(local) : null;
   if (!cloud) return usableLocal;
-  try {
-    // updatedAt 을 무한대로 둔 가벼운 사본 → fullJob 이 계정에서 읽는다 (네트워크 오류면 브라우저 사본)
-    const j = await fullJob({ id, lite: true, updatedAt: Infinity } as Job);
-    return j.deletedAt ? null : mark(j);
-  } catch {
-    return null;
-  }
+  // 계정 사본과 비교해 더 새로운 쪽을 쓴다 — 아직 못 올린 수정이 있는 브라우저 사본을 계정의 옛 사본으로 덮어쓰지 않게
+  const { data, error } = await supabase.from(TABLE).select('*').eq('id', id).maybeSingle();
+  if (error || !data) return usableLocal; // 네트워크 오류·아직 계정에 안 올라간 작업 → 브라우저 사본
+  const remote = fromRow(data as Row);
+  if (remote.deletedAt) return null;
+  if (usableLocal && usableLocal.updatedAt > remote.updatedAt) return usableLocal;
+  await putLocal(remote).catch(() => {});
+  return mark(remote);
 }
 
 /**
