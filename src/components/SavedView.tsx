@@ -10,7 +10,7 @@ interface Props {
 /**
  * PSD 원본 없이 저장된 결과 보기 (다른 PC·다른 주소에서 연 작업)
  * 저장해 둔 완성 HTML 만 보여 준다. 이미지는 이미지 서버 주소를 가리키므로 서버에 올린 뒤에만 보인다
- * 수정 요청·이미지 받기·위치 대조는 PSD 가 있어야 하므로 「PSD 골라 열기」로 안내한다
+ * 수정 요청·이미지 받기·위치 대조는 PSD 가 있어야 하므로 「PSD 고르기」로 안내한다
  */
 export default function SavedView({ job, onClose }: Props) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -56,7 +56,7 @@ export default function SavedView({ job, onClose }: Props) {
         저장된 결과 보기 <small>{name} · rev {job.meta?.rev ?? job.settings.rev}</small>
       </h2>
       <p className="hint saved__note">
-        PSD 원본 없이 저장된 HTML만 보여 줍니다. 이미지는 이미지 서버에 올린 뒤에만 보이고, 수정 요청·이미지 받기는 「PSD 골라 열기」로 같은 PSD를 열어야 할 수 있습니다.
+        PSD 원본 없이 저장된 HTML만 보여 줍니다. 이미지는 이미지 서버에 올린 뒤에만 보이고, 수정 요청·이미지 받기는 「PSD 고르기」로 같은 PSD를 열어야 할 수 있습니다.
       </p>
       <div className="actions saved__acts">
         <button className="btn btn--sm" onClick={copy}>

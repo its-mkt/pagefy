@@ -554,24 +554,44 @@ h3 {
 
 // 작업 목록 — 한 줄에 한 작업, 지금 열린 작업은 왼쪽 강조선
 .jobs {
-  &__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+  // 칸 규칙: 목록 전체가 한 표처럼 같은 칸을 쓴다 (줄마다 따로 재면 배지·버튼 길이에 따라 칸이 어긋남)
+  //  이름(남는 폭) | 상태 | 진행 | 시간 | 버튼 — 칸 사이 0.75rem, 줄 사이 2px, 줄 안쪽 0.5rem 0.75rem
+  //  상태·진행·시간·버튼 칸 폭은 목록에서 가장 긴 것에 맞춘다 (subgrid)
+  &__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content max-content max-content max-content;
+    column-gap: 0.75rem;
+    row-gap: 2px;
+  }
   &__more { display: flex; justify-content: center; margin-top: 0.5rem; }
 
   &__row {
     margin: 0;
+    grid-column: 1 / -1;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto 6rem 5.5rem auto;
-    gap: 0.75rem;
+    grid-template-columns: subgrid;
     align-items: center;
     padding: 0.5rem 0.75rem;
     background: var(--bg);
     border-left: 3px solid transparent;
 
     &.is-cur { border-color: var(--acc); background: var(--accbg); }
+  }
+  // 상태 배지는 칸 안 왼쪽, 버튼 묶음은 칸 안 오른쪽에 붙인다
+  &__row > .badge { justify-self: start; }
 
-    @media (max-width: 720px) {
-      grid-template-columns: auto 1fr auto;
+  // 좁은 화면: 표 대신 줄마다 이름(한 줄 전체) 아래 상태·진행·시간·버튼
+  @media (max-width: 720px) {
+    &__list { grid-template-columns: minmax(0, 1fr); }
+    &__row {
+      grid-template-columns: auto auto 1fr auto;
+      column-gap: 0.75rem;
+      row-gap: 0.375rem;
       .jobs__name { grid-column: 1 / -1; }
+      .jobs__time { justify-self: start; }
     }
   }
 
