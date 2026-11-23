@@ -166,13 +166,15 @@ const FILE_RE = UPLOAD_FILE_RE;
 export interface Check {
   level: 'error' | 'warn' | 'ok';
   message: string;
+  /** 'plan' = Claude 구조 계획(섹션·사진 띠·이미지에 남길 글자·제목 단계)을 바로잡으면 사라지는 문제 — 「문제 자동 수정」 대상 */
+  fix?: 'plan';
 }
 
 /** 규칙 6-1·7절·8-4 중 코드로 확인할 수 있는 것만 자동 점검 (화면 대조는 사람이 한다) */
 /** kept: 이미지에 일부러 남긴 글자 id (코드 생성 방식) — 텍스트 누락 검사에서 뺀다 */
 export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: string, kept?: Set<number>): Check[] {
   const checks: Check[] = [];
-  const add = (level: Check['level'], message: string) => checks.push({ level, message });
+  const add = (level: Check['level'], message: string, fix?: Check['fix']) => checks.push({ level, message, fix });
   const { plan, html } = out;
   if (out.planError) add('error', out.planError);
   if (!html) add('error', '응답에 <html> 블록이 없습니다.');
@@ -180,20 +182,20 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
   if (plan) {
     const files = new Set<string>();
     for (const im of plan.images || []) {
-      if (!FILE_RE.test(im.file)) add('error', `파일명 규칙(6-1) 위반: ${im.file}`);
-      if (files.has(im.file)) add('error', `파일명 중복: ${im.file}`);
+      if (!FILE_RE.test(im.file)) add('error', `파일명 규칙(6-1) 위반: ${im.file}`, 'plan');
+      if (files.has(im.file)) add('error', `파일명 중복: ${im.file}`, 'plan');
       files.add(im.file);
-      if (!(im.x0 >= 0 && im.y0 >= 0 && im.x1 <= summary.width && im.y1 <= summary.height && im.x1 > im.x0 && im.y1 > im.y0)) add('error', `${im.file}: 자르기 영역이 문서 밖이거나 비어 있음 (${im.x0},${im.y0}~${im.x1},${im.y1})`);
-      if (im.y1 - im.y0 > 3000) add('warn', `${im.file}: 세로 ${im.y1 - im.y0}px — 3,000px 넘으면 나누기 (6절)`);
+      if (!(im.x0 >= 0 && im.y0 >= 0 && im.x1 <= summary.width && im.y1 <= summary.height && im.x1 > im.x0 && im.y1 > im.y0)) add('error', `${im.file}: 자르기 영역이 문서 밖이거나 비어 있음 (${im.x0},${im.y0}~${im.x1},${im.y1})`, 'plan');
+      if (im.y1 - im.y0 > 3000) add('warn', `${im.file}: 세로 ${im.y1 - im.y0}px — 3,000px 넘으면 나누기 (6절)`, 'plan');
       if (im.source === 'layer' && im.layerId == null) add('error', `${im.file}: source "layer" 인데 layerId 없음`);
       // 코드 생성 방식의 kind 'txt' 는 글자 모양으로만 칠하는 배경(background-clip:text)이라 겹치는 게 맞다
       if (im.source === 'composite' && !(plan.engine === 'code' && im.kind === 'txt')) {
         const hit = summary.texts.filter((t) => !(t.b[3] <= im.y0 || t.b[1] >= im.y1 || t.b[2] <= im.x0 || t.b[0] >= im.x1));
         const baked = new Set([...(plan.bakedTexts || []).map((b) => b.layerId), ...(plan.engine === 'code' ? keepMap(summary, plan, !/<style/i.test(html)).keys() : [])]);
         const live = hit.filter((t) => !baked.has(t.id));
-        if (live.length) add('warn', `${im.file}: 글자 포함 원본 합성인데 HTML 글자 ${live.length}개와 영역이 겹침 → 글자가 두 번 보일 수 있음 (${live.slice(0, 3).map((t) => t.lines[0]).join(' / ')})`);
+        if (live.length) add('warn', `${im.file}: 글자 포함 원본 합성인데 HTML 글자 ${live.length}개와 영역이 겹침 → 글자가 두 번 보일 수 있음 (${live.slice(0, 3).map((t) => t.lines[0]).join(' / ')})`, 'plan');
       }
-      if (html && !html.includes(`${baseUrl}/${im.file}`)) add('warn', `${im.file}: plan 에는 있는데 HTML 에서 쓰지 않음`);
+      if (html && !html.includes(`${baseUrl}/${im.file}`)) add('warn', `${im.file}: plan 에는 있는데 HTML 에서 쓰지 않음`, 'plan');
       if (im.kind === 'gif') add('warn', `${im.file}: 움직이는 GIF 는 자동으로 만들 수 없어 정지 이미지로 저장합니다. 원본 GIF 로 바꿔 주세요.`);
     }
     if (html) {
@@ -219,7 +221,7 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     if (noAlt.length) add('error', `alt 없는 <img> ${noAlt.length}개`);
     if (noSize.length) add('warn', `width·height 속성 없는 <img> ${noSize.length}개 (7-1)`);
     const h2 = (copy.match(/<h2[\s>]/gi) || []).length;
-    if (!h2) add('warn', '<h2> 가 하나도 없음 (8-2 제목 구조)');
+    if (!h2) add('warn', '<h2> 가 하나도 없음 (8-2 제목 구조)', 'plan');
     if (/display\s*:\s*none|font-size\s*:\s*0(px)?\s*[;"]/i.test(copy)) add('warn', '숨긴 글자 의심 (display:none / font-size:0) — 8-2 9항');
     // 7-5 모바일 = 이미지처럼 비율 축소만 (화면 폭에 따른 재배치·최소 글자 크기 금지)
     if (/@media\b[^{]*\b(max|min)-width|@container\b/i.test(copy)) add('warn', '@media 폭 조건·@container 규칙 사용 — 7-5: 휴대폰에서도 비율 축소만 (재배치·글자 크기 변경 금지)');
@@ -249,7 +251,7 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     const norm = (s: string) => s.replace(/\s+/g, '');
     const hay = norm(plain.replace(/<[^>]+>/g, ' ')) + norm([...copy.matchAll(/alt="([^"]*)"/g)].map((m) => m[1]).join(' '));
     const missing = summary.texts.filter((t) => !kept?.has(t.id) && t.lines.some((l) => l.trim() && !hay.includes(norm(l))));
-    if (missing.length) add('warn', `HTML 글자·alt 에서 못 찾은 텍스트 레이어 ${missing.length}개: ${missing.slice(0, 5).map((t) => `"${t.lines.find((l) => l.trim())?.slice(0, 20)}"`).join(', ')}${missing.length > 5 ? ' …' : ''}`);
+    if (missing.length) add('warn', `HTML 글자·alt 에서 못 찾은 텍스트 레이어 ${missing.length}개: ${missing.slice(0, 5).map((t) => `"${t.lines.find((l) => l.trim())?.slice(0, 20)}"`).join(', ')}${missing.length > 5 ? ' …' : ''}`, 'plan');
     if (!checks.some((c) => c.level !== 'ok')) add('ok', '자동 점검 통과 (화면 대조·실제 채널 등록은 사람이 확인)');
   }
   return checks;

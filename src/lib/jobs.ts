@@ -423,6 +423,44 @@ async function fillOldInfo(rows: Job[]) {
   }
 }
 
+/**
+ * 주소(?job=…)로 연 작업 찾기. 계정이면 계정에서(이 브라우저 사본보다 새로울 수 있음), 아니면 브라우저 사본.
+ * 휴지통에 있거나 없는 작업(다른 계정 것 포함)은 null. noFile = 이 브라우저에 PSD 원본이 없음
+ */
+export async function jobById(id: string): Promise<Job | null> {
+  const cloud = await cloudReady();
+  const keys = new Set((await req((await store('files')).getAllKeys())) as string[]);
+  const local = await getLocal(id);
+  const mark = (j: Job): Job => ({ ...j, noFile: !keys.has(j.fileKey) });
+  const usableLocal = local && !local.deletedAt && (!uid || !local.owner || local.owner === uid) ? mark(local) : null;
+  if (!cloud) return usableLocal;
+  // 계정 사본과 비교해 더 새로운 쪽을 쓴다 — 아직 못 올린 수정이 있는 브라우저 사본을 계정의 옛 사본으로 덮어쓰지 않게
+  const { data, error } = await supabase.from(TABLE).select('*').eq('id', id).maybeSingle();
+  if (error || !data) return usableLocal; // 네트워크 오류·아직 계정에 안 올라간 작업 → 브라우저 사본
+  const remote = fromRow(data as Row);
+  if (remote.deletedAt) return null;
+  if (usableLocal && usableLocal.updatedAt > remote.updatedAt) return usableLocal;
+  await putLocal(remote).catch(() => {});
+  return mark(remote);
+}
+
+/**
+ * 주소(?markup=<슬러그>&rev=<rev>)로 연 작업 찾기 — 같은 슬러그·rev 가 여럿이면 가장 최근 것. count = 맞는 작업 수
+ * 슬러그는 이미지 서버 폴더 이름(규칙 6-1, 한 번 정하면 안 바뀜)이라 주소가 오래 유지된다
+ */
+export async function jobBySlug(slug: string, rev?: string): Promise<{ job: Job | null; count: number }> {
+  let ids: string[] = [];
+  if (await cloudReady()) {
+    let q = supabase.from(TABLE).select('id').is('deleted_at', null).eq('data->settings->>slug', slug);
+    if (rev) q = q.eq('data->settings->>rev', rev);
+    const { data, error } = await q.order('updated_at', { ascending: false }).limit(20);
+    if (error) cloudFailed(error, '주소로 찾기');
+    else ids = (data as { id: string }[]).map((r) => r.id);
+  }
+  if (!ids.length) ids = (await listLocal()).filter((j) => !j.deletedAt && j.settings?.slug === slug && (!rev || j.settings.rev === rev)).map((j) => j.id);
+  return { job: ids.length ? await jobById(ids[0]) : null, count: ids.length };
+}
+
 /** 열기 전에 전체 작업 받기: 가벼운 사본이면 브라우저 사본(같거나 더 새로우면) 또는 계정에서 전체를 읽는다 */
 export async function fullJob(j: Job): Promise<Job> {
   if (!j.lite) return j;
@@ -557,7 +595,7 @@ export async function busyJobIds(): Promise<Set<string>> {
 export const sameFile = (job: Pick<Job, 'fileName' | 'fileSize'>, f: File) => f.name === job.fileName && f.size === job.fileSize;
 
 export const sameMeta = (a: GenerateMeta, b: GenerateMeta) =>
-  a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot;
+  a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot && (a.market ?? '') === (b.market ?? '');
 
 /** 브라우저가 공간이 모자랄 때 임의로 지우지 않게 요청 (거절돼도 동작은 같다) */
 export function requestPersist() {

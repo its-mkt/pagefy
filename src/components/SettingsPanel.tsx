@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import type { Channel, HealthInfo } from '../../shared/types';
 import { CHANNEL_LABEL } from '../../shared/types';
 import { readLocal, toSlug } from '../lib/util';
+import { MARKETS, normMarket, type Market } from '../../shared/markets';
 
 export interface Settings {
   productName: string;
   channel: Channel;
+  /** 오픈마켓일 때 플랫폼 (폭 등 기준이 마켓마다 다름) */
+  market: Market;
   slug: string;
   rev: string;
   publicRoot: string;
@@ -36,10 +39,12 @@ interface Props {
 const CHANNEL_DESC: Record<Channel, string> = {
   itket: '고도몰 · <style> 사용 · PC 최대 860px',
   oncore: '고도몰 · <style> 사용 · PC 최대 860px',
-  openmarket: '인라인 스타일만 (스마트스토어·쿠팡 등)',
+  openmarket: '인라인 스타일만 · 아래에서 플랫폼 선택',
 };
 
 export default function SettingsPanel({ settings: s, onChange, baseUrl, canGenerate, running, resume, resumeChanged, onGenerate, onCancel, health, tileCount, collapsed, blockers }: Props) {
+  // 예전에 저장된 작업은 market 이 없다 → 기본 플랫폼으로
+  const mk: Market = normMarket(s.market);
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => onChange({ ...s, [k]: v });
   const slugOk = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s.slug);
   const revOk = /^\d{8}(-\d+)?$/.test(s.rev);
@@ -67,7 +72,7 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
         <div className="setrow">
           <p className="setrow__text">
             <b>{s.productName.trim() || '제품명 없음'}</b>
-            <span>{CHANNEL_LABEL[s.channel]}</span>
+            <span>{CHANNEL_LABEL[s.channel]}{s.channel === 'openmarket' ? ` · ${MARKETS[mk].label}` : ''}</span>
             <span>{s.slug}/{s.rev}</span>
           </p>
           <div className="setrow__acts">
@@ -104,6 +109,25 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
             </label>
           ))}
         </div>
+        {s.channel === 'openmarket' && (
+          <div className="market">
+            <label className="market__pick">
+              <span>플랫폼</span>
+              <select value={mk} onChange={(e) => set('market', e.target.value as Market)} aria-label="오픈마켓 플랫폼">
+                {(Object.keys(MARKETS) as Market[]).map((m) => (
+                  <option key={m} value={m}>
+                    {MARKETS[m].label}
+                    {MARKETS[m].width ? ` · 폭 ${MARKETS[m].width}px` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <small className="market__note">
+              {MARKETS[mk].note}
+              {!MARKETS[mk].verified && ' (기준 확인 전 — 붙여넣은 뒤 마켓 미리보기로 확인)'}
+            </small>
+          </div>
+        )}
 
         <details className="adv" open={advOpen}>
           <summary
