@@ -127,7 +127,8 @@ ${JSON.stringify(summary.texts)}
 </texts>
 ${extraBlock(req.extra)}
 아래는 PSD 합성 렌더 타일이다 (위에서부터 순서대로, 각 타일 위에 원본 y 범위를 적었다).`;
-  const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: [{ type: 'text', text: head }, ...tileBlocks(tiles), { type: 'text', text: PLAN_TASK }] }];
+  // 첫 user 메시지 끝에 캐시 지점 — 수정 요청(revision)은 같은 타일·레이어를 다시 보내므로 5분 안이면 캐시로 읽는다 (비용 절감)
+  const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: [{ type: 'text', text: head }, ...tileBlocks(tiles), { type: 'text', text: PLAN_TASK, cache_control: { type: 'ephemeral' } }] }];
   if (req.revision) {
     messages.push({ role: 'assistant', content: req.revision.previous });
     messages.push({ role: 'user', content: `수정 요청:\n${req.revision.feedback}\n\n고친 구조 계획을 같은 두 블록(<plan>, <report>)으로 전체 다시 써 줘.` });

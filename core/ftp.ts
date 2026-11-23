@@ -204,6 +204,11 @@ export class FtpClient {
   async rmdir(path: string) {
     await this.cmd(`RMD ${path}`, [250]);
   }
+  /** 이름 바꾸기 — 임시 이름으로 다 올린 뒤 정식 이름으로 (끊겨도 반쯤 올라간 파일이 정식 이름으로 남지 않게) */
+  async rename(from: string, to: string) {
+    await this.cmd(`RNFR ${from}`, [350]);
+    await this.cmd(`RNTO ${to}`, [250]);
+  }
 
   /** 끝내기. 고장 난 연결이면 QUIT 을 보내지 않고 바로 닫는다 (응답을 30초 기다리지 않게) */
   async quit() {

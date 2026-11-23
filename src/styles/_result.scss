@@ -208,6 +208,7 @@
     b { color: var(--ink); }
   }
   &__undo-check { display: flex; gap: 0.5rem; align-items: center; cursor: pointer; color: var(--ink); }
+  &__undo-warn { color: var(--err); font-weight: 600; }
   &__undo-actions { display: flex; gap: 0.5rem; }
   &__removed { font-size: 0.8125rem; color: var(--ink2); }
   &__tools {
