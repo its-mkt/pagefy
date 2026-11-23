@@ -443,6 +443,23 @@ export async function jobById(id: string): Promise<Job | null> {
   }
 }
 
+/**
+ * 주소(?markup=<슬러그>&rev=<rev>)로 연 작업 찾기 — 같은 슬러그·rev 가 여럿이면 가장 최근 것. count = 맞는 작업 수
+ * 슬러그는 이미지 서버 폴더 이름(규칙 6-1, 한 번 정하면 안 바뀜)이라 주소가 오래 유지된다
+ */
+export async function jobBySlug(slug: string, rev?: string): Promise<{ job: Job | null; count: number }> {
+  let ids: string[] = [];
+  if (await cloudReady()) {
+    let q = supabase.from(TABLE).select('id').is('deleted_at', null).eq('data->settings->>slug', slug);
+    if (rev) q = q.eq('data->settings->>rev', rev);
+    const { data, error } = await q.order('updated_at', { ascending: false }).limit(20);
+    if (error) cloudFailed(error, '주소로 찾기');
+    else ids = (data as { id: string }[]).map((r) => r.id);
+  }
+  if (!ids.length) ids = (await listLocal()).filter((j) => !j.deletedAt && j.settings?.slug === slug && (!rev || j.settings.rev === rev)).map((j) => j.id);
+  return { job: ids.length ? await jobById(ids[0]) : null, count: ids.length };
+}
+
 /** 열기 전에 전체 작업 받기: 가벼운 사본이면 브라우저 사본(같거나 더 새로우면) 또는 계정에서 전체를 읽는다 */
 export async function fullJob(j: Job): Promise<Job> {
   if (!j.lite) return j;

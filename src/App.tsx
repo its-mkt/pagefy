@@ -11,7 +11,7 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, fileKeyOf, fullJob, jobById, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
+import { busyJobIds, deleteJob, fileKeyOf, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
 import Header from './components/Header';
 import JobsPanel from './components/JobsPanel';
 import SavedView from './components/SavedView';
@@ -75,23 +75,38 @@ export interface Result {
 // ───── 주소(쿼리) ↔ 화면 ─────
 // GitHub Pages 라 경로(/pagefy/job/…)는 새로고침하면 404 → 쿼리로 둔다
 //   /pagefy/                    첫 화면
-//   /pagefy/?job=<작업 id>       작업 열기 (새로고침해도 다시 열림 — 저장된 계획으로 다시 만들어 Claude 비용 없음)
-//   /pagefy/?job=<id>&view=html  PSD 없이 저장된 HTML 결과 보기
-//   /pagefy/?trash              휴지통
+//   /pagefy/?markup=<제품 슬러그>&rev=<rev>   작업 열기 — 슬러그는 이미지 서버 폴더 이름(규칙 6-1)이라 영문이고 안 바뀐다
+//                                          (새로고침해도 다시 열림 — 저장된 계획으로 다시 만들어 Claude 비용 없음)
+//   … &view=html                            PSD 없이 저장된 HTML 결과 보기
+//   /pagefy/?trash                          휴지통
+//   /pagefy/?job=<작업 id>                   슬러그가 없는 작업·예전 주소용
 interface Route {
   job?: string;
+  markup?: string;
+  rev?: string;
   html?: boolean;
   trash?: boolean;
 }
 function readRoute(): Route {
   const q = new URLSearchParams(window.location.search);
-  return { job: q.get('job') || undefined, html: q.get('view') === 'html', trash: q.has('trash') };
+  return { markup: q.get('markup') || undefined, rev: q.get('rev') || undefined, job: q.get('job') || undefined, html: q.get('view') === 'html', trash: q.has('trash') };
 }
 function routeUrl(r: Route) {
-  const q = r.job ? `?job=${encodeURIComponent(r.job)}${r.html ? '&view=html' : ''}` : r.trash ? '?trash' : '';
+  const view = r.html ? '&view=html' : '';
+  const q = r.markup
+    ? `?markup=${encodeURIComponent(r.markup)}${r.rev ? `&rev=${encodeURIComponent(r.rev)}` : ''}${view}`
+    : r.job
+      ? `?job=${encodeURIComponent(r.job)}${view}`
+      : r.trash
+        ? '?trash'
+        : '';
   return window.location.pathname + q;
 }
 
+/** 작업 → 주소 (슬러그가 있으면 슬러그·rev, 없으면 id) */
+const routeOf = (j: Job, html = false): Route => (j.settings?.slug ? { markup: j.settings.slug, rev: j.settings.rev || undefined, html } : { job: j.id, html });
+/** 주소가 이 작업을 가리키는지 */
+const routeIs = (r: Route, j: Job | null | undefined) => !!j && (r.job ? r.job === j.id : !!r.markup && r.markup === j.settings?.slug && (!r.rev || r.rev === j.settings.rev));
 /** 마지막으로 확인한 권한 (계정 id 와 함께) — 다음 접속 때 화면을 바로 열기 위함 */
 const ROLE_KEY = 'pagefy.role';
 /** 계획 요청에 보낼 타일 이미지 합계 상한 (base64 글자 수) — core/validate.ts 의 MAX_TILE_B64 와 같게 (Claude API 요청 한도 32MB) */
@@ -511,7 +526,7 @@ export default function App() {
   const trashOpenRef = useRef(false);
   trashOpenRef.current = trash !== null;
   /** 지금 화면에 맞는 주소 */
-  const currentRoute = (): Route => (viewJobRef.current ? { job: viewJobRef.current.id, html: true } : jobRef.current ? { job: jobRef.current.id } : trashOpenRef.current ? { trash: true } : {});
+  const currentRoute = (): Route => (viewJobRef.current ? routeOf(viewJobRef.current, true) : jobRef.current ? routeOf(jobRef.current) : trashOpenRef.current ? { trash: true } : {});
   function syncUrl(replace = false) {
     const want = routeUrl(currentRoute());
     if (want === window.location.pathname + window.location.search) return;
@@ -533,18 +548,25 @@ export default function App() {
     }
     routeBusy.current = true;
     try {
-      if (!r.job) {
+      if (!r.job && !r.markup) {
         if (loadedRef.current || viewJobRef.current) closeCurrent();
         if (r.trash) await openTrash();
         else setTrash(null);
         return;
       }
-      if (!r.html && jobRef.current?.id === r.job && loadedRef.current) {
+      if (!r.html && routeIs(r, jobRef.current) && loadedRef.current) {
         setViewJob(null);
         return;
       }
-      if (r.html && viewJobRef.current?.id === r.job) return;
-      const job = await jobById(r.job);
+      if (r.html && routeIs(r, viewJobRef.current)) return;
+      let job: Job | null;
+      let note = '';
+      if (r.job) job = await jobById(r.job);
+      else {
+        const found = await jobBySlug(r.markup!, r.rev);
+        job = found.job;
+        if (found.count > 1) note = (`같은 제품(${r.markup}${r.rev ? ` · rev ${r.rev}` : ''})의 작업이 ${found.count}개라 가장 최근 것을 열었습니다. 다른 것은 최근 작업 목록에서 고르세요.`);
+      }
       if (!job) {
         setLoadError('주소의 작업을 찾지 못했습니다 (지워졌거나 휴지통에 있는 작업, 또는 다른 계정의 작업).');
         return;
@@ -552,7 +574,10 @@ export default function App() {
       if (r.html) {
         if (loadedRef.current) closeCurrent();
         await showSaved(job);
-      } else if (!job.noFile) await openJob(job);
+      } else if (!job.noFile) {
+        await openJob(job);
+        if (note) setLoadError(note); // 여는 동안 지워지지 않게 연 뒤에 알린다
+      }
       else if (listInfo(job).html) {
         // 이 PC 에 PSD 원본이 없으면 저장된 결과(HTML)라도 보여 준다
         if (loadedRef.current) closeCurrent();
@@ -572,7 +597,7 @@ export default function App() {
     if (!allowed || jobsLoading || routeReady.current) return;
     routeReady.current = true;
     const r = readRoute();
-    if (r.job || r.trash) applyRouteRef.current(r);
+    if (r.job || r.markup || r.trash) applyRouteRef.current(r);
   }, [allowed, jobsLoading]);
   // 뒤로/앞으로 가기
   useEffect(() => {
