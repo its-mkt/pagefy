@@ -595,7 +595,7 @@ export async function busyJobIds(): Promise<Set<string>> {
 export const sameFile = (job: Pick<Job, 'fileName' | 'fileSize'>, f: File) => f.name === job.fileName && f.size === job.fileSize;
 
 export const sameMeta = (a: GenerateMeta, b: GenerateMeta) =>
-  a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot;
+  a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot && (a.market ?? '') === (b.market ?? '');
 
 /** 브라우저가 공간이 모자랄 때 임의로 지우지 않게 요청 (거절돼도 동작은 같다) */
 export function requestPersist() {

@@ -7,8 +7,13 @@
 //  - 고도몰: 모든 크기 calc(N * var(--u)) (7-5), 스타일은 <style> 클래스 + 인라인 / 오픈마켓: 인라인·px 고정 (7-3)
 import type { GenerateMeta, Plan, PlanBundle, PlanImage, PsdSummary, TextInfo, TextRun } from '../../shared/types';
 import { godoRootCss } from '../../shared/width';
+import { MARKETS, marketWidth, normMarket, type MarketSpec } from '../../shared/markets';
 import { FONT_MAP } from './psd/extract';
 import type { SectionOut } from './assemble';
+import type { Check } from './output';
+
+/** 점검 경고. fix 'plan' = 구조 계획을 바로잡으면 사라지는 것 (「문제 자동 수정」 대상) */
+const warn = (message: string, fix?: Check['fix']): Check => ({ level: 'warn', message, fix });
 
 /** 배경 한 장 최대 세로 (규칙 6절) */
 const BG_MAX_H = 3000;
@@ -30,7 +35,7 @@ export interface CodegenResult {
   /** 이미지에 남긴 글자 (완료 보고용) */
   kept: KeptText[];
   /** 계획을 고쳐 쓴 것·주의할 것 (점검 경고로 보여 준다) */
-  warnings: string[];
+  warnings: Check[];
 }
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -91,7 +96,11 @@ interface Ctx {
   /** 상자 텍스트 자동 줄바꿈 위치 (텍스트 id → 새 줄이 시작하는 글자 위치들) */
   wraps: Record<number, number[]>;
   usesPaperlogy: boolean;
-  warnings: string[];
+  warnings: Check[];
+  /** 오픈마켓 플랫폼 출력 규칙 (shared/markets.ts — 고도몰은 없음) */
+  rules?: MarketSpec['rules'];
+  /** PSD px → 출력 px 배율 (오픈마켓 플랫폼 폭에 맞춰 줄일 때만 1 미만, 고도몰은 1 — 고도몰은 --u 로 줄인다) */
+  scale: number;
 }
 
 /** 색상 오버레이를 글자색에 섞는다 (불투명도 1 이면 오버레이 색 그대로) */
@@ -203,7 +212,7 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
   // 문단마다 정렬이 다르거나 양쪽 정렬인 상자 텍스트: 상자 폭 전체를 쓰고 줄마다 text-align (줄바꿈 위치를 잰 경우만 — 아니면 첫 문단 정렬로)
   const perLine = t.shape === 'box' && !!t.boxWidth && !!t.lineAligns && t.id in ctx.wraps;
   if (t.lineAligns && !perLine && new Set(t.lineAligns).size > 1)
-    ctx.warnings.push(`"${t.text.trim().slice(0, 15)}"는 문단마다 정렬이 달라 첫 문단 정렬로 맞췄습니다 — PSD 와 다를 수 있습니다.`);
+    ctx.warnings.push(warn(`"${t.text.trim().slice(0, 15)}"는 문단마다 정렬이 달라 첫 문단 정렬로 맞췄습니다 — PSD 와 다를 수 있습니다.`));
   /** 줄 i 의 text-align (+ 양쪽 정렬이면 text-align-last). 문단 마지막 줄은 포토샵의 마지막 줄 정렬을 따른다 */
   const lineAlignCss = (i: number): string[] => {
     const raw = t.lineAligns?.[lines[i].hard] ?? 'left';
@@ -246,7 +255,7 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
   // 상자 텍스트인데 줄바꿈 위치를 못 쟀으면 브라우저가 상자 폭에서 줄을 바꾸게 둔다 (대체)
   const cssWrap = t.shape === 'box' && !!t.boxWidth && !(t.id in ctx.wraps) && (t.b[3] - t.b[1]) > (lines.length + 0.5) * L;
   if (cssWrap) {
-    ctx.warnings.push(`상자 텍스트 "${t.text.trim().slice(0, 15)}"의 줄바꿈 위치를 재지 못해 브라우저 줄바꿈에 맡겼습니다 — PSD 와 줄바꿈이 다를 수 있습니다.`);
+    ctx.warnings.push(warn(`상자 텍스트 "${t.text.trim().slice(0, 15)}"의 줄바꿈 위치를 재지 못해 브라우저 줄바꿈에 맡겼습니다 — PSD 와 줄바꿈이 다를 수 있습니다.`));
     height = Math.max(height, Math.round((t.b[3] - t.b[1] - size * 0.7) / L + 1) * L);
   }
   // 줄별 정렬은 포토샵 상자 폭 그대로 (정렬 기준 = 상자 왼쪽·가운데·오른쪽)
@@ -300,9 +309,10 @@ function emitRows(boxes0: Box[], ctx: Ctx, tagOf: (b: Box) => { tag: string; att
   /** 상자 하나 → 요소. 이미지에 남긴 글자는 <img alt> (폭·높이 고정, 스킨의 img 폭 100% 를 이기도록 인라인) */
   const render = (b: Box, pos: Record<string, string | null>) => {
     if (b.img) {
-      const st = { display: 'block', 'max-width': 'none', height: 'auto', border: '0', ...(goodomall ? {} : { margin: '0' }), ...pos };
+      // max-width 금지 플랫폼(ESM)은 빼고, 나머지는 스킨의 img max-width 를 이기게 none
+      const st = { display: 'block', 'max-width': ctx.rules?.noMaxWidth ? null : 'none', height: 'auto', border: '0', ...(goodomall ? {} : { margin: '0' }), ...pos };
       const cls = goodomall ? ` class="${prefix}-tx"` : '';
-      return `<img${cls} src="${b.img.src}" alt="${escAttr(b.img.alt)}" width="${Math.round(b.width)}" height="${Math.round(b.height)}" loading="lazy" decoding="async"${goodomall ? ' draggable="false"' : ''} style="${styleStr(st)}">`;
+      return `<img${cls} src="${b.img.src}" alt="${escAttr(b.img.alt)}" width="${Math.round(b.width * ctx.scale)}" height="${Math.round(b.height * ctx.scale)}" loading="lazy" decoding="async"${goodomall ? ' draggable="false"' : ''} style="${styleStr(st)}">`;
     }
     const { tag, attrs } = tagOf(b);
     return `<${tag}${attrs} style="${styleStr({ ...reset, ...b.style, ...pos })}">${b.html}</${tag}>`;
@@ -322,6 +332,16 @@ function emitRows(boxes0: Box[], ctx: Ctx, tagOf: (b: Box) => { tag: string; att
     } else if (row.items.length === 1) {
       const b = row.items[0];
       lines.push(`${ind}${render(b, { width: u(b.width), 'margin-left': b.left ? u(b.left) : null, 'margin-top': mt ? u(mt) : null })}`);
+    } else if (ctx.rules?.noTable) {
+      // table 을 못 쓰는 플랫폼(스마트스토어 — table 이 있으면 모바일 미리보기 안 됨): 칸을 inline-block 으로 나란히.
+      // 줄은 nowrap 이라 넘쳐도 아래로 안 떨어지고, font-size·line-height 0 으로 칸 사이 공백이 높이를 만들지 않게 (칸마다 글자 크기·행간은 인라인으로 다시 준다)
+      lines.push(`${ind}<div style="margin:0;padding:0;font-size:0;line-height:0;white-space:nowrap${mt ? `;margin-top:${u(mt)}` : ''}">`);
+      let x = 0;
+      for (const b of row.items) {
+        lines.push(`${ind}  ${render(b, { display: 'inline-block', 'vertical-align': 'top', width: u(b.width), 'margin-left': b.left - x ? u(b.left - x) : null, 'margin-top': b.top - row.top ? u(b.top - row.top) : null })}`);
+        x = b.left + b.width;
+      }
+      lines.push(`${ind}</div>`);
     } else {
       // 오픈마켓: flex 대신 표 (7-3). 상자가 겹치면 margin-left 가 음수가 되는데, 자동 표 폭은 음수 여백을 무시해
       // 뒤 칸을 밀어낸다 → 칸 폭을 고정(table-layout:fixed)하고 음수 여백은 칸 밖으로 넘치게 둔다
@@ -344,14 +364,14 @@ function emitRows(boxes0: Box[], ctx: Ctx, tagOf: (b: Box) => { tag: string; att
   return { lines, first, prevBottom };
 }
 
-/** 배경 구간 [a,b) 를 세로 3000px 이하 조각으로. 자르는 위치는 글자 bounds 가 걸치지 않는 곳 */
-function splitBg(a: number, b: number, texts: TextInfo[]): number[] {
+/** 배경 구간 [a,b) 를 세로 maxH(기본 3000px) 이하 조각으로. 자르는 위치는 글자 bounds 가 걸치지 않는 곳 */
+function splitBg(a: number, b: number, texts: TextInfo[], maxH = BG_MAX_H): number[] {
   const cuts = [a];
   let y = a;
   const crosses = (cy: number) => texts.some((t) => t.b[1] < cy && t.b[3] > cy);
-  while (b - y > BG_MAX_H) {
+  while (b - y > maxH) {
     let cut = -1;
-    for (let cy = y + BG_MAX_H; cy >= y + 1000; cy--) {
+    for (let cy = y + maxH; cy >= y + Math.min(1000, Math.floor(maxH / 2)); cy--) {
       if (!crosses(cy)) {
         cut = cy;
         break;
@@ -421,7 +441,7 @@ export function keepMap(summary: PsdSummary, plan: Plan, openmarket = false): Ma
  * 계획의 섹션을 문서에 맞게 정리한다: 위→아래 정렬, 0~문서 높이로 자르기, 빈틈·겹침 없이 잇기, id 를 s00… 로 다시 매기기.
  * Claude 가 섹션을 조금 틀리게 줘도 글자가 빠지거나 두 번 나오지 않게. 사진 띠의 section 도 새 id 로 바꾼다
  */
-function normalizeSections(plan: Plan, summary: PsdSummary, warnings: string[]): { sections: Plan['sections']; photos: NonNullable<Plan['photos']> } {
+function normalizeSections(plan: Plan, summary: PsdSummary, warnings: Check[]): { sections: Plan['sections']; photos: NonNullable<Plan['photos']> } {
   const H = summary.height;
   const src = (plan.sections || [])
     .filter((s) => Number.isFinite(s.y0) && Number.isFinite(s.y1))
@@ -429,7 +449,7 @@ function normalizeSections(plan: Plan, summary: PsdSummary, warnings: string[]):
     .filter((s) => s.y1 > s.y0)
     .sort((a, b) => a.y0 - b.y0);
   if (!src.length) {
-    warnings.push('계획에 쓸 수 있는 섹션이 없어 문서 전체를 섹션 하나로 만들었습니다.');
+    warnings.push(warn('계획에 쓸 수 있는 섹션이 없어 문서 전체를 섹션 하나로 만들었습니다.', 'plan'));
     src.push({ id: 's00', name: '본문', y0: 0, y1: H });
   }
   // 경계 = 각 섹션의 시작 y (첫 섹션은 0, 끝은 문서 높이). 빈틈은 앞 섹션이 메우고, 겹치면 뒤 섹션 시작에서 끊는다
@@ -445,11 +465,11 @@ function normalizeSections(plan: Plan, summary: PsdSummary, warnings: string[]):
     if (!idMap.has(s.id)) idMap.set(s.id, id);
     return { id, name: (s.name || '').trim() || `섹션 ${i + 1}`, y0, y1 };
   });
-  if (fixed) warnings.push('계획의 섹션 경계에 빈틈·겹침이 있어 이어지게 고쳤습니다.');
+  if (fixed) warnings.push(warn('계획의 섹션 경계에 빈틈·겹침이 있어 이어지게 고쳤습니다.', 'plan'));
   // 섹션 경계가 글자를 가로지르면 그 글자가 잘릴 수 있다
   for (const s of sections.slice(1)) {
     const hit = summary.texts.find((t) => t.text.trim() && t.b[1] < s.y0 - 1 && t.b[3] > s.y0 + 1);
-    if (hit) warnings.push(`${s.id} 시작 경계(y ${s.y0})가 글자 "${hit.text.trim().slice(0, 15)}"를 가로지릅니다 — 글자가 잘려 보일 수 있습니다.`);
+    if (hit) warnings.push(warn(`${s.id} 시작 경계(y ${s.y0})가 글자 "${hit.text.trim().slice(0, 15)}"를 가로지릅니다 — 글자가 잘려 보일 수 있습니다.`, 'plan'));
   }
   const photos = (plan.photos || []).map((p) => {
     const sec = sections.find((s) => s.id === idMap.get(p.section)) ?? sections.find((s) => p.y0 >= s.y0 && p.y0 < s.y1) ?? sections[0];
@@ -461,27 +481,36 @@ function normalizeSections(plan: Plan, summary: PsdSummary, warnings: string[]):
 export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: Plan, lsAdj: Record<number, number> = {}, wraps: Record<number, number[]> = {}): CodegenResult {
   const W = summary.width;
   const goodomall = meta.channel !== 'openmarket';
-  const warnings: string[] = [];
+  const warnings: Check[] = [];
   const norm = normalizeSections(plan0, summary, warnings);
   const plan: Plan = { ...plan0, sections: norm.sections, photos: norm.photos };
   // 접두사는 클래스·id·CSS 선택자에 그대로 들어가므로 형식을 지킨다 (6-1·7-2)
   const prefix = /^dp-[a-z0-9-]+$/.test(plan0.prefix || '') ? plan0.prefix : `dp-${(meta.slug || 'page').replace(/[^a-z0-9-]/g, '').slice(0, 24) || 'page'}`;
-  if (prefix !== plan0.prefix) warnings.push(`계획의 접두사 "${plan0.prefix}"가 형식(dp-영문소문자)에 맞지 않아 "${prefix}"로 바꿨습니다.`);
+  if (prefix !== plan0.prefix) warnings.push(warn(`계획의 접두사 "${plan0.prefix}"가 형식(dp-영문소문자)에 맞지 않아 "${prefix}"로 바꿨습니다.`, 'plan'));
   plan.prefix = prefix;
   const base = `${meta.publicRoot.replace(/\/+$/, '')}/${meta.channel}/${meta.slug}/${meta.rev}`;
+  // 오픈마켓은 px 고정이라 플랫폼 상세 폭보다 넓으면 잘린다 → 플랫폼 폭에 맞춰 모든 값을 비율대로 줄인다 (shared/markets.ts)
+  const OW = goodomall ? W : marketWidth(meta.market, W);
+  const omScale = OW / W;
+  // 플랫폼 출력 규칙 (max-width 금지·table 금지·이미지 세로 비율 — 규칙 원본 7-4)
+  const rules = goodomall ? undefined : MARKETS[normMarket(meta.market ?? 'other')].rules;
+  // 이미지 한 장 최대 세로 (PSD px): 기본 3000, 비율 제한이 있으면 가로 × 비율 이하
+  const maxH = rules?.maxImgRatio ? Math.min(BG_MAX_H, Math.floor(W * rules.maxImgRatio)) : BG_MAX_H;
   const ctx: Ctx = {
+    rules,
     goodomall,
     prefix,
     lsAdj,
     wraps,
     warnings,
     usesPaperlogy: false,
+    scale: omScale,
     u: goodomall
       ? (n) => {
           const v = r1(n);
           return v === 0 ? '0' : `calc(${v} * var(--u))`;
         }
-      : (n) => `${r1(n)}px`,
+      : (n) => `${r1(n * omScale)}px`, // 오픈마켓: 플랫폼 폭(예: 쿠팡 780)에 맞춰 비율대로 줄인 px
   };
 
   const keepReason = keepMap(summary, plan, !goodomall);
@@ -542,7 +571,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
     if (secTexts.length && ![...levelOf.values()].includes(2)) {
       const big = secTexts.reduce((a, b) => (b.size > a.size ? b : a));
       levelOf.set(big.id, 2);
-      if (Object.keys(headings).length) warnings.push(`${sid} ${sec.name}: 계획에 대제목(h2)이 없어 가장 큰 글자 "${big.text.trim().slice(0, 20)}"를 h2 로 했습니다.`);
+      if (Object.keys(headings).length) warnings.push(warn(`${sid} ${sec.name}: 계획에 대제목(h2)이 없어 가장 큰 글자 "${big.text.trim().slice(0, 20)}"를 h2 로 했습니다.`, 'plan'));
     }
     const hid = `${prefix}-${sid}`;
     let idDone = false;
@@ -565,7 +594,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
         if (p.y1 - p.y0 < 20) return false;
         const hit = secTexts.concat(htmlTexts.filter((t) => !inSec(t))).filter((t) => !(t.b[3] <= p.y0 || t.b[1] >= p.y1));
         if (hit.length) {
-          warnings.push(`${sid} 사진 "${p.role}"(y ${p.y0}~${p.y1})이 글자 "${hit[0].text.trim().slice(0, 15)}"와 겹쳐 배경으로 처리했습니다.`);
+          warnings.push(warn(`${sid} 사진 "${p.role}"(y ${p.y0}~${p.y1})이 글자 "${hit[0].text.trim().slice(0, 15)}"와 겹쳐 배경으로 처리했습니다.`, 'plan'));
           return false;
         }
         return true;
@@ -576,7 +605,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
         const prev = acc[acc.length - 1];
         const y0 = prev ? Math.max(p.y0, prev.y1) : p.y0;
         if (p.y1 - y0 >= 20) acc.push({ ...p, y0 });
-        else if (prev) warnings.push(`${sid} 사진 "${p.role}"이 앞 사진과 겹쳐 뺐습니다.`);
+        else if (prev) warnings.push(warn(`${sid} 사진 "${p.role}"이 앞 사진과 겹쳐 뺐습니다.`, 'plan'));
         return acc;
       }, []);
 
@@ -588,8 +617,8 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
     let j = 0;
     const used = new Set<Box>();
     const pushBg = (a: number, b: number) => {
-      const cuts = splitBg(a, b, usable);
-      if (cuts.length === 2 && b - a > BG_MAX_H) warnings.push(`${sid}: 글자가 이어져 있어 배경을 ${BG_MAX_H}px 이하로 나누지 못했습니다 (세로 ${b - a}px).`);
+      const cuts = splitBg(a, b, usable, maxH);
+      if (cuts.length === 2 && b - a > maxH) warnings.push(warn(`${sid}: 글자가 이어져 있어 배경을 ${maxH}px 이하로 나누지 못했습니다 (세로 ${b - a}px).`));
       for (let i = 0; i < cuts.length - 1; i++) {
         const c0 = cuts[i];
         const c1 = cuts[i + 1];
@@ -612,7 +641,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
         .filter((s) => s.replace(/\s/g, '').length >= 2 && !baseAlt.includes(s));
       const alt = inPhoto.length ? `${baseAlt} — ${[...new Set(inPhoto)].join(' · ')}` : baseAlt;
       // 세로 3000px 넘는 사진 띠는 같은 높이로 나눈다 (용량·업로드 한도, 규칙 6절). alt 는 첫 조각에, 이어지는 조각은 같은 사진이라 빈 alt
-      const parts = Math.ceil((p.y1 - p.y0) / BG_MAX_H);
+      const parts = Math.ceil((p.y1 - p.y0) / maxH);
       for (let q = 0; q < parts; q++) {
         const a = Math.round(p.y0 + ((p.y1 - p.y0) * q) / parts);
         const b = Math.round(p.y0 + ((p.y1 - p.y0) * (q + 1)) / parts);
@@ -628,7 +657,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
       for (const bx of orphans) {
         const target = bgs.filter((b) => b.y0 <= bx.t.baseline).pop() ?? bgs[0];
         if (target) target.boxes.push(bx);
-        else warnings.push(`${sid}: 글자 "${bx.t.text.trim().slice(0, 15)}"를 놓을 배경 블록이 없어 빠졌습니다 (섹션 전체가 사진 띠).`);
+        else warnings.push(warn(`${sid}: 글자 "${bx.t.text.trim().slice(0, 15)}"를 놓을 배경 블록이 없어 빠졌습니다 (섹션 전체가 사진 띠).`, 'plan'));
       }
     }
 
@@ -646,7 +675,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
         out.push(
           goodomall
             ? `  <img class="${prefix}-img" src="${url}" alt="${escAttr(blk.alt)}" width="${W}" height="${h}" ${lazy} draggable="false">`
-            : `  <img src="${url}" alt="${escAttr(blk.alt)}" width="${W}" height="${h}" style="display:block;width:100%;max-width:${W}px;height:auto;border:0">`,
+            : `  <img src="${url}" alt="${escAttr(blk.alt)}" width="${OW}" height="${Math.round(h * omScale)}" style="display:block;width:100%;${rules?.noMaxWidth ? '' : `max-width:${OW}px;`}height:auto;border:0">`,
         );
         continue;
       }
@@ -673,8 +702,8 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
           continue;
         }
         patches.push([px0, py0, px1, py1]);
-        if (clash) warnings.push(`이미지에 남긴 "${t.text.trim().slice(0, 12)}" 영역이 HTML 글자 "${clash.text.trim().slice(0, 12)}"와 겹쳐 배경에 그렸습니다 — 이 글자는 alt 가 없고, 겹친 글자가 두 번 보일 수 있습니다.`);
-        else warnings.push(`이미지에 남긴 "${t.text.trim().slice(0, 12)}"가 배경 경계에 걸려 배경에 그렸습니다 — 이 글자는 HTML 에 alt 가 없습니다.`);
+        if (clash) warnings.push(warn(`이미지에 남긴 "${t.text.trim().slice(0, 12)}" 영역이 HTML 글자 "${clash.text.trim().slice(0, 12)}"와 겹쳐 배경에 그렸습니다 — 이 글자는 alt 가 없고, 겹친 글자가 두 번 보일 수 있습니다.`, 'plan'));
+        else warnings.push(warn(`이미지에 남긴 "${t.text.trim().slice(0, 12)}"가 배경 경계에 걸려 배경에 그렸습니다 — 이 글자는 HTML 에 alt 가 없습니다.`, 'plan'));
       }
       images.push({ file: blk.file, kind: 'bg', source: 'notext', x0: 0, y0: blk.y0, x1: W, y1: blk.y1, ...(patches.length ? { patches } : {}) });
       blk.boxes.forEach((bx) => (bx.top -= blk.y0));
@@ -698,7 +727,26 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
   const style = goodomall ? baseCss(prefix, W, ctx.usesPaperlogy) : '';
   const wrapperStyle = goodomall
     ? undefined
-    : `max-width:${W}px;margin:0 auto;font-family:'Pretendard',${FALLBACK_FAMILY};line-height:1.2;word-break:keep-all;text-align:left;font-weight:400;letter-spacing:normal`;
+    : `${rules?.noMaxWidth ? 'width' : 'max-width'}:${OW}px;margin:0 auto;font-family:'Pretendard',${FALLBACK_FAMILY};line-height:1.2;word-break:keep-all;text-align:left;font-weight:400;letter-spacing:normal`;
+  // 오픈마켓: 만든 HTML 에 그 플랫폼이 지우거나 막는 요소가 없는지 마지막으로 확인 (규칙 원본 7-4 [공식] 근거).
+  // 스마트스토어는 iframe·table·link 가 있으면 모바일 캡처 미리보기가 안 돼 HTML 이 모바일용 고정 글자 크기로 보이며 시안과 달라진다
+  if (!goodomall) {
+    const out = `${sections.map((s) => s.html).join('\n')}\n${wrapperStyle ?? ''}`;
+    const mk = MARKETS[normMarket(meta.market ?? 'other')];
+    const bad: string[] = [];
+    if (/<style[\s>]/i.test(out)) bad.push('<style>');
+    if (/<script[\s>]/i.test(out)) bad.push('<script>');
+    if (/<iframe[\s>]/i.test(out)) bad.push('<iframe>');
+    if (/<link[\s>]/i.test(out)) bad.push('<link>');
+    if (/<a\s/i.test(out)) bad.push('링크 <a>');
+    if (mk.rules?.noTable && /<table[\s>]/i.test(out)) bad.push('<table>');
+    if (mk.rules?.noMaxWidth && /max-width/i.test(out)) bad.push('max-width');
+    warnings.push(
+      bad.length
+        ? { level: 'error', message: `${mk.label} 규칙에 걸리는 요소가 있습니다: ${bad.join(', ')} — 붙여넣으면 지워지거나 모바일 화면이 시안과 달라질 수 있습니다.` }
+        : { level: 'ok', message: `${mk.label} 규칙 확인: 막히는 요소(style·script·iframe·link·외부 링크${mk.rules?.noTable ? '·table' : ''}${mk.rules?.noMaxWidth ? '·max-width' : ''}) 없음` },
+    );
+  }
   const report = kept.length ? `이미지에 남긴 글자 ${kept.length}개 (문구를 고치려면 PSD 수정 필요):\n${kept.map((k) => `- #${k.id} "${k.text.slice(0, 40)}" — ${k.reason}`).join('\n')}` : '';
   return {
     bundle: { plan: { ...plan, engine: 'code', images, wrapperStyle }, style, notes: report },

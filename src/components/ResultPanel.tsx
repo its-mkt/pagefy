@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { godoMaxWidth } from '../../shared/width';
+import { marketWidth } from '../../shared/markets';
 import type { Loaded, Result, RunState } from '../App';
-import { copySection } from '../lib/output';
+import { copySection, type Check } from '../lib/output';
 import { keepMap } from '../lib/codegen';
+import { isPlanFixable } from '../lib/autofix';
 import { buildZip, download, fmtBytes } from '../lib/util';
-import { CHANNEL_DIR, canSaveToFolder, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
+import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
 
 interface Props {
   run: RunState;
@@ -25,6 +27,10 @@ interface Props {
   onNewRev?: () => void;
   /** 잘못 올린 것 되돌리기: 방금 이 작업이 올린 rev 폴더를 지운다 */
   onUndoUpload?: () => void;
+  /** 「문제 자동 수정」 — 구조 계획으로 고칠 수 있는 점검만 모아 Claude 1회, 나아졌을 때만 바꿈 (코드 생성 방식) */
+  onAutoFix?: () => void;
+  /** 지난 자동 수정 결과 안내 */
+  autoFix?: { ok: boolean; text: string } | null;
 }
 
 export interface UploadState {
@@ -157,7 +163,27 @@ function Elapsed({ since }: { since: number }) {
   return <span className="progress__time">{fmtDur(now - since)} 지남</span>;
 }
 
-export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onNewRev, onUndoUpload }: Props) {
+/** 자동으로 못 고치는 문제를 관리자에게 넘길 때 붙여넣을 진단 정보 (PSD·계획·점검·위치 어긋남) */
+function diagnostics(result: Result, loaded: Loaded, run: RunState) {
+  const s = loaded.summary;
+  const plan = result.bundle.plan;
+  const bad = (result.layout?.items ?? []).filter((i) => i.dy != null && !i.ok);
+  return [
+    `[Pagefy 진단] ${new Date().toLocaleString('ko-KR')}`,
+    `PSD: ${loaded.file.name} · ${fmtBytes(loaded.file.size)} · ${s.width}×${s.height}px · 텍스트 레이어 ${s.texts.length}개`,
+    `제품: ${result.meta.productName} (${result.meta.slug}) · 채널 ${result.meta.channel} · rev ${result.meta.rev}`,
+    `생성: ${plan.engine === 'code' ? '코드 생성' : '섹션별 Claude'} · 모델 ${run.model ?? '-'} · 섹션 ${plan.sections.length}개 · 사진 ${plan.photos?.length ?? 0}장 · 이미지 ${result.images.length}장`,
+    `섹션: ${plan.sections.map((x) => `${x.id} ${x.name} (${x.y0}~${x.y1})`).join(' / ')}`,
+    '',
+    '점검 (오류·확인):',
+    ...result.checks.filter((c) => c.level !== 'ok').map((c) => `- [${c.level === 'error' ? '오류' : '확인'}${isPlanFixable(c) ? '·자동수정대상' : ''}] ${c.message}`),
+    ...(bad.length ? ['', `위치 어긋남 ${bad.length}개 (#id "글자" 세로/가로 px, +는 PSD보다 아래·오른쪽):`, ...bad.slice(0, 30).map((i) => `- #${i.id} "${i.text}" ${i.dy}/${i.dx ?? '줄바꿈 다름'}`)] : []),
+    '',
+    `브라우저: ${navigator.userAgent}`,
+  ].join('\n');
+}
+
+export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onNewRev, onUndoUpload, onAutoFix, autoFix }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
   const [feedback, setFeedback] = useState('');
   const [target, setTarget] = useState('all');
@@ -173,11 +199,23 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
   const pct = Math.round(prog.pct);
   const stepIdx = STEPS.findIndex(([k]) => k === prog.step);
 
-  const checks = result ? [...result.checks].sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) : [];
-  const issues = checks.filter((c) => c.level !== 'ok');
-  const passed = checks.filter((c) => c.level === 'ok');
-  const nErr = checks.filter((c) => c.level === 'error').length;
-  const nWarn = checks.filter((c) => c.level === 'warn').length;
+  // 점검 목록은 결과가 바뀔 때만 나눈다 (만드는 중엔 진행 표시 때문에 자주 다시 그려짐)
+  const { issues, passed, fixable, codeSide, nErr, nWarn, layoutOff } = useMemo(() => {
+    const sorted = result ? [...result.checks].sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) : [];
+    const g = { issues: [] as Check[], passed: [] as Check[], fixable: [] as Check[], codeSide: [] as Check[], nErr: 0, nWarn: 0 };
+    for (const c of sorted) {
+      if (c.level === 'ok') {
+        g.passed.push(c);
+        continue;
+      }
+      g.issues.push(c);
+      if (c.level === 'error') g.nErr++;
+      else g.nWarn++;
+      /** 구조 계획으로 고칠 수 있는 문제 / 코드 쪽이라 자동으로 못 고치는 문제 */
+      (isPlanFixable(c) ? g.fixable : g.codeSide).push(c);
+    }
+    return { ...g, layoutOff: !!result?.layout?.items.some((i) => i.dy != null && !i.ok) };
+  }, [result]);
   const openmarket = result?.meta.channel === 'openmarket';
   /** 이미지 서버 자동 업로드를 쓸 수 있음 (서버에 접속 정보가 있을 때만 App 이 넘겨준다) */
   const autoUpload = !!(upload && onUpload);
@@ -343,7 +381,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 복사하지 않았습니다 — 이 HTML 이 쓰는 이미지 {missing.length}장이 만들어지지 않았습니다 ({missing.slice(0, 3).join(', ')}{missing.length > 3 ? ' …' : ''}). 그대로 붙여넣으면 그림이 빈칸으로 나옵니다. 아래 점검의 「이미지 자르기 실패」를 확인하고 다시 만들어 주세요.
               </p>
             )}
-            {copied?.startsWith('fail:') && <p className="msg msg--error">복사하지 못했습니다. 버튼을 한 번 더 누르고, 그래도 안 되면 아래 「HTML」 탭에서 직접 선택해 복사하세요.</p>}
+            {copied?.startsWith('fail:') && copied !== 'fail:diag' && <p className="msg msg--error">복사하지 못했습니다. 버튼을 한 번 더 누르고, 그래도 안 되면 아래 「HTML」 탭에서 직접 선택해 복사하세요.</p>}
             {autoUpload && onUndoUpload && undoAsk && upload!.phase === 'done' && (
               <div className="getit__undo" role="group" aria-label="올린 이미지 되돌리기">
                 <b>
@@ -397,6 +435,32 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 <li key={i} className={`check check--${c.level}`}>{c.message}</li>
               ))}
             </ul>
+          )}
+          {/* 문제 자동 수정: 고칠 수 있는 것(구조 계획)만 Claude 1회로, 나머지(코드 쪽)는 진단 정보 복사 */}
+          {codeEngine && (fixable.length > 0 || codeSide.length > 0 || autoFix) && (
+            <div className={`autofix ${autoFix ? (autoFix.ok ? 'is-ok' : 'is-kept') : ''}`}>
+              {autoFix && <p className="autofix__result">{autoFix.text}</p>}
+              {fixable.length > 0 && onAutoFix && (
+                <div className="autofix__row">
+                  <button className="btn btn--primary btn--sm" disabled={running} onClick={onAutoFix}>
+                    문제 자동 수정 ({fixable.length}건)
+                  </button>
+                  <span className="autofix__note">
+                    빠진 글자·제목 구조처럼 구조 계획으로 고칠 수 있는 문제만 고칩니다 · Claude 1회(1~2분, 새로 만들 때와 비슷한 비용) · <b>나아졌을 때만</b> 새 결과로 바꿉니다
+                  </span>
+                </div>
+              )}
+              {codeSide.length > 0 && (
+                <div className="autofix__row">
+                  <button className="btn btn--sm" onClick={() => copy('diag', diagnostics(result, loaded, run))}>
+                    {copied === 'diag' ? '복사됨' : copied === 'fail:diag' ? '복사 실패' : '진단 정보 복사'}
+                  </button>
+                  <span className="autofix__note">
+                    나머지 {codeSide.length}건({layoutOff ? '위치 어긋남 등 ' : ''}마크업 코드 쪽 문제)은 Claude 에게 다시 시켜도 바뀌지 않아 자동으로 고치지 않습니다. 진단 정보를 복사해 관리자에게 보내 주세요.
+                  </span>
+                </div>
+              )}
+            </div>
           )}
           {passed.length > 0 && (
             <details className="fold">
@@ -513,7 +577,8 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
   // 모바일은 비율 축소뿐이라(7-5) 따로 보지 않는다 — 모바일 확인(가로 스크롤·비율·가장 작은 글자)은 자동 점검이 한다
   // 고도몰은 상세 영역이 최대 860px(7-2) → 결과물은 860px 로 줄어든다. 미리보기 칸도 그 폭으로 열어 양옆 흰 여백이 생기지 않게 하고,
   // PSD 이미지와 같은 크기로 보이도록 그만큼 키워 보여 준다 (오픈마켓은 PSD 폭 그대로)
-  const width = result.meta.channel === 'openmarket' ? W : godoMaxWidth(W);
+  // 오픈마켓은 플랫폼 폭(shared/markets.ts)으로 줄여 만들었으니 그 폭으로 연다 (고도몰은 860 상한)
+  const width = result.meta.channel === 'openmarket' ? marketWidth(result.meta.market, W) : godoMaxWidth(W);
   const fit = W / width;
   const [zoom, setZoom] = useState(0.5);
   const frame = useRef<HTMLIFrameElement>(null);
@@ -746,7 +811,7 @@ function SharedSave({ result, loaded }: { result: Result; loaded: Loaded }) {
           </button>
         )}
       </div>
-      {!rootName && st.s === 'idle' && <small className="hint">처음 한 번 폴더 고르기 창이 열립니다 — {'\\\\192.168.1.254\\마케팅팀\\A_상세페이지'} 폴더를 고르세요.</small>}
+      {!rootName && st.s === 'idle' && <small className="hint">처음 한 번 폴더 고르기 창이 열립니다 — {SHARED_ROOT} 폴더를 고르세요.</small>}
       {changed && st.s === 'idle' && <small className="hint">폴더 이름에 쓸 수 없는 글자를 빼고 「{folder}」로 저장합니다.</small>}
       {st.s === 'ask' && (
         <div className="shared__ask" role="group" aria-label="HTML 바꾸기 확인">

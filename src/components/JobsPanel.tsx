@@ -1,6 +1,10 @@
 import { useRef, useState } from 'react';
 import { listInfo, TRASH_DAYS, type Job, type JobState } from '../lib/jobs';
 import { fmtBytes } from '../lib/util';
+import { SHARED_ROOT } from '../lib/sharedFolder';
+
+/** 다른 PC 에서 열 PSD 가 있는 곳 (「공유 폴더에 저장」이 PSD 를 넣는 폴더) */
+const PSD_DIR = String.raw`${SHARED_ROOT}\채널\제품명`;
 
 interface Props {
   jobs: Job[];
@@ -90,6 +94,16 @@ export default function JobsPanel(props: Props) {
           </button>
         )}
       </div>
+      {/* 목록은 계정에 저장돼 어느 PC 에서나 보이지만 PSD 원본은 만든 PC 에만 있다 → 다른 PC 에선 공유 폴더의 PSD 로 연다 */}
+      {account && jobs.length > 0 && (
+        <p className="jobs__guide">
+          <b>다른 PC에서 만든 작업 열기</b>
+          <span>
+            「PSD 고르기」를 누르고 공유 폴더 <code>{PSD_DIR}</code> 안의 같은 PSD를 고르면 이어서 열립니다.
+            만든 PC에서 결과 화면의 「공유 폴더에 저장」을 눌러 두면 PSD가 그 폴더에 들어갑니다.
+          </span>
+        </p>
+      )}
       {!jobs.length && !loading && <p className="hint jobs__empty">최근 작업이 없습니다.</p>}
       {loading && !jobs.length && (
         <ul className="jobs__list" role="status" aria-label="작업 목록 불러오는 중">
@@ -149,7 +163,7 @@ export default function JobsPanel(props: Props) {
                     <button
                       className="btn btn--sm"
                       disabled={busy}
-                      title="이 PC 브라우저에 PSD 원본이 없습니다. 같은 PSD 파일을 고르면 이어서 열립니다."
+                      title={`이 PC 브라우저에 PSD 원본이 없습니다. 공유 폴더(${PSD_DIR})의 같은 PSD를 고르면 이어서 열립니다.`}
                       onClick={() => {
                         setPickFor(j);
                         picker.current?.click();

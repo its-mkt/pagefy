@@ -122,6 +122,8 @@ export interface GenerateMeta {
   publicRoot: string;
   /** 생성일 YYYY-MM-DD (복사 구간 주석용) */
   date: string;
+  /** 채널이 오픈마켓일 때 플랫폼 (shared/markets.ts — 폭 등 기준이 다름) */
+  market?: import('./markets.ts').Market;
 }
 
 export interface GenerateRequest {

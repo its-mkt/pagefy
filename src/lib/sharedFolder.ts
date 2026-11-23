@@ -5,6 +5,9 @@
 import type { Channel } from '../../shared/types';
 import type { CutImage } from './images';
 
+/** 상세페이지 공유 폴더 (화면 안내·오류 문구용 표시 경로) */
+export const SHARED_ROOT = String.raw`\\192.168.1.254\마케팅팀\A_상세페이지`;
+
 /** 채널 → 공유 폴더 안 채널 폴더 이름 */
 export const CHANNEL_DIR: Record<Channel, string> = { itket: '아이티켓', oncore: '온코어', openmarket: '오픈마켓' };
 
@@ -78,7 +81,7 @@ export async function getSharedRoot(repick = false): Promise<FileSystemDirectory
     h = (await window.showDirectoryPicker({ id: "pagefy-shared", mode: "readwrite" })) as unknown as DirHandle;
   }
   const ok = (await Promise.all(Object.values(CHANNEL_DIR).map((n) => hasDir(h!, n)))).some(Boolean);
-  if (!ok) throw new Error(`고른 폴더(${h.name}) 안에 아이티켓·온코어·오픈마켓 폴더가 없습니다. \\\\192.168.1.254\\마케팅팀\\A_상세페이지 폴더를 고르세요.`);
+  if (!ok) throw new Error(`고른 폴더(${h.name}) 안에 아이티켓·온코어·오픈마켓 폴더가 없습니다. ${SHARED_ROOT} 폴더를 고르세요.`);
   await saveRoot(h);
   return h;
 }

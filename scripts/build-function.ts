@@ -14,5 +14,5 @@ const copy = (from: string, to: string) => {
 };
 
 for (const f of fs.readdirSync(path.join(ROOT, 'core')).filter((n) => n.endsWith('.ts'))) copy(path.join(ROOT, 'core', f), path.join(FN, 'core', f));
-for (const f of ['types.ts', 'width.ts']) copy(path.join(ROOT, 'shared', f), path.join(FN, 'shared', f));
-console.log('완료 — supabase/functions/pagefy 를 배포하세요 (index.ts, deno.json, core/*, shared/types.ts·width.ts)');
+for (const f of ['types.ts', 'width.ts', 'markets.ts']) copy(path.join(ROOT, 'shared', f), path.join(FN, 'shared', f));
+console.log('완료 — supabase/functions/pagefy 를 배포하세요 (index.ts, deno.json, core/*, shared/types.ts·width.ts·markets.ts)');

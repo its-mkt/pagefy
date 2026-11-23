@@ -1,51 +1,89 @@
-// 진행 단계 — 한 줄 4칸, 지금 단계는 강조 바탕, 끝난 단계는 체크
+// 진행 단계 인디케이터 — 동그라미 번호를 선으로 잇고 아래에 단계 이름. 끝난 단계는 체크·강조색 선, 지금 단계는 채운 동그라미 + 테두리 링
 .stepper {
+  --dot: 1.75rem;
   margin: 0;
-  padding: 0;
+  padding: 1rem 0.5rem 0.875rem;
   list-style: none;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 2px;
+  background: var(--card);
 
   &__item {
+    position: relative;
     display: flex;
+    flex-direction: column;
     align-items: center;
     gap: 0.5rem;
     min-width: 0;
-    padding: 0.625rem 0.875rem;
-    background: var(--card);
     color: var(--sub);
     font-size: 0.8125rem;
     font-weight: 500;
-    border-bottom: 2px solid transparent;
+    text-align: center;
 
-    &.is-cur { color: var(--ink); font-weight: 600; border-color: var(--acc); }
+    // 앞 단계와 잇는 선 (동그라미 가운데 높이, 동그라미 사이만)
+    & + &::before {
+      content: '';
+      position: absolute;
+      top: calc(var(--dot) / 2 - 1px);
+      right: calc(50% + var(--dot) / 2 + 0.375rem);
+      left: calc(-50% + var(--dot) / 2 + 0.375rem);
+      height: 2px;
+      background: var(--line2);
+    }
+    // 지금·끝난 단계로 들어오는 선은 강조색 (여기까지 왔다)
+    &.is-done::before,
+    &.is-cur::before { background: var(--acc); }
+
+    &.is-cur { color: var(--ink); font-weight: 700; }
     &.is-done { color: var(--ink2); }
   }
 
   &__num {
-    flex: none;
+    position: relative;
+    z-index: 1;
     display: grid;
     place-items: center;
-    width: 1.375rem;
-    height: 1.375rem;
-    background: var(--bg);
-    font-size: 0.75rem;
+    width: var(--dot);
+    height: var(--dot);
+    border-radius: 50%;
+    border: 2px solid var(--line2);
+    background: var(--card);
+    font-size: 0.8125rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
+    transition: background-color 0.2s, border-color 0.2s, box-shadow 0.2s;
 
-    .is-cur & { background: var(--acc); color: #fff; }
-    .is-done & { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+    .is-cur & {
+      border-color: var(--acc);
+      background: var(--acc);
+      color: #fff;
+      box-shadow: 0 0 0 4px var(--accbg);
+    }
+    .is-done & {
+      border-color: var(--acc);
+      background: var(--accbg);
+      color: var(--accink);
+    }
   }
 
-  &__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__label {
+    max-width: 100%;
+    padding: 0 0.25rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
-  // 좁은 화면: 숫자만, 지금 단계만 글자
+  @media (prefers-reduced-motion: reduce) {
+    &__num { transition: none; }
+  }
+
+  // 좁은 화면: 동그라미는 그대로, 이름은 지금 단계만
   @media (max-width: 640px) {
-    display: flex;
-    &__item { flex: 0 0 2.75rem; justify-content: center; padding: 0.5rem; }
-    &__item.is-cur { flex: 1 1 auto; justify-content: flex-start; }
-    &__item:not(.is-cur) &__label { display: none; }
+    --dot: 1.5rem;
+    padding: 0.75rem 0.25rem 0.625rem;
+    &__item { font-size: 0.75rem; }
+    &__item:not(.is-cur) &__label { visibility: hidden; }
   }
 }
 
