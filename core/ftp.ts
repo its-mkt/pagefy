@@ -19,7 +19,6 @@ interface Reply {
 }
 
 const enc = new TextEncoder();
-const dec = new TextDecoder();
 const TIMEOUT = 30_000;
 
 function withTimeout<T>(p: Promise<T>, what: string, ms = TIMEOUT): Promise<T> {
@@ -44,6 +43,8 @@ export class FtpClient {
   private ctrl: Sock | null = null;
   private buf = '';
   private broken = false;
+  /** 연결마다 따로 (여러 바이트 글자가 읽기 사이에 잘려도 다른 연결의 응답에 섞이지 않게) */
+  private dec = new TextDecoder();
 
   constructor(
     private dial: Dial,
@@ -72,7 +73,7 @@ export class FtpClient {
         this.fail(e);
       }
       if (!chunk) this.fail(new Error('이미지 서버가 연결을 끊었습니다.'));
-      this.buf += dec.decode(chunk, { stream: true });
+      this.buf += this.dec.decode(chunk, { stream: true });
     }
   }
 
@@ -149,10 +150,11 @@ export class FtpClient {
   async list(dir: string, all = false): Promise<string[]> {
     const d = await this.data();
     let raw = '';
+    const listDec = new TextDecoder(); // 목록은 데이터 연결마다 새로
     try {
       const r = await this.cmd(`NLST ${all ? '-a ' : ''}${dir}`, [125, 150, 450, 550]);
       if (r.code === 450 || r.code === 550) return []; // 데이터 연결을 쓰지 않은 응답 — 읽지 않고 닫는다
-      for (let c = await withTimeout(d.read(), '목록 읽기'); c; c = await withTimeout(d.read(), '목록 읽기')) raw += dec.decode(c, { stream: true });
+      for (let c = await withTimeout(d.read(), '목록 읽기'); c; c = await withTimeout(d.read(), '목록 읽기')) raw += listDec.decode(c, { stream: true });
     } catch (e) {
       this.fail(e);
     } finally {

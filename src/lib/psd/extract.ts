@@ -140,6 +140,20 @@ function shadowsOf(layer: Layer, globalAngle: number, scale: number): TextInfo['
   return out.length ? out : undefined;
 }
 
+/**
+ * 색상 오버레이(혼합 모드 보통) → 글자색 (규칙 4절 표: 색상 오버레이 → color).
+ * 다른 혼합 모드는 CSS 로 같게 못 내므로 undefined (그 글자는 이미지로 남는다)
+ */
+function overlayOf(layer: Layer): TextInfo['overlay'] {
+  const fx = layer.effects;
+  if (!fx || fx.disabled || !fx.solidFill) return undefined;
+  const list = (Array.isArray(fx.solidFill) ? fx.solidFill : [fx.solidFill]).filter((e) => e && e.enabled !== false);
+  if (list.length !== 1) return undefined;
+  const e = list[0];
+  if (e.blendMode && e.blendMode !== 'normal') return undefined;
+  return { color: hex(e.color), opacity: r2(e.opacity ?? 1) };
+}
+
 function textInfo(layer: Layer, path: string, globalAngle = 120): TextInfo | null {
   const t = layer.text;
   if (!t) return null;
@@ -150,9 +164,22 @@ function textInfo(layer: Layer, path: string, globalAngle = 120): TextInfo | nul
 
   // 글자 범위별 스타일 (규칙 4-1: 범위가 겹치거나 반복될 수 있으므로 앞에서부터 안 쓴 글자만 쓴다)
   const runs: TextRun[] = [];
-  /** 글자 범위별 행간 (자동 행간 = 그 글자 크기 × 1.2) — 줄마다 가장 큰 값을 쓴다 (규칙 4-1) */
+  /** 글자 위치의 문단 스타일 (paragraphStyleRuns 는 글자 수 단위, 문단마다 다를 수 있음) */
+  const paraAt = (idx: number) => {
+    let c = 0;
+    for (const r of t.paragraphStyleRuns || []) {
+      if (idx < c + r.length) return { ...(t.paragraphStyle || {}), ...(r.style || {}) };
+      c += r.length;
+    }
+    return t.paragraphStyle || {};
+  };
+  /** 글자 범위별 행간 (자동 행간 = 그 글자 크기 × 문단의 자동 행간 배율, 기본 1.2) — 줄마다 가장 큰 값을 쓴다 (규칙 4-1) */
   const spans: { start: number; end: number; lh: number }[] = [];
-  const leadingOf = (st: TextStyle) => (st.autoLeading === false && st.leading ? st.leading * sy : (st.fontSize ?? 12) * sy * 1.2);
+  const leadingOf = (st: TextStyle, at = 0) => {
+    if (st.autoLeading === false && st.leading) return st.leading * sy;
+    const ratio = paraAt(at).autoLeading;
+    return (st.fontSize ?? 12) * sy * (typeof ratio === 'number' && ratio > 0.5 && ratio < 5 ? ratio : 1.2);
+  };
   let cursor = 0;
   for (const r of t.styleRuns || [{ length: raw.length, style: {} }]) {
     const start = cursor;
@@ -161,7 +188,7 @@ function textInfo(layer: Layer, path: string, globalAngle = 120): TextInfo | nul
     if (end <= start) continue;
     const st = styleOf(baseStyle, r.style);
     const font = st.font?.name || 'unknown';
-    spans.push({ start, end, lh: leadingOf(st) });
+    spans.push({ start, end, lh: leadingOf(st, start) });
     runs.push({
       text: raw.slice(start, end),
       font,
@@ -183,6 +210,8 @@ function textInfo(layer: Layer, path: string, globalAngle = 120): TextInfo | nul
   // 줄마다 그 줄 글자들의 가장 큰 행간 (\r\n 은 한 줄바꿈 — 원문 위치로 센다)
   if (!spans.length) spans.push({ start: 0, end: raw.length, lh: leadingOf(baseStyle) });
   const lineLh: number[] = [];
+  /** 줄마다 그 줄 문단의 정렬 (포토샵 justification 원문) */
+  const lineJust: string[] = [];
   const breaks = /\r\n|[\r\n\u0003]/g;
   let pos = 0;
   for (let li = 0; li < lines.length; li++) {
@@ -192,21 +221,16 @@ function textInfo(layer: Layer, path: string, globalAngle = 120): TextInfo | nul
     let best = 0;
     for (const sp of spans) if (sp.start < Math.max(end, pos + 1) && sp.end > pos) best = Math.max(best, sp.lh);
     lineLh.push(r2(best || size * 1.2));
+    lineJust.push(String(paraAt(pos).justification ?? 'left'));
     pos = m ? m.index + m[0].length : raw.length;
   }
   const lineHeight = lineLh[0];
   const lineHeights = lineLh.some((v) => Math.abs(v - lineHeight) > 0.3) ? lineLh : undefined;
+  // 문단마다 정렬이 다르거나 양쪽 정렬이면 줄별 정렬을 넘긴다 (codegen 이 줄마다 text-align 을 준다)
+  const lineAligns = new Set(lineJust).size > 1 || lineJust.some((j) => j.startsWith('justify')) ? lineJust : undefined;
 
   // 줄마다 그 앞의 문단 간격 (규칙 4-1): 문단 나눔(\r·\n)이면 앞 문단 spaceAfter + 이 문단 spaceBefore, 소프트 줄바꿈(\u0003)은 0.
-  // 문단 스타일은 paragraphStyleRuns(글자 수 단위)에 문단마다 다를 수 있다 → 줄 첫 글자 위치의 스타일을 쓴다
-  const paraAt = (idx: number) => {
-    let c = 0;
-    for (const r of t.paragraphStyleRuns || []) {
-      if (idx < c + r.length) return { ...(t.paragraphStyle || {}), ...(r.style || {}) };
-      c += r.length;
-    }
-    return t.paragraphStyle || {};
-  };
+  // 문단 스타일은 paragraphStyleRuns(글자 수 단위)에 문단마다 다를 수 있다 → 줄 첫 글자 위치의 스타일을 쓴다 (paraAt 은 위에 정의)
   const gaps: number[] = [0];
   {
     let p = 0;
@@ -278,6 +302,7 @@ function textInfo(layer: Layer, path: string, globalAngle = 120): TextInfo | nul
     size,
     lineHeight,
     lineHeights,
+    lineAligns,
     paraGaps,
     weight: first.weight,
     color: first.color,
@@ -295,11 +320,14 @@ function textInfo(layer: Layer, path: string, globalAngle = 120): TextInfo | nul
     bakeHint,
     fx,
     shadows: shadowsOf(layer, globalAngle, 1),
+    overlay: overlayOf(layer),
     unmappedFont: unmapped || undefined,
   };
 }
 
 /** 그룹 영역 = 쓰는 하위 레이어 영역의 합 (ag-psd 는 그룹 left/top/right/bottom 을 0 으로 준다) */
+const clampBox = (b: [number, number, number, number], psd: Pick<Psd, 'width' | 'height'>): [number, number, number, number] => [Math.max(0, b[0]), Math.max(0, b[1]), Math.min(psd.width, b[2]), Math.min(psd.height, b[3])];
+
 export function groupBounds(layer: Layer, psd: Pick<Psd, 'width' | 'height'>): [number, number, number, number] {
   if (!layer.children) return [layer.left ?? 0, layer.top ?? 0, layer.right ?? 0, layer.bottom ?? 0];
   let b: [number, number, number, number] | null = null;
@@ -328,6 +356,43 @@ export function countLayers(children: Layer[] | undefined): number {
   return (children || []).reduce((n, l) => n + 1 + countLayers(l.children), 0);
 }
 
+/**
+ * 레이어(또는 그룹)의 마스크가 글자 상자 b 의 일부를 가리는지.
+ * - 픽셀 마스크: 마스크 사각형 밖이 가려지는 설정(기본색 검정)인데 글자가 사각형 밖으로 나가거나, 글자 영역 마스크 픽셀에 어두운 곳이 있으면
+ * - 벡터 마스크: 반전이거나, 글자가 패스 범위 밖으로 나가면
+ * 픽셀을 못 읽은 경우는 사각형 범위로만 본다 (레이아웃용 사각 마스크 때문에 멀쩡한 글자가 이미지가 되지 않게)
+ */
+function maskHides(l: Layer, b: [number, number, number, number]): boolean {
+  const m = l.mask;
+  if (m && !m.disabled) {
+    const L = m.left ?? 0, T = m.top ?? 0, R = m.right ?? 0, B = m.bottom ?? 0;
+    const inside = b[0] >= L && b[1] >= T && b[2] <= R && b[3] <= B;
+    if ((m.defaultColor ?? 0) < 128 && !inside) return true;
+    const px = m.imageData;
+    const w = R - L;
+    if (px && w > 0 && B > T && px.data.length >= w * (B - T)) {
+      const ch = px.data.length / (w * (B - T)) >= 4 ? 4 : 1; // RGBA 로 풀었으면 4, 회색 한 채널이면 1
+      const max = px.data instanceof Float32Array ? 1 : px.data instanceof Uint16Array ? 65535 : 255;
+      const x0 = Math.max(b[0], L), x1 = Math.min(b[2], R), y0 = Math.max(b[1], T), y1 = Math.min(b[3], B);
+      const step = Math.max(2, Math.round(Math.min(x1 - x0, y1 - y0) / 12));
+      for (let y = y0; y < y1; y += step)
+        for (let x = x0; x < x1; x += step) if (px.data[((y - T) * w + (x - L)) * ch] / max < 0.95) return true;
+    }
+  }
+  const v = l.vectorMask;
+  if (v && !v.disable) {
+    if (v.invert) return true;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of v.paths || [])
+      for (const k of p.knots || []) {
+        const [x, y] = [k.points[2], k.points[3]]; // 기준점 (앞뒤는 제어점)
+        x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+      }
+    if (Number.isFinite(x0) && (b[0] < x0 - 1 || b[1] < y0 - 1 || b[2] > x1 + 1 || b[3] > y1 + 1)) return true;
+  }
+  return false;
+}
+
 export function extractSummary(psd: Psd, fileName: string): PsdSummary {
   const layers: LayerInfo[] = [];
   const texts: TextInfo[] = [];
@@ -337,7 +402,9 @@ export function extractSummary(psd: Psd, fileName: string): PsdSummary {
   const blendNames = new Set<string>();
 
   // groupOpacity: 바깥 그룹들의 불투명도 곱 (텍스트 글자색 투명도에 반영)
-  const walk = (children: Layer[] | undefined, path: string, groupOpacity = 1) => {
+  // groupWhy: 바깥 그룹의 효과·혼합 모드 — 안의 글자는 PSD 에서 그 영향을 받아 보이므로 CSS 글자로 같게 못 낸다 → 이미지로
+  // maskOwners: 마스크가 있는 바깥 그룹들 — 마스크가 그 글자를 실제로 가릴 때만 이미지로 (레이아웃용 사각 마스크는 글자를 안 가림)
+  const walk = (children: Layer[] | undefined, path: string, groupOpacity = 1, groupWhy: string | null = null, maskOwners: Layer[] = []) => {
     let baseOk = true; // 클리핑 기준(아래쪽 클리핑 아닌 레이어)이 보이는지 — 숨긴 기준에 클리핑된 레이어는 화면에 안 나온다
     for (const layer of children || []) {
       const name = layer.name ?? '';
@@ -356,7 +423,8 @@ export function extractSummary(psd: Psd, fileName: string): PsdSummary {
         name,
         path,
         kind,
-        b: groupBounds(layer, psd),
+        // Claude 에게 주는 범위는 캔버스 안으로 자른다 (캔버스 밖으로 넓은 그룹이 섹션·사진 띠 판단을 흐리지 않게 — 합성용 groupBounds 는 그대로)
+        b: clampBox(groupBounds(layer, psd), psd),
       };
       if (layer.opacity != null && layer.opacity < 1) info.opacity = r2(layer.opacity);
       if (layer.blendMode && !['normal', 'pass through'].includes(layer.blendMode)) {
@@ -378,10 +446,26 @@ export function extractSummary(psd: Psd, fileName: string): PsdSummary {
           const op = r2(groupOpacity * (layer.opacity ?? 1));
           if (op < 1) ti.opacity = op;
           if (layer.blendMode && !['normal', 'pass through'].includes(layer.blendMode) && !ti.bakeHint) ti.bakeHint = `혼합 모드(${layer.blendMode}) 글자`;
+          // 글자 자신의 마스크(일부를 가림)·바깥 그룹 효과는 HTML 글자에 옮길 수 없다
+          if (!ti.bakeHint && maskHides(layer, ti.b)) ti.bakeHint = '마스크로 일부를 가린 글자';
+          if (!ti.bakeHint && groupWhy) ti.bakeHint = groupWhy;
+          const hider = ti.bakeHint ? undefined : maskOwners.find((g) => maskHides(g, ti.b));
+          if (hider) ti.bakeHint = `그룹 "${hider.name ?? ''}"의 마스크로 일부를 가린 글자`;
           texts.push(ti);
         }
       }
-      if (layer.children) walk(layer.children, path ? `${path}/${name}` : name, groupOpacity * (layer.opacity ?? 1));
+      if (layer.children) {
+        const gfx = (enabledEffects(layer) || []).filter((f) => !f.startsWith('fill '));
+        const why =
+          groupWhy ??
+          (gfx.length
+            ? `그룹 "${name}"의 효과(${gfx.join(', ')})가 걸린 글자`
+            : layer.blendMode && !['normal', 'pass through'].includes(layer.blendMode)
+              ? `그룹 "${name}"의 혼합 모드(${layer.blendMode}) 안 글자`
+              : null);
+        const hasMask = (layer.mask && !layer.mask.disabled) || (layer.vectorMask && !layer.vectorMask.disable);
+        walk(layer.children, path ? `${path}/${name}` : name, groupOpacity * (layer.opacity ?? 1), why, hasMask ? [...maskOwners, layer] : maskOwners);
+      }
     }
   };
   walk(psd.children, '');
@@ -400,11 +484,11 @@ export function extractSummary(psd: Psd, fileName: string): PsdSummary {
   const unmapped = fonts.filter((f) => !f.mapped && !f.bake);
   if (unmapped.length) warnings.push(`웹폰트 표(규칙 5절)에 없는 폰트: ${unmapped.map((f) => f.name).join(', ')} → 임의로 대체하지 않습니다. 쓸 웹폰트를 정해 규칙 표에 추가하거나, 해당 글자를 이미지로 굽도록 지시해 주세요.`);
   if (Math.round(dpi) !== 72) warnings.push(`문서 해상도가 ${Math.round(dpi)}ppi 입니다 (72ppi 가 아님). 글자 크기 환산을 결과에서 꼭 확인하세요.`);
-  if (adjustmentNames.length) warnings.push(`조정 레이어 ${adjustmentNames.length}개(${adjustmentNames.slice(0, 5).join(', ')}${adjustmentNames.length > 5 ? ' …' : ''})는 "글자 뺀 배경"에 반영되지 않습니다. 배경 색감이 PSD와 다르면 해당 영역을 원본 합성(composite)으로 쓰게 지시하세요.`);
+  if (adjustmentNames.length) warnings.push(`조정 레이어 ${adjustmentNames.length}개(${adjustmentNames.slice(0, 5).join(', ')}${adjustmentNames.length > 5 ? ' …' : ''})는 "글자 뺀 배경"에 반영되지 않습니다. 그 영역은 배경 색감이 PSD 와 다를 수 있으니 미리보기에서 확인하세요.`);
   if (blendNames.size) warnings.push(`표준 외 혼합모드(${[...blendNames].join(', ')})가 있습니다. 글자 뺀 배경은 브라우저 합성으로 근사합니다.`);
   // 글자 뺀 배경 합성이 그리는 효과: 드롭 섀도·외부 광선·색상/그라데이션 오버레이·획 (effects.ts). 나머지는 빠진다
   const unsupportedFx = layers.filter((l) => l.kind !== 'text' && l.fx?.some((f) => !['dropShadow', 'outerGlow', 'colorOverlay', 'gradientOverlay', 'stroke'].includes(f)));
-  if (unsupportedFx.length) warnings.push(`"글자 뺀 배경"에 못 그리는 효과(내부 그림자·경사·새틴·패턴 등)가 걸린 레이어 ${unsupportedFx.length}개: ${unsupportedFx.slice(0, 4).map((l) => `${l.name}(y${l.b[1]})`).join(', ')}${unsupportedFx.length > 4 ? ' …' : ''}. 그 영역 색감이 다르면 원본 합성으로 쓰게 지시하세요.`);
+  if (unsupportedFx.length) warnings.push(`"글자 뺀 배경"에 못 그리는 효과(내부 그림자·경사·새틴·패턴 등)가 걸린 레이어 ${unsupportedFx.length}개: ${unsupportedFx.slice(0, 4).map((l) => `${l.name}(y${l.b[1]})`).join(', ')}${unsupportedFx.length > 4 ? ' …' : ''}. 그 영역 색감이 PSD 와 다를 수 있으니 미리보기에서 확인하세요.`);
   if (texts.some((t) => t.bakeHint)) warnings.push(`이미지로 구워야 할 수 있는 글자 ${texts.filter((t) => t.bakeHint).length}개 (이미지로 굽는 폰트·뒤틀기·특수 효과).`);
 
   return { fileName, width: psd.width, height: psd.height, dpi: Math.round(dpi), layers, texts, hiddenCount, fonts, warnings };

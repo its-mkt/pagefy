@@ -180,7 +180,8 @@ export async function removeUpload(cfg: FtpConfig, dial: Dial, t: UploadTarget, 
   return session(cfg, dial, async (c) => {
     if (!(await c.isDir(dir))) return { removed: [] as string[], left: [] as string[], folderRemoved: true };
     if ((await c.size(`${dir}/${marker}`)) == null) throw new Error(`서버의 ${t.rev} 폴더는 이 작업이 올린 폴더가 아니라 지우지 않았습니다.`);
-    const visible = await c.list(dir);
+    // 서버가 점 파일도 보여 주면 이 작업의 표시 파일이 "다른 파일"로 잡혀 되돌리기가 늘 거절된다 → 자기 표시는 뺀다
+    const visible = (await c.list(dir)).filter((n) => n !== marker);
     const hidden = (await c.list(dir, true)).filter((n) => n.startsWith('.') && n !== marker);
     const other = [...visible.filter((n) => !mine.has(n)), ...hidden];
     if (other.length) throw new Error(`폴더에 이 결과가 아닌 파일이 있어 아무것도 지우지 않았습니다 (${other.slice(0, 3).join(', ')}${other.length > 3 ? ' …' : ''}).`);

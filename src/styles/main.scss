@@ -400,6 +400,9 @@ h3 {
     color: var(--tag-ink);
     font-size: 0.8125rem;
     line-height: 1.35;
+    // 이름표 글이 길어도 칸 폭(그림 폭)을 넓히지 않고 줄바꿈한다 — 넓히면 그림 옆에 흰 여백이 생긴다
+    width: 0;
+    min-width: 100%;
     b { font-size: 0.9375rem; font-weight: 700; }
     span { opacity: 0.9; }
   }

@@ -38,17 +38,14 @@
 }
 
 
-// 올린 뒤: 한 줄 파일 카드 (끌어다 놓기는 그대로 받음)
+// 올린 뒤: 한 줄 파일 카드 (다른 PSD 는 화면 전체 끌어다 놓기 .dropcover 로)
 .filecard {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 0.875rem;
   align-items: center;
   padding: 0.25rem;
-  outline: 1px dashed transparent;
-  transition: outline-color 0.15s, background-color 0.15s;
 
-  &.is-over { outline-color: var(--acc); background: var(--accbg); }
   &.is-busy { cursor: progress; }
 
   &__thumb {
@@ -71,7 +68,44 @@
     .upload__busy { font-size: 0.8125rem; color: var(--ink2); }
   }
 
-  &__btn { flex: none; }
+  &__hint { flex: none; margin: 0 0.5rem 0 0; color: var(--sub); font-size: 0.75rem; }
+}
+
+// PSD 를 연 뒤 파일을 끌고 들어오면 화면 전체를 덮는 안내판 (DropOverlay) — 미리보기 iframe 위에서도 놓을 수 있게
+.dropcover {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(2px);
+
+  // 안쪽은 끌기 이벤트를 받지 않는다 → 안내판의 dragleave 가 곧 창 밖으로 나감
+  > * { pointer-events: none; }
+
+  &__box {
+    width: min(40rem, 100%);
+    min-height: 220px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    padding: 2rem 1.25rem;
+    border: 2px dashed var(--acc);
+    background: var(--accbg);
+    text-align: center;
+  }
+
+  &__icon { width: 2.5rem; height: 2.5rem; color: var(--acc); margin-bottom: 0.5rem; }
+  &__msg { margin: 0; font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+  &__sub { margin: 0; color: var(--sub); font-size: 0.8125rem; }
+
+  &.is-busy &__box { border-color: var(--line2); background: var(--card); }
+  &.is-busy &__icon { color: var(--sub); }
 }
 
 // ── PSD 확인

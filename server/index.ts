@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from '../shared/types.ts';
 import { buildPlanMessages, buildSectionMessages, buildSystem } from '../core/prompt.ts';
-import { runClaude } from '../core/run.ts';
+import { runClaude, usageOfError } from '../core/run.ts';
 import { validatePlan, validateSection } from '../core/validate.ts';
 import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude.ts';
 import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
@@ -23,6 +23,11 @@ const app = express();
 /** 배포 주소 경로. 화면은 /pagefy/, API 는 /pagefy/api/… (개발 중 Vite 프록시용 /api/… 도 같이 받는다) */
 const BASE_PATH = '/pagefy';
 const api = express.Router();
+// 다른 사이트가 DNS 를 바꿔 이 PC 의 서버를 부르는 것 막기 (API 키로 Claude 를 부르는 /plan·/section 도): 주소가 localhost·127.0.0.1 일 때만
+api.use((req, res, next) => {
+  if (['localhost', '127.0.0.1'].includes(req.hostname)) return next();
+  res.status(403).json({ error: '이 PC 에서 연 화면에서만 쓸 수 있습니다.' });
+});
 
 api.get('/health', (_req, res) => {
   let rules: HealthInfo['rules'] = { source: '(없음)', updatedAt: null, fallback: true };
@@ -53,7 +58,7 @@ async function streamTo(res: express.Response, work: (send: (e: StreamEvent) => 
   try {
     await work(send, ac.signal);
   } catch (err) {
-    if (!ac.signal.aborted) send({ type: 'error', message: describeError(err) });
+    if (!ac.signal.aborted) send({ type: 'error', message: describeError(err), ...usageOfError(err) });
   } finally {
     res.end();
   }

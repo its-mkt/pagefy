@@ -10,11 +10,16 @@ function checkMeta(m: GenerateMeta | undefined): string | null {
   return null;
 }
 
+/** 계획 요청의 타일 이미지 합계 상한 (base64 글자 수) — Claude API 요청 한도(32MB) 안에 레이어 정보까지 들어가게. 화면 App.tsx 의 MAX_TILE_B64 와 같게 */
+export const MAX_TILE_B64 = 24 * 1024 * 1024;
+
 export function validatePlan(b: PlanRequest): string | null {
   const e = checkMeta(b?.meta);
   if (e) return e;
   if (!b.summary || !Array.isArray(b.tiles)) return '요청 자료가 비어 있습니다.';
   if (b.tiles.length > 90) return `타일이 너무 많습니다 (${b.tiles.length}장). PSD 높이를 확인하세요.`;
+  const total = b.tiles.reduce((n, t) => n + (typeof t?.data === 'string' ? t.data.length : 0), 0);
+  if (total > MAX_TILE_B64) return `보낼 이미지가 너무 큽니다 (${(total / 1048576).toFixed(0)}MB, 한도 ${MAX_TILE_B64 / 1048576}MB). PSD 를 나눠서 만들어 주세요.`;
   return null;
 }
 
