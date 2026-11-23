@@ -1,14 +1,16 @@
 import type { HealthInfo } from '../../shared/types';
 import { CLOUD } from '../lib/api';
+import ProfileMenu, { type ProfileUser } from './ProfileMenu';
 
 interface Props {
   health: HealthInfo | null;
   error: string | null;
-  email?: string;
+  /** 로그인한 사용자 (배포 화면) — 있으면 오른쪽 끝에 동그라미 프로필 */
+  user?: ProfileUser;
   onLogout?: () => void;
 }
 
-export default function Header({ health, error, email, onLogout }: Props) {
+export default function Header({ health, error, user, onLogout }: Props) {
   const rulesLabel = CLOUD ? '규칙: 저장소 사본' : health?.rules.fallback ? '규칙: 로컬 사본' : '규칙: 공유 폴더 원본';
   return (
     <header className="header">
@@ -42,16 +44,7 @@ export default function Header({ health, error, email, onLogout }: Props) {
             </span>
           </>
         )}
-        {email && (
-          <span className="badge">
-            {email}
-            {onLogout && (
-              <button className="link-btn" onClick={onLogout}>
-                로그아웃
-              </button>
-            )}
-          </span>
-        )}
+        {user && <ProfileMenu user={user} onLogout={onLogout} />}
       </div>
     </header>
   );
