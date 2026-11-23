@@ -48,6 +48,8 @@ export interface Job {
   deletedAt?: number;
   /** (브라우저 사본) 계정에 올라간 적이 있음 — 계정에서 사라졌으면 다른 곳에서 영구 삭제한 것이라 다시 올리지 않는다 */
   syncedAt?: number;
+  /** (브라우저 사본) 이 사본을 만든 로그인 계정 id — 한 PC 를 여러 계정이 쓸 때 남의 작업을 보이거나 올리지 않게 */
+  owner?: string;
 }
 
 /** 휴지통 보관 기간 (일) */
@@ -100,14 +102,18 @@ async function store(name: 'jobs' | 'files', mode: IDBTransactionMode = 'readonl
 export const fileKeyOf = (f: File) => `${f.name}|${f.size}|${f.lastModified}`;
 
 /** 이 브라우저에 있는 작업 기록 (최근 순) */
+/** 지금 로그인한 계정 id (cloudReady 가 채운다). 없으면 계정 저장을 안 쓰는 중 */
+let uid: string | undefined;
+
+/** 이 브라우저에 있는 작업 기록 (최근 순). 다른 계정이 만든 사본은 빼고 (표시 없는 예전 사본은 지금 계정 것으로 본다) */
 async function listLocal(): Promise<Job[]> {
   const all = await req((await store('jobs')).getAll() as IDBRequest<Job[]>);
-  return all.sort((a, b) => b.updatedAt - a.updatedAt);
+  return all.filter((j) => !uid || !j.owner || j.owner === uid).sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 async function putLocal(job: Job) {
-  const { runningUntil: _, ...rest } = job;
-  await req((await store('jobs', 'readwrite')).put(rest));
+  const { runningUntil: _, lite: _l, ...rest } = job;
+  await req((await store('jobs', 'readwrite')).put({ ...rest, owner: rest.owner ?? uid }));
 }
 
 // ───────── 계정 저장 (Supabase public.pagefy_jobs) ─────────
@@ -130,11 +136,11 @@ interface Row {
   deleted_at: string | null;
   cost_usd: number;
   model: string | null;
-  data: Omit<Job, 'id' | 'createdAt' | 'updatedAt' | 'fileKey' | 'fileName' | 'fileSize' | 'state' | 'model' | 'noFile' | 'runningUntil' | 'lite' | 'deletedAt' | 'syncedAt'>;
+  data: Omit<Job, 'id' | 'createdAt' | 'updatedAt' | 'fileKey' | 'fileName' | 'fileSize' | 'state' | 'model' | 'noFile' | 'runningUntil' | 'lite' | 'deletedAt' | 'syncedAt' | 'owner'>;
 }
 
 function toRow(j: Job): Omit<Row, 'user_id'> {
-  const { id, createdAt, updatedAt, fileKey, fileName, fileSize, state, model, noFile: _n, runningUntil: _r, lite: _l, info: _i, deletedAt, syncedAt: _s, ...rest } = j;
+  const { id, createdAt, updatedAt, fileKey, fileName, fileSize, state, model, noFile: _n, runningUntil: _r, lite: _l, info: _i, deletedAt, syncedAt: _s, owner: _o, ...rest } = j;
   const data = { ...rest, info: listInfo(j) };
   return {
     id,
@@ -199,6 +205,7 @@ const fromLite = (r: LiteRow): Job => ({
 async function cloudReady(): Promise<boolean> {
   if (cloudOff) return false;
   const { data } = await supabase.auth.getSession();
+  uid = data.session?.user.id;
   return !!data.session;
 }
 
@@ -221,7 +228,13 @@ function queueCloud(job: Job) {
   clearTimeout(flushTimer);
   flushTimer = window.setTimeout(flushCloud, 1000);
 }
-async function flushCloud() {
+// 계정 쓰기는 한 번에 하나씩 (늦게 보낸 옛 상태가 먼저 보낸 새 상태를 덮지 않게)
+let flushChain: Promise<void> = Promise.resolve();
+function flushCloud() {
+  flushChain = flushChain.then(flushNow, flushNow);
+  return flushChain;
+}
+async function flushNow() {
   if (!pending.size || !(await cloudReady())) return pending.clear();
   const rows = [...pending.values()].map(toRow);
   pending.clear();
@@ -245,12 +258,13 @@ async function getLocal(id: string) {
 let lastCloud: { rows: Job[]; limit: number } | null = null;
 
 export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jobs: Job[]; more: boolean }) => void): Promise<{ jobs: Job[]; more: boolean }> {
+  const cloud = await cloudReady(); // 계정 id 를 먼저 알아야 이 계정의 브라우저 사본만 고른다
   const [all, keyList] = await Promise.all([listLocal(), store('files').then((s) => req(s.getAllKeys()))]);
   const local = all.filter((j) => !j.deletedAt);
   const keys = new Set(keyList as string[]);
   const mark = (j: Job): Job => ({ ...j, noFile: !keys.has(j.fileKey) });
   const localPage = { jobs: local.slice(0, limit).map(mark), more: local.length > limit };
-  if (!(await cloudReady())) return localPage;
+  if (!cloud) return localPage;
   // 계정 목록을 받는 동안 이 브라우저 사본을 먼저 보여 준다
   if (!quick && local.length) onLocal?.(localPage);
 
@@ -270,13 +284,15 @@ export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jo
   const byId = new Map(rows.slice(0, limit).map((j) => [j.id, j]));
   // 계정 목록 쪽에 없는 브라우저 사본: 휴지통·영구 삭제됐는지, 그냥 오래돼서 이 쪽에 없는지 한 번에 확인한다
   // (확인 없이 다시 올리면 다른 곳에서 지운 작업이 되살아난다)
-  const gone = quick ? new Set<string>() : await settleMissing(local.filter((j) => !byId.has(j.id)));
+  const { gone, cloudAt } = quick ? { gone: new Set<string>(), cloudAt: new Map<string, number>() } : await settleMissing(local.filter((j) => !byId.has(j.id)));
   // 브라우저에만 있거나 브라우저 쪽이 더 새로운 작업 → 계정에 올린다 (처음 한 번 옮기기 + 저장 실패분 다시 올리기)
   for (const j of local) {
     if (gone.has(j.id)) continue;
     const c = byId.get(j.id);
     if (c && !quick && !j.syncedAt) markSynced(j.id).catch(() => {});
-    if (!c || j.updatedAt > c.updatedAt) {
+    // 계정에 있는 같은 작업의 수정 시각 (이 쪽 목록 밖의 오래된 작업도 settleMissing 이 알려 준다)
+    const at = c?.updatedAt ?? cloudAt.get(j.id);
+    if (at === undefined || j.updatedAt > at) {
       if (!quick) queueCloud(j); // quick(저장 직후)은 putJob 이 이미 올리는 중
       if (c || byId.size < limit) byId.set(j.id, { ...j, runningUntil: c?.runningUntil });
     }
@@ -292,17 +308,21 @@ export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jo
  * - 계정에 아예 없음 + 올라간 적 있음 → 다른 곳에서 영구 삭제 → 브라우저 사본도 지움
  * - 계정에 아예 없음 + 올라간 적 없음 → 아직 안 올라간 작업 (그대로 → 아래에서 올림)
  */
-async function settleMissing(missing: Job[]): Promise<Set<string>> {
+async function settleMissing(missing: Job[]): Promise<{ gone: Set<string>; cloudAt: Map<string, number> }> {
   const gone = new Set<string>();
-  if (!missing.length) return gone;
-  const { data, error } = await supabase.from(TABLE).select('id,deleted_at').in('id', missing.map((j) => j.id));
+  const cloudAt = new Map<string, number>();
+  if (!missing.length) return { gone, cloudAt };
+  const { data, error } = await supabase.from(TABLE).select('id,updated_at,deleted_at').in('id', missing.map((j) => j.id));
   if (error) {
     cloudFailed(error, '확인');
-    return gone;
+    // 확인 못 했으면 올리지 않는다 (계정 쪽이 더 새로울 수 있음) — 무한대 시각으로 막는다
+    for (const j of missing) cloudAt.set(j.id, Infinity);
+    return { gone, cloudAt };
   }
-  const by = new Map((data as { id: string; deleted_at: string | null }[]).map((r) => [r.id, r]));
+  const by = new Map((data as { id: string; updated_at: string; deleted_at: string | null }[]).map((r) => [r.id, r]));
   for (const j of missing) {
     const r = by.get(j.id);
+    if (r && !r.deleted_at) cloudAt.set(j.id, Date.parse(r.updated_at));
     if (r?.deleted_at) {
       gone.add(j.id);
       await putLocal({ ...j, deletedAt: Date.parse(r.deleted_at) }).catch(() => {});
@@ -312,7 +332,7 @@ async function settleMissing(missing: Job[]): Promise<Set<string>> {
     }
   }
   if (gone.size) await cleanFiles();
-  return gone;
+  return { gone, cloudAt };
 }
 
 // ───────── 휴지통 ─────────
@@ -322,13 +342,17 @@ export async function trashJob(id: string) {
   const now = Date.now();
   pending.delete(id);
   if (lastCloud) lastCloud = { ...lastCloud, rows: lastCloud.rows.filter((j) => j.id !== id) };
+  await flushChain; // 이미 보내는 중인 저장이 휴지통 표시 뒤에 도착해 작업을 되살리지 않게
   const l = await getLocal(id);
   if (l) await putLocal({ ...l, deletedAt: now, updatedAt: now });
   if (await cloudReady()) {
     const iso = new Date(now).toISOString();
     const { error } = await supabase.from(TABLE).update({ deleted_at: iso, updated_at: iso, running_until: null }).eq('id', id);
     cloudFailed(error, '휴지통');
-    if (error) throw new Error(`휴지통으로 옮기지 못했습니다 (${error.message})`);
+    if (error) {
+      if (l) await putLocal(l).catch(() => {}); // 계정에 못 옮겼으면 브라우저 사본도 그대로 (어긋나면 열었을 때 휴지통으로 사라짐)
+      throw new Error(`휴지통으로 옮기지 못했습니다 (${error.message})`);
+    }
   }
   await cleanFiles();
 }
@@ -371,14 +395,16 @@ export async function listTrash(): Promise<Job[]> {
 
 /** 휴지통 개수 (작업 목록 머리에 표시) */
 export async function trashCount(): Promise<number> {
-  const local = (await listLocal()).filter((j) => j.deletedAt).length;
-  if (!(await cloudReady())) return local;
+  const cloud = await cloudReady();
+  const trashed = (await listLocal()).filter((j) => j.deletedAt);
+  if (!cloud) return trashed.length;
   const { count, error } = await supabase.from(TABLE).select('id', { count: 'exact', head: true }).not('deleted_at', 'is', null);
   if (error) {
     cloudFailed(error, '휴지통 개수');
-    return local;
+    return trashed.length;
   }
-  return count ?? 0;
+  // 계정에 올라간 적 없는(브라우저에만 있는) 휴지통 항목도 센다 — 안 세면 휴지통 버튼이 숨어 못 꺼낸다
+  return (count ?? 0) + trashed.filter((j) => !j.syncedAt).length;
 }
 
 /** 요약(info)을 저장하기 전에 만든 작업: 계획의 섹션 수만 따로 읽어 채운다 (다음에 저장되면 요약이 함께 들어감) */
@@ -400,9 +426,12 @@ async function fillOldInfo(rows: Job[]) {
 /** 열기 전에 전체 작업 받기: 가벼운 사본이면 브라우저 사본(같거나 더 새로우면) 또는 계정에서 전체를 읽는다 */
 export async function fullJob(j: Job): Promise<Job> {
   if (!j.lite) return j;
-  const local = await req((await store('jobs')).get(j.id) as IDBRequest<Job | undefined>);
-  if (local && local.updatedAt >= j.updatedAt) return { ...local, noFile: j.noFile, runningUntil: j.runningUntil };
+  const local = await getLocal(j.id);
+  // 브라우저 사본은 계정보다 확실히 새로울 때만 (아직 못 올린 수정). 같거나 오래됐거나 휴지통 표시면 계정에서 받는다
+  const usable = local && !local.deletedAt ? local : undefined;
+  if (usable && usable.updatedAt > j.updatedAt) return { ...usable, noFile: j.noFile, runningUntil: j.runningUntil };
   const { data, error } = await supabase.from(TABLE).select('*').eq('id', j.id).maybeSingle();
+  if (error && usable) return { ...usable, noFile: j.noFile, runningUntil: j.runningUntil }; // 네트워크 오류면 브라우저 사본이라도
   if (error || !data) throw new Error(`작업을 불러오지 못했습니다${error ? ` (${error.message})` : ' (지워진 작업)'}`);
   const full = fromRow(data as Row);
   await putLocal(full).catch(() => {});
@@ -452,6 +481,7 @@ export async function deleteJob(id: string) {
   if (await cloudReady()) {
     const { error } = await supabase.from(TABLE).delete().eq('id', id);
     cloudFailed(error, '삭제');
+    if (error) throw new Error(error.message);
   }
   await cleanFiles();
 }
@@ -462,30 +492,35 @@ export async function deleteJob(id: string) {
  */
 export async function prune(keepId?: string) {
   const jobs = (await listLocal()).filter((j) => !j.deletedAt); // 휴지통 항목은 기간이 지나면 purgeTrash 가 지운다
-  const drop = jobs.filter((j) => j.id !== keepId).slice(MAX_JOBS - 1);
+  // 계정 저장 중이면 계정에 올라간 것만 브라우저에서 정리한다 (못 올린 작업을 지우면 영영 사라짐)
+  const drop = jobs.filter((j) => j.id !== keepId).slice(MAX_JOBS - 1).filter((j) => cloudOff || j.syncedAt);
   for (const j of drop) if (!pending.has(j.id)) await req((await store('jobs', 'readwrite')).delete(j.id));
   await cleanFiles();
 }
 
 async function cleanFiles() {
-  const used = new Set((await listLocal()).filter((j) => !j.deletedAt).map((j) => j.fileKey));
+  // 다른 계정의 브라우저 사본 PSD 도 지키도록 계정 구분 없이 전부 본다
+  const all = await req((await store('jobs')).getAll() as IDBRequest<Job[]>);
+  const used = new Set(all.filter((j) => !j.deletedAt).map((j) => j.fileKey));
   const keys = (await req((await store('files')).getAllKeys())) as string[];
   for (const k of keys) if (!used.has(k)) await req((await store('files', 'readwrite')).delete(k));
 }
 
 /** 앞서 열려 있던 탭이 새로고침·닫힘으로 끊긴 작업은 "중단됨" 으로 (다른 탭·다른 PC 가 지금 만드는 중인 것은 그대로) */
 // 상태 칸만 바꾼다 (목록을 전부 읽지 않음 — 첫 화면을 늦추지 않게)
-export async function markInterrupted(): Promise<boolean> {
+// 브라우저 사본 먼저 (목록을 읽기 전에 — 안 그러면 "생성 중" 사본이 계정에 다시 올라가 3분간 자기 작업이 막힘)
+// 수정 시각은 그대로 둔다: 올리면 다른 PC 에서 더 고친 계정 사본보다 새로워 보여 덮어쓴다
+export async function markInterruptedLocal() {
+  await cloudReady(); // 계정 id
   const q = await navigator.locks?.query?.().catch(() => null);
   const held = new Set((q?.held ?? []).map((l) => l.name ?? ''));
-  const mine = (id: string) => held.has(`pagefy-job-${id}`);
+  for (const j of await listLocal()) if (j.state === 'running' && !held.has(`pagefy-job-${j.id}`)) await putLocal({ ...j, state: 'stopped' });
+}
+
+/** 계정 쪽: 생성 중 표시가 끊긴 작업을 "중단됨"으로. 바뀐 게 있으면 true */
+export async function markInterrupted(): Promise<boolean> {
   const now = Date.now();
   let changed = false;
-  for (const j of await listLocal())
-    if (j.state === 'running' && !mine(j.id)) {
-      await putLocal({ ...j, state: 'stopped', updatedAt: now });
-      changed = true;
-    }
   if (!(await cloudReady())) return changed;
   // 계정: 생성 중 표시가 끊긴(3분 넘게 갱신 없는) 작업만. 다른 PC 가 만드는 중인 것은 표시가 살아 있어 그대로 둔다
   const { data, error } = await supabase

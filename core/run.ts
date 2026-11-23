@@ -61,10 +61,13 @@ export async function runClaude(
   send: (e: StreamEvent) => void,
   signal: AbortSignal,
 ) {
+  // 규칙 읽기 등 앞 단계에서 이미 취소됐으면 Claude 를 부르지 않는다 (이미 끝난 신호에 붙인 리스너는 불리지 않아, 아무도 안 받는 응답이 끝까지 돌며 비용이 나간다)
+  if (signal.aborted) throw new Error('취소되었습니다.');
   const ac = new AbortController();
   const onAbort = () => ac.abort();
   signal.addEventListener('abort', onAbort);
   let timedOut = false;
+  const partial: { model?: string; usage?: Anthropic.Beta.BetaUsage } = {};
   const timer = cfg.timeLimitMs
     ? setTimeout(() => {
         timedOut = true;
@@ -89,6 +92,11 @@ export async function runClaude(
     let thinkingShown = false;
     let textStarted = false;
     for await (const event of stream) {
+      // 도중에 끊겨도(시간 초과·취소) 쓴 비용을 알리도록 지금까지의 사용량을 모은다
+      if (event.type === 'message_start') {
+        partial.model = event.message.model;
+        partial.usage = { ...event.message.usage };
+      } else if (event.type === 'message_delta' && partial.usage) partial.usage = { ...partial.usage, output_tokens: event.usage.output_tokens ?? partial.usage.output_tokens };
       if (event.type === 'content_block_start') {
         if (event.content_block.type === 'thinking' && !thinkingShown) {
           thinkingShown = true;
@@ -104,17 +112,30 @@ export async function runClaude(
     }
     const final = await stream.finalMessage();
     if (final.stop_reason === 'refusal') {
-      send({ type: 'error', message: `모델이 요청을 거절했습니다 (${final.stop_details?.category ?? '사유 미상'}).` });
+      send({ type: 'error', message: `모델이 요청을 거절했습니다 (${final.stop_details?.category ?? '사유 미상'}).`, usage: usageOf(final.model, final.usage), model: final.model });
       return;
     }
     send({ type: 'done', stopReason: final.stop_reason, usage: usageOf(final.model, final.usage), model: final.model });
   } catch (err) {
-    if (timedOut) throw new Error(`서버 실행 시간 제한(${Math.round(cfg.timeLimitMs / 1000)}초)에 걸려 중단했습니다. 섹션을 더 작게 나누도록 수정 요청하거나 다시 시도하세요.`);
-    throw err;
+    const usage = partial.usage ? usageOf(partial.model ?? cfg.model, partial.usage) : undefined;
+    if (timedOut) throw withUsage(new Error(`서버 실행 시간 제한(${Math.round(cfg.timeLimitMs / 1000)}초)에 걸려 중단했습니다. 잠시 뒤 다시 시도하세요. 계속되면 관리자에게 알려 주세요 (아주 긴 PSD 는 시간이 더 걸립니다).`), usage, partial.model);
+    throw withUsage(err, usage, partial.model);
   } finally {
     if (timer) clearTimeout(timer);
     signal.removeEventListener('abort', onAbort);
   }
+}
+
+/** 오류에 이미 쓴 비용을 붙인다 (서버가 error 이벤트로 화면에 넘김) */
+function withUsage(err: unknown, usage: UsageInfo | undefined, model: string | undefined) {
+  if (usage && err && typeof err === 'object') Object.assign(err, { usage, model });
+  return err;
+}
+
+/** 오류에 붙은 비용 (없으면 undefined) */
+export function usageOfError(err: unknown): { usage?: UsageInfo; model?: string } {
+  const e = err as { usage?: UsageInfo; model?: string } | null;
+  return e && typeof e === 'object' && e.usage ? { usage: e.usage, model: e.model } : {};
 }
 
 export function describeError(err: unknown): string {

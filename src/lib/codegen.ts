@@ -36,6 +36,14 @@ export interface CodegenResult {
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const escAttr = (s: string) => esc(s).replace(/"/g, '&quot;');
 const r1 = (n: number) => Math.round(n * 10) / 10;
+/** txt 이미지 파일명 뒤 내용 이름 (6-1: 영문 소문자·숫자·하이픈) — 글자에서 영문·숫자만, 없으면 text */
+const txtSlug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24)
+    .replace(/-+$/, '') || 'text';
 const fillOf = (t: TextInfo) => {
   const m = (t.fx || []).map((f) => /^fill (\d+)%$/.exec(f)).find(Boolean);
   return m ? Number(m[1]) / 100 : 1;
@@ -49,7 +57,8 @@ function familyOf(font: string): string | null {
 function autoKeep(t: TextInfo): string | null {
   if (t.bakeHint) return t.bakeHint;
   // 드롭섀도는 값을 읽었으면 text-shadow 로 옮긴다 (소제목이 이미지가 되면 검색에서 빠짐)
-  const fx = (t.fx || []).filter((f) => KEEP_FX.includes(f) && !(f === 'dropShadow' && t.shadows?.length));
+  // 드롭섀도는 text-shadow 로, 보통 혼합 색상 오버레이는 글자색으로 옮긴다 (규칙 4절 표)
+  const fx = (t.fx || []).filter((f) => KEEP_FX.includes(f) && !(f === 'dropShadow' && t.shadows?.length) && !(f === 'colorOverlay' && t.overlay));
   if (fx.length) return `CSS 로 같게 못 만드는 효과(${fx.join(', ')})`;
   if (fillOf(t) === 0) return '칠 0% (외곽선 글자)';
   const fonts = (t.runs?.length ? t.runs.filter((r) => r.text.trim()).map((r) => r.font) : [t.font]).filter(Boolean);
@@ -69,6 +78,8 @@ interface Box {
   html: string;
   /** CSS 속성 → 값 (u() 를 거친 문자열) */
   style: Record<string, string | null>;
+  /** 이미지에 남긴 글자: 글자 대신 <img alt="원문"> (규칙 4절·8-2 3항) */
+  img?: { src: string; alt: string };
 }
 
 interface Ctx {
@@ -81,6 +92,15 @@ interface Ctx {
   wraps: Record<number, number[]>;
   usesPaperlogy: boolean;
   warnings: string[];
+}
+
+/** 색상 오버레이를 글자색에 섞는다 (불투명도 1 이면 오버레이 색 그대로) */
+function overlayColor(base: string, ov: NonNullable<TextInfo['overlay']>) {
+  if (ov.opacity >= 0.99) return ov.color;
+  const a = parseInt(base, 16);
+  const b = parseInt(ov.color, 16);
+  const ch = (sh: number) => Math.round(((b >> sh) & 255) * ov.opacity + ((a >> sh) & 255) * (1 - ov.opacity));
+  return [16, 8, 0].map((sh) => ch(sh).toString(16).padStart(2, '0')).join('');
 }
 
 function colorCss(hex: string, alpha: number) {
@@ -128,7 +148,7 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
     const st: string[] = [];
     if (familyOf(r.font) !== familyOf(r0.font)) st.push(`font-family:${familyCss(r.font, ctx)}`);
     if (r.weight !== r0.weight) st.push(`font-weight:${r.weight}`);
-    if (r.color !== r0.color) st.push(`color:${colorCss(r.color, alpha)}`);
+    if (r.color !== r0.color && !t.overlay) st.push(`color:${colorCss(r.color, alpha)}`); // 오버레이는 모든 글자를 한 색으로 덮는다
     if (Math.abs(r.ls - r0.ls) >= 0.0005) st.push(`letter-spacing:${Math.round((r.ls + (ctx.lsAdj[t.id] ?? 0)) * 10000) / 10000}em`);
     const parts = r.text.split(/(\r\n|[\r\n\u0003])/);
     parts.forEach((part, k) => {
@@ -168,6 +188,9 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
       const lastSeg = i === ln.segs.length - 1;
       let h = esc(lastSeg && !keepTrail ? sg.text.replace(/\s+$/, '') : sg.text);
       if (lastSeg && keepTrail) h = h.replace(/( +)$/, (sp) => '&nbsp;'.repeat(sp.length));
+      // 줄 앞 공백·이어진 공백은 white-space:nowrap 에서 하나로 접힌다 → PSD 처럼 남게 &nbsp; 로 (자간 측정도 공백을 다 센다)
+      if (i === 0) h = h.replace(/^ +/, (sp) => '&nbsp;'.repeat(sp.length));
+      h = h.replace(/ {2,}/g, (sp) => `${'&nbsp;'.repeat(sp.length - 1)} `);
       const st = [...sg.st];
       if (Math.abs(sg.size - cs) > 0.3) st.push(`font-size:${u(sg.size)}`);
       if (sg.size < ln.size - 0.3) st.push('line-height:0');
@@ -177,7 +200,23 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
   };
   const leadAt = (i: number) => t.lineHeights?.[lines[i].hard] ?? L;
 
-  const uniform = lines.every((ln, i) => Math.abs(leadAt(i) - L) < 0.3 && Math.abs(ln.size - size) < 0.3 && !ln.pgap);
+  // 문단마다 정렬이 다르거나 양쪽 정렬인 상자 텍스트: 상자 폭 전체를 쓰고 줄마다 text-align (줄바꿈 위치를 잰 경우만 — 아니면 첫 문단 정렬로)
+  const perLine = t.shape === 'box' && !!t.boxWidth && !!t.lineAligns && t.id in ctx.wraps;
+  if (t.lineAligns && !perLine && new Set(t.lineAligns).size > 1)
+    ctx.warnings.push(`"${t.text.trim().slice(0, 15)}"는 문단마다 정렬이 달라 첫 문단 정렬로 맞췄습니다 — PSD 와 다를 수 있습니다.`);
+  /** 줄 i 의 text-align (+ 양쪽 정렬이면 text-align-last). 문단 마지막 줄은 포토샵의 마지막 줄 정렬을 따른다 */
+  const lineAlignCss = (i: number): string[] => {
+    const raw = t.lineAligns?.[lines[i].hard] ?? 'left';
+    const paraLast = i === lines.length - 1 || !lines[i + 1].wrapped;
+    if (raw.startsWith('justify')) {
+      if (!paraLast || raw === 'justify-all') return ['text-align:justify', 'text-align-last:justify'];
+      const last = raw.slice('justify-'.length);
+      return [`text-align:${last === 'center' || last === 'right' ? last : 'left'}`];
+    }
+    return [`text-align:${raw === 'center' || raw === 'right' ? raw : 'left'}`];
+  };
+
+  const uniform = !perLine && lines.every((ln, i) => Math.abs(leadAt(i) - L) < 0.3 && Math.abs(ln.size - size) < 0.3 && !ln.pgap);
   let html: string;
   let height: number;
   if (uniform) {
@@ -195,7 +234,7 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
           mt = Li - leadAt(i - 1) / 2 - Li / 2 - 0.35 * (ln.size - prev.size) + (ln.pgap || 0);
         }
         height += Li + mt;
-        const st = ['display:block', `line-height:${u(Li)}`];
+        const st = ['display:block', `line-height:${u(Li)}`, ...(perLine ? lineAlignCss(i) : [])];
         if (Math.abs(ln.size - size) > 0.3) st.push(`font-size:${u(ln.size)}`); // 줄 기준선은 그 줄 글자 크기 기준
         if (Math.abs(mt) > 0.05) st.push(`margin-top:${u(mt)}`);
         return `<span style="${st.join(';')}">${htmlOf(ln, ln.size) || '&nbsp;'}</span>`; // 빈 줄도 높이를 갖게
@@ -210,7 +249,8 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
     ctx.warnings.push(`상자 텍스트 "${t.text.trim().slice(0, 15)}"의 줄바꿈 위치를 재지 못해 브라우저 줄바꿈에 맡겼습니다 — PSD 와 줄바꿈이 다를 수 있습니다.`);
     height = Math.max(height, Math.round((t.b[3] - t.b[1] - size * 0.7) / L + 1) * L);
   }
-  const width = cssWrap ? t.boxWidth! + 2 : Math.max(t.b[2] - t.b[0], 10) + Math.ceil(size * 0.6) + 8; // 글꼴 차이 여유
+  // 줄별 정렬은 포토샵 상자 폭 그대로 (정렬 기준 = 상자 왼쪽·가운데·오른쪽)
+  const width = perLine ? t.boxWidth! : cssWrap ? t.boxWidth! + 2 : Math.max(t.b[2] - t.b[0], 10) + Math.ceil(size * 0.6) + 8; // 글꼴 차이 여유
   const left = align === 'center' ? t.anchorX - width / 2 : align === 'right' ? t.anchorX - width : t.anchorX;
   // 첫 줄 상자 위쪽 = 기준선 − (첫 줄 행간/2 + 0.35 × 첫 줄 크기) (4-1). 첫 줄에 더 큰 글자가 섞이면 그 크기 기준
   const top = t.baseline - (leadAt(0) / 2 + 0.35 * lines[0].size);
@@ -219,9 +259,10 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
     'font-size': u(size),
     'line-height': u(L),
     'font-weight': String(t.weight),
-    color: colorCss(t.color, alpha),
+    // 색상 오버레이는 효과라 칠 불투명도와 상관없이 보인다
+    color: t.overlay ? colorCss(overlayColor(t.color, t.overlay), 1) : colorCss(t.color, alpha),
     'letter-spacing': Math.abs(lsBase) >= 0.0005 ? `${Math.round(lsBase * 10000) / 10000}em` : null,
-    'text-align': align !== 'left' ? align : null,
+    'text-align': align !== 'left' && !perLine ? align : null,
     'text-transform': t.caps ? 'uppercase' : null,
     'text-shadow': t.shadows?.length ? t.shadows.map((s) => `${u(s.x)} ${u(s.y)} ${u(s.blur)} ${s.color}`).join(',') : null,
     // 레이어·그룹 불투명도 (글자 칠 불투명도는 색에, 이것은 그림자까지 함께)
@@ -256,14 +297,20 @@ function emitRows(boxes0: Box[], ctx: Ctx, tagOf: (b: Box) => { tag: string; att
   let prevBottom = first;
   // 오픈마켓은 class 에 스타일을 기댈 수 없어 기본 여백·굵기를 인라인으로 지운다
   const reset: Record<string, string | null> = goodomall ? {} : { margin: '0', padding: '0', 'white-space': 'nowrap' };
+  /** 상자 하나 → 요소. 이미지에 남긴 글자는 <img alt> (폭·높이 고정, 스킨의 img 폭 100% 를 이기도록 인라인) */
+  const render = (b: Box, pos: Record<string, string | null>) => {
+    if (b.img) {
+      const st = { display: 'block', 'max-width': 'none', height: 'auto', border: '0', ...(goodomall ? {} : { margin: '0' }), ...pos };
+      const cls = goodomall ? ` class="${prefix}-tx"` : '';
+      return `<img${cls} src="${b.img.src}" alt="${escAttr(b.img.alt)}" width="${Math.round(b.width)}" height="${Math.round(b.height)}" loading="lazy" decoding="async"${goodomall ? ' draggable="false"' : ''} style="${styleStr(st)}">`;
+    }
+    const { tag, attrs } = tagOf(b);
+    return `<${tag}${attrs} style="${styleStr({ ...reset, ...b.style, ...pos })}">${b.html}</${tag}>`;
+  };
   for (const row of rows) {
     row.items.sort((a, b) => a.left - b.left);
     const mt = row.top - prevBottom;
-    const el = (b: Box, ml: number) => {
-      const { tag, attrs } = tagOf(b);
-      const st = { ...reset, ...b.style, width: u(b.width), 'margin-left': ml ? u(ml) : null, 'margin-top': b.top - row.top ? u(b.top - row.top) : null };
-      return `<${tag}${attrs} style="${styleStr(st)}">${b.html}</${tag}>`;
-    };
+    const el = (b: Box, ml: number) => render(b, { width: u(b.width), 'margin-left': ml ? u(ml) : null, 'margin-top': b.top - row.top ? u(b.top - row.top) : null });
     if (goodomall) {
       lines.push(`${ind}<div class="${prefix}-row"${mt ? ` style="margin-top:${u(mt)}"` : ''}>`);
       let x = 0;
@@ -274,9 +321,7 @@ function emitRows(boxes0: Box[], ctx: Ctx, tagOf: (b: Box) => { tag: string; att
       lines.push(`${ind}</div>`);
     } else if (row.items.length === 1) {
       const b = row.items[0];
-      const { tag, attrs } = tagOf(b);
-      const st = { ...reset, ...b.style, width: u(b.width), 'margin-left': b.left ? u(b.left) : null, 'margin-top': mt ? u(mt) : null };
-      lines.push(`${ind}<${tag}${attrs} style="${styleStr(st)}">${b.html}</${tag}>`);
+      lines.push(`${ind}${render(b, { width: u(b.width), 'margin-left': b.left ? u(b.left) : null, 'margin-top': mt ? u(mt) : null })}`);
     } else {
       // 오픈마켓: flex 대신 표 (7-3). 상자가 겹치면 margin-left 가 음수가 되는데, 자동 표 폭은 음수 여백을 무시해
       // 뒤 칸을 밀어낸다 → 칸 폭을 고정(table-layout:fixed)하고 음수 여백은 칸 밖으로 넘치게 둔다
@@ -332,6 +377,7 @@ function baseCss(p: string, W: number, usesPaperlogy: boolean) {
 .${p} .${p}-row{display:flex;align-items:flex-start}
 .${p} .${p}-row>*{flex:none;white-space:nowrap}
 .${p} img.${p}-img{display:block;width:100%;max-width:none;height:auto;float:none}
+.${p}.${p} img.${p}-tx{display:block;max-width:none;height:auto;float:none}
 .${p}.${p} h2,.${p}.${p} p{font-weight:inherit;font-size:inherit;color:inherit}`,
   ]
     .filter(Boolean)
@@ -465,7 +511,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
       const x1 = Math.min(W, Math.ceil(bx.left + bx.width));
       const y1 = Math.min(summary.height, Math.ceil(bx.top + bx.height));
       if (x1 <= x0 || y1 <= y0) continue;
-      const file = `${sid}_txt${tn}.jpg`;
+      const file = `${sid}_txt${tn}-${txtSlug(bx.t.text)}.jpg`;
       images.push({ file, kind: 'txt', source: 'composite', x0, y0, x1, y1, alt: bx.t.text.replace(/\s+/g, ' ').trim() });
       Object.assign(bx.style, {
         color: 'transparent',
@@ -557,7 +603,21 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
       if (p.y0 > y) pushBg(y, p.y0);
       j++;
       const role = (p.role || 'photo').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'photo'; // 하이픈 여러 개는 하나로 (6-1 파일명 규칙)
-      blocks.push({ type: 'img', y0: p.y0, y1: p.y1, file: `${sid}_img${j}-${role}.jpg`, alt: p.alt || sec.name });
+      // 사진 띠 안에 이미지로 남긴 글자가 있으면 alt 에 원문을 덧붙인다 (구운 글자는 alt 에 빠짐없이, 8-2 3항)
+      // 한 글자짜리 번호 라벨(1·2·3…)은 정보가 없어 빼고, alt 에 이미 있는 문구도 다시 넣지 않는다
+      const baseAlt = p.alt || sec.name;
+      const inPhoto = keptTexts
+        .filter((t) => t.b[1] >= p.y0 && t.b[3] <= p.y1)
+        .map((t) => t.text.replace(/\s+/g, ' ').trim())
+        .filter((s) => s.replace(/\s/g, '').length >= 2 && !baseAlt.includes(s));
+      const alt = inPhoto.length ? `${baseAlt} — ${[...new Set(inPhoto)].join(' · ')}` : baseAlt;
+      // 세로 3000px 넘는 사진 띠는 같은 높이로 나눈다 (용량·업로드 한도, 규칙 6절). alt 는 첫 조각에, 이어지는 조각은 같은 사진이라 빈 alt
+      const parts = Math.ceil((p.y1 - p.y0) / BG_MAX_H);
+      for (let q = 0; q < parts; q++) {
+        const a = Math.round(p.y0 + ((p.y1 - p.y0) * q) / parts);
+        const b = Math.round(p.y0 + ((p.y1 - p.y0) * (q + 1)) / parts);
+        blocks.push({ type: 'img', y0: a, y1: b, file: `${sid}_img${j}-${role}${q ? `-${q + 1}` : ''}.jpg`, alt: q ? '' : alt });
+      }
       y = p.y1;
     }
     if (sec.y1 > y) pushBg(y, sec.y1);
@@ -590,7 +650,8 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
         );
         continue;
       }
-      // 배경: 글자 뺀 합성 + 이미지에 남길 글자는 PSD 원본 합성을 덧그린다
+      // 배경: 글자 뺀 합성. 이미지에 남길 글자는 그 영역을 PSD 원본 합성에서 잘라 <img alt="원문"> 으로 같은 자리에 둔다 (4절·8-2 3항:
+      // 구운 글자는 alt 에 원문). HTML 글자와 겹치거나 블록 경계에 걸리면 이미지로 못 빼므로 예전처럼 배경에 덧그린다(alt 없음 — 경고)
       const patches: [number, number, number, number][] = [];
       for (const t of keptTexts) {
         // 효과(그림자·획·광선)는 bounds 밖으로 퍼진다 → 그만큼 넓게 덧그린다
@@ -601,9 +662,19 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
         const px1 = Math.min(W, t.b[2] + pad);
         const py1 = Math.min(blk.y1, t.b[3] + pad);
         if (px1 <= px0 || py1 <= py0) continue;
-        patches.push([px0, py0, px1, py1]);
         const clash = htmlTexts.find((o) => !(o.b[2] <= px0 || o.b[0] >= px1 || o.b[3] <= py0 || o.b[1] >= py1));
-        if (clash) warnings.push(`이미지에 남긴 "${t.text.trim().slice(0, 12)}" 영역이 HTML 글자 "${clash.text.trim().slice(0, 12)}"와 겹쳐 그 글자가 두 번 보일 수 있습니다.`);
+        const inside = t.b[1] - pad >= blk.y0 && t.b[3] + pad <= blk.y1;
+        if (!clash && inside) {
+          tn++;
+          const file = `${sid}_txt${tn}-${txtSlug(t.text)}.jpg`;
+          const alt = t.text.replace(/\s+/g, ' ').trim();
+          images.push({ file, kind: 'txt', source: 'composite', x0: px0, y0: py0, x1: px1, y1: py1, alt });
+          blk.boxes.push({ t, top: py0, left: px0, width: px1 - px0, height: py1 - py0, size: t.size, html: '', style: {}, img: { src: `${base}/${file}`, alt } });
+          continue;
+        }
+        patches.push([px0, py0, px1, py1]);
+        if (clash) warnings.push(`이미지에 남긴 "${t.text.trim().slice(0, 12)}" 영역이 HTML 글자 "${clash.text.trim().slice(0, 12)}"와 겹쳐 배경에 그렸습니다 — 이 글자는 alt 가 없고, 겹친 글자가 두 번 보일 수 있습니다.`);
+        else warnings.push(`이미지에 남긴 "${t.text.trim().slice(0, 12)}"가 배경 경계에 걸려 배경에 그렸습니다 — 이 글자는 HTML 에 alt 가 없습니다.`);
       }
       images.push({ file: blk.file, kind: 'bg', source: 'notext', x0: 0, y0: blk.y0, x1: W, y1: blk.y1, ...(patches.length ? { patches } : {}) });
       blk.boxes.forEach((bx) => (bx.top -= blk.y0));

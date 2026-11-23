@@ -1,4 +1,5 @@
 import type { CutImage } from './images';
+import { safeFolderName } from './sharedFolder';
 
 /** 규칙 6-1 제품슬러그: 영문 소문자, 공백·특수문자는 '-' 하나로, 앞뒤 '-' 제거 */
 export function toSlug(name: string) {
@@ -31,8 +32,10 @@ export async function buildZip(productName: string, rev: string, html: string, i
   // zip 은 받을 때만 쓰므로 그때 불러온다 (첫 화면 파일을 가볍게)
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
-  const root = zip.folder(productName)!;
-  root.file(`${productName}.html`, html);
+  // 제품명에 : " / 같은 글자가 있으면 윈도우에서 풀리지 않거나 폴더가 쪼개진다 → 공유 폴더 저장과 같은 규칙으로 다듬는다
+  const name = safeFolderName(productName) || 'pagefy';
+  const root = zip.folder(name)!;
+  root.file(`${name}.html`, html);
   const img = root.folder('img')!.folder(rev)!;
   for (const im of images) img.file(im.file, im.blob);
   return zip.generateAsync({ type: 'blob' });

@@ -33,5 +33,6 @@ export async function cutImages(plan: Plan, worker: PsdWorker): Promise<{ images
 export function localizeHtml(html: string, baseUrl: string, images: CutImage[]) {
   let out = html;
   for (const im of images) out = out.split(`${baseUrl}/${im.file}`).join(im.url);
-  return out;
+  // 미리보기는 바깥 스크롤 상자 안의 iframe 이라 지연 로딩(lazy) 이미지가 빈칸으로 보인다 → 미리보기에서만 바로 불러온다 (복사 HTML 은 그대로)
+  return out.replace(/loading="lazy"/g, 'loading="eager"');
 }

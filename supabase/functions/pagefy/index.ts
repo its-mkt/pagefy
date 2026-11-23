@@ -6,7 +6,7 @@
 // - core/·shared/ 는 저장소의 같은 폴더를 yarn build:function 으로 복사한 것 (직접 고치지 않는다)
 import Anthropic from '@anthropic-ai/sdk';
 import { buildPlanMessages, buildSectionMessages, buildSystem } from './core/prompt.ts';
-import { describeError, runClaude, type Effort, type RunConfig } from './core/run.ts';
+import { describeError, runClaude, usageOfError, type Effort, type RunConfig } from './core/run.ts';
 import { validatePlan, validateSection } from './core/validate.ts';
 import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from './shared/types.ts';
 import type { Dial } from './core/ftp.ts';
@@ -77,7 +77,7 @@ async function loadRules() {
 const MODEL = Deno.env.get('PAGEFY_MODEL') || 'claude-opus-5-5';
 const EFFORT = (Deno.env.get('PAGEFY_EFFORT') || 'medium') as Effort;
 const RUN: RunConfig = { model: MODEL, effort: EFFORT, maxTokens: 32000, timeLimitMs: 140_000 };
-/** 계획은 섹션 경계·이미지 목록만 정하므로 가볍게 (2026-11-20: 작은 PSD 도 medium 은 140초 초과) */
+/** 계획 effort. 2026-11-20(옛 방식: 계획이 CSS·지침까지 씀)엔 medium 이 140초를 넘었지만, 2026-11-23 구조 계획만 쓰는 지금 방식은 ZGX(860×17455) medium 95초 — 품질을 위해 medium. 시간 초과가 잦으면 PAGEFY_PLAN_EFFORT=low */
 const PLAN_RUN: RunConfig = { ...RUN, effort: (Deno.env.get('PAGEFY_PLAN_EFFORT') || 'medium') as Effort, maxTokens: 16000 };
 const hasKey = () => !!Deno.env.get('ANTHROPIC_API_KEY');
 
@@ -131,7 +131,7 @@ function sse(req: Request, work: (send: (e: StreamEvent) => void, signal: AbortS
       try {
         await work(send, ac.signal);
       } catch (err) {
-        if (!ac.signal.aborted) send({ type: 'error', message: describeError(err) });
+        if (!ac.signal.aborted) send({ type: 'error', message: describeError(err), ...usageOfError(err) });
       } finally {
         try {
           controller.close();

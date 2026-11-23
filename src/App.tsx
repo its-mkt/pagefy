@@ -11,12 +11,13 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, fileKeyOf, fullJob, listTrash, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
+import { busyJobIds, deleteJob, fileKeyOf, fullJob, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
 import Header from './components/Header';
 import JobsPanel from './components/JobsPanel';
 import SavedView from './components/SavedView';
 import LoginPanel from './components/LoginPanel';
 import UploadPanel from './components/UploadPanel';
+import DropOverlay from './components/DropOverlay';
 import SummaryPanel from './components/SummaryPanel';
 import SettingsPanel, { type Settings } from './components/SettingsPanel';
 import ResultPanel, { type UploadState } from './components/ResultPanel';
@@ -49,6 +50,12 @@ export interface RunState {
   error?: string;
   usage?: UsageInfo;
   model?: string;
+  /** 이번 만들기·수정 요청을 시작한 시각 (Date.now) — 소요 시간 표시용. 저장된 작업을 불러온 것엔 없음 */
+  startedAt?: number;
+  /** 구조 계획(Claude)을 받는 데 걸린 시간 ms — 저장된 계획으로 이어서 만들면 없음 */
+  planMs?: number;
+  /** 끝난 시각 (성공했을 때만) */
+  endedAt?: number;
 }
 
 export interface Result {
@@ -67,6 +74,14 @@ export interface Result {
 
 /** 마지막으로 확인한 권한 (계정 id 와 함께) — 다음 접속 때 화면을 바로 열기 위함 */
 const ROLE_KEY = 'pagefy.role';
+/** 계획 요청에 보낼 타일 이미지 합계 상한 (base64 글자 수) — core/validate.ts 의 MAX_TILE_B64 와 같게 (Claude API 요청 한도 32MB) */
+const MAX_TILE_B64 = 24 * 1024 * 1024;
+/** 너무 크면 보내기 전에 막는다 (수십 MB 를 올린 뒤에야 거절되지 않게) */
+function checkTileSize(tiles: { data: string }[]) {
+  const total = tiles.reduce((n, t) => n + t.data.length, 0);
+  if (total > MAX_TILE_B64)
+    throw new Error(`PSD 가 너무 길거나 사진이 많아 한 번에 보낼 수 없습니다 (이미지 ${(total / 1048576).toFixed(0)}MB, 한도 ${MAX_TILE_B64 / 1048576}MB). PSD 를 두 개로 나눠서 만들어 주세요.`);
+}
 const DEFAULT_PUBLIC_ROOT = 'https://itketweb.hgodo.com/data/detail';
 /** 섹션을 동시에 몇 개씩 만들지 (API 요청 한도 고려) */
 const CONCURRENCY = 4;
@@ -177,6 +192,8 @@ export default function App() {
   const [jobId, setJobId] = useState<string | null>(null);
   // 비동기 함수 안에서 최신 PSD·잘라 둔 이미지를 쓰기 위해
   const loadedRef = useRef<Loaded | null>(null);
+  /** PSD 열기 순번 — 늦게 끝난 이전 열기를 버린다 */
+  const openSeq = useRef(0);
   const cutRef = useRef<{ images: CutImage[]; errors: string[] } | null>(null);
   /** 잘라 둔 이미지를 바꾸거나 버릴 때 이전 미리보기 주소(blob URL)를 놓는다 */
   const setCut = (cut: { images: CutImage[]; errors: string[] } | null) => {
@@ -221,21 +238,21 @@ export default function App() {
     await deleteJob(id).catch((e) => setLoadError(`영구 삭제하지 못했습니다 (${(e as Error).message})`));
     await openTrash();
   }
+  // 늦게 끝난 옛 요청이 새 목록을 덮지 않게 순번을 매긴다 (불러오는 중 표시는 마지막 전체 읽기가 끝날 때 끈다)
+  const listSeq = useRef(0);
+  const fullSeq = useRef(0);
   const refreshJobs = (quick = false) => {
+    const seq = ++listSeq.current;
+    const full = quick ? 0 : ++fullSeq.current;
     if (!quick) setJobsLoading(true);
     const show = (p: { jobs: Job[]; more: boolean }) => {
+      if (seq !== listSeq.current) return;
       setJobs(p.jobs);
       setMoreJobs(p.more);
     };
     return listJobsPage(jobLimitRef.current, quick, show)
-      .then(
-        (p) => {
-          setJobs(p.jobs);
-          setMoreJobs(p.more);
-        },
-        (e) => console.warn('[jobs]', e),
-      )
-      .finally(() => !quick && setJobsLoading(false));
+      .then(show, (e) => console.warn('[jobs]', e))
+      .finally(() => full && full === fullSeq.current && setJobsLoading(false));
   };
   const showMoreJobs = () => {
     jobLimitRef.current += 20;
@@ -294,8 +311,10 @@ export default function App() {
   useEffect(() => {
     if (!allowed) return;
     requestPersist();
-    // 목록은 바로 읽고, 끊긴 작업 표시는 따로 (바뀐 게 있을 때만 목록을 한 번 더 맞춘다)
-    refreshJobs().then(refreshTrashN);
+    // 브라우저 사본의 끊긴 작업 표시(금방 끝남) → 목록. 계정 쪽 끊긴 작업 표시는 따로 (바뀐 게 있을 때만 목록을 한 번 더 맞춘다)
+    markInterruptedLocal()
+      .catch(() => {})
+      .finally(() => refreshJobs().then(refreshTrashN));
     markInterrupted().then(
       (changed) => {
         if (changed) refreshJobs(true);
@@ -326,19 +345,25 @@ export default function App() {
   /** 저장된 작업 열기: PSD 를 다시 읽고 계획·완료한 섹션을 되살린다 (API 호출 없음) */
   // picked: 다른 PC 등 이 브라우저에 PSD 원본이 없을 때 사용자가 고른 PSD
   async function openJob(job: Job, picked?: File) {
+    if (loading || running) return;
+    // 계정에서 작업 전체를 받는 동안에도 다른 버튼을 막는다 (두 번 눌러 둘이 동시에 열리지 않게)
+    setLoading('작업 불러오는 중…');
     try {
       job = await fullJob(job);
     } catch (e) {
+      setLoading(null);
       setLoadError((e as Error).message);
       return;
     }
     let file = picked ?? (await getFile(job.fileKey).catch(() => undefined));
     if (!file) {
+      setLoading(null);
       setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 골라 열기」로 같은 PSD를 골라 주세요.');
       return;
     }
     if (picked) {
       if (!sameFile(job, picked)) {
+        setLoading(null);
         setLoadError(`고른 파일이 이 작업의 PSD와 다릅니다 (작업: ${job.fileName}, ${fmtBytes(job.fileSize)} / 고른 파일: ${picked.name}, ${fmtBytes(picked.size)}).`);
         return;
       }
@@ -437,12 +462,15 @@ export default function App() {
     setResult(null);
     setRevisionCount(0);
     setRun(emptyRun());
-    if (loaded) {
-      URL.revokeObjectURL(loaded.compositeUrl);
-      URL.revokeObjectURL(loaded.notextUrl);
+    openSeq.current++; // 읽는 중이던 PSD 가 있으면 그 결과는 버린다
+    // 화면 상태(loaded)는 늦게 바뀔 수 있어 ref 의 최신 값을 놓는다
+    const prev = loadedRef.current;
+    if (prev) {
+      URL.revokeObjectURL(prev.compositeUrl);
+      URL.revokeObjectURL(prev.notextUrl);
       // 문서 크기 비트맵(장당 수십~수백 MB)은 GC 를 기다리지 않고 바로 놓는다
-      loaded.composite.close();
-      loaded.notext.close();
+      prev.composite.close();
+      prev.notext.close();
     }
     setLoaded(null);
     loadedRef.current = null;
@@ -462,13 +490,28 @@ export default function App() {
 
   async function openPsd(file: File, job?: Job) {
     closeCurrent();
+    // 연달아 열면(두 번 누름·읽는 중 새 PSD) 마지막 것만 화면에 둔다
+    const seq = openSeq.current;
+    const stale = () => seq !== openSeq.current;
     const worker = new PsdWorker();
     workerRef.current = worker;
     try {
       const t0 = performance.now();
-      const opened = await worker.open(file, setLoading);
+      const opened = await worker.open(file, (m) => !stale() && setLoading(m));
+      if (stale()) {
+        opened.composite.close();
+        opened.notext.close();
+        return;
+      }
       setLoading('미리보기 만드는 중…');
       const [compositeUrl, notextUrl] = await Promise.all([bitmapToUrl(opened.composite), bitmapToUrl(opened.notext)]);
+      if (stale()) {
+        URL.revokeObjectURL(compositeUrl);
+        URL.revokeObjectURL(notextUrl);
+        opened.composite.close();
+        opened.notext.close();
+        return;
+      }
       const L: Loaded = { file, ...opened, compositeUrl, notextUrl };
       loadedRef.current = L;
       setLoaded(L);
@@ -489,9 +532,9 @@ export default function App() {
       setSettings(next);
       newJob(file, next);
     } catch (e) {
-      setLoadError(`PSD를 읽지 못했습니다: ${(e as Error).message}`);
+      if (!stale()) setLoadError(`PSD를 읽지 못했습니다: ${(e as Error).message}`); // 다음 PSD 를 여느라 끊은 것이면 알리지 않음
     } finally {
-      setLoading(null);
+      if (!stale()) setLoading(null);
     }
   }
 
@@ -503,6 +546,20 @@ export default function App() {
 
   const pushStatus = (m: string) => setRun((r) => ({ ...r, status: [...r.status, m] }));
   const setSection = (id: string, patch: Partial<SectionProgress>) => setRun((r) => ({ ...r, sections: r.sections.map((s) => (s.id === id ? { ...s, ...patch } : s)) }));
+
+  /** Claude 요청이 실패해도(거절·시간 초과·출력 한도 등) 이미 쓴 비용은 화면과 작업 비용에 더한다 */
+  async function charged<T>(p: Promise<T>): Promise<T> {
+    try {
+      return await p;
+    } catch (e) {
+      const { usage, model } = e as { usage?: UsageInfo; model?: string };
+      if (usage) {
+        setRun((r) => ({ ...r, usage: addUsage(r.usage, usage), model: model ?? r.model }));
+        updateJob((j) => ({ usage: addUsage(j.usage, usage), model: model ?? j.model }));
+      }
+      throw e;
+    }
+  }
 
   /** 섹션 하나 요청 */
   async function runSection(m: GenerateMeta, bundle: PlanBundle, id: string, signal: AbortSignal, revision?: SectionRequest['revision'], onStart?: () => void): Promise<SectionOut> {
@@ -524,7 +581,7 @@ export default function App() {
       revision,
     };
     setSection(id, { state: 'run', chars: 0, error: undefined });
-    const out = await collect('section', req, { status: onStart, thinking: onStart, text: (all) => (onStart?.(), setSection(id, { chars: all.length })) }, signal);
+    const out = await charged(collect('section', req, { status: onStart, thinking: onStart, text: (all) => (onStart?.(), setSection(id, { chars: all.length })) }, signal));
     setRun((r) => ({ ...r, usage: addUsage(r.usage, out.usage), model: out.model ?? r.model }));
     updateJob((j) => ({ usage: addUsage(j.usage, out.usage), model: out.model ?? j.model }));
     const p = parseSectionOutput(out.text);
@@ -548,15 +605,15 @@ export default function App() {
     const parsed: ParsedOutput = { plan: bundle.plan, html, report: assembleReport(planReport, sections) };
     const previewHtml = localizeHtml(html, base, images);
     let layout: LayoutResult | undefined;
+    // 코드 생성 방식은 이미지에 일부러 남긴 글자를 대조·누락 검사에서 뺀다 (HTML 에 없는 게 맞음 — 미리보기의 「이미지에 남긴 글자」로 따로 보여 줌)
+    const kept = bundle.plan.engine === 'code' ? new Set(keepMap(L.summary, bundle.plan, m.channel === 'openmarket').keys()) : undefined;
     pushStatus('PSD 위치 대조 중 (PSD 폭 렌더·모바일 360px)…');
     try {
-      // 코드 생성 방식은 이미지에 일부러 남긴 글자를 대조에서 뺀다 (HTML 에 없는 게 맞음 — 미리보기의 「이미지에 남긴 글자」로 따로 보여 줌)
-      const kept = bundle.plan.engine === 'code' ? new Set(keepMap(L.summary, bundle.plan, m.channel === 'openmarket').keys()) : undefined;
       layout = await checkLayout(previewHtml, L.summary, kept);
     } catch (e) {
       extraChecks.push({ level: 'warn', message: `위치 대조 실패: ${(e as Error).message}` });
     }
-    const checks = [...extraChecks, ...(layout?.checks ?? []), ...checkOutput(parsed, L.summary, base)];
+    const checks = [...extraChecks, ...(layout?.checks ?? []), ...checkOutput(parsed, L.summary, base, kept)];
     setResult({ meta: m, baseUrl: base, bundle, planReport, planRaw, sections, parsed, images, previewHtml, checks, layout });
     // 완성 HTML 도 작업에 저장 → PSD 원본이 없는 PC 에서도 「결과 보기」로 볼 수 있다 (같으면 다시 저장하지 않음)
     if (jobRef.current && jobRef.current.html !== html) updateJob({ html });
@@ -610,44 +667,61 @@ export default function App() {
     const m = meta;
     const base = baseUrl;
     const saved = !fresh && resume ? jobRef.current : null;
+    // 처음부터 다시 만들 때 실패해도 이전 결과·계획이 남게 (새 계획을 받기 전까지는 작업 기록을 지우지 않는다)
+    const prevResult = result;
+    const prevRevisions = revisionCount;
+    let planReady = !!saved?.plan;
     setResult(null);
     setRevisionCount(0);
     writeLocal('pagefy.slugs', { ...readLocal<Record<string, string>>('pagefy.slugs', {}), [m.productName]: m.slug });
     const release = holdLock(jobRef.current.id);
+    const t0 = Date.now();
     try {
       let bundle: PlanBundle, planReport: string, planRaw: string;
       if (saved?.plan) {
         // 0) 저장된 계획에서 이어서
         ({ bundle, report: planReport, raw: planRaw } = saved.plan);
-        setRun({ ...emptyRun(), phase: 'running', usage: saved.usage, model: saved.model, status: [`저장된 계획으로 이어서 (섹션 ${Object.keys(saved.sections).length}/${bundle.plan.sections.length}개 완료)`] });
+        setRun({ ...emptyRun(), phase: 'running', startedAt: t0, usage: saved.usage, model: saved.model, status: [`저장된 계획으로 이어서 (섹션 ${Object.keys(saved.sections).length}/${bundle.plan.sections.length}개 완료)`] });
         updateJob({ state: 'running', error: undefined, failed: {} });
       } else {
-        setRun({ ...emptyRun(), phase: 'running', status: ['PSD 렌더 타일 만드는 중…'] });
-        updateJob({ state: 'running', error: undefined, meta: m, baseUrl: base, extra: settings.extra, plan: undefined, sections: {}, failed: {}, usage: undefined, model: undefined, revisionCount: 0 });
+        setRun({ ...emptyRun(), phase: 'running', startedAt: t0, status: ['PSD 렌더 타일 만드는 중…'] });
+        // 이전 계획이 있으면 그 설정·계획은 새 계획을 받은 뒤에 바꾼다 (실패하면 이전 것 그대로)
+        updateJob({ state: 'running', error: undefined, ...(jobRef.current?.plan ? {} : { meta: m, baseUrl: base, extra: settings.extra }) });
         // 1) 계획
         const tiles = await workerRef.current.tiles();
+        checkTileSize(tiles);
         pushStatus(`① 계획: 타일 ${tiles.length}장 + 레이어 정보 전송`);
-        const planOut = await collect(
-          'plan',
-          { meta: m, summary: L.summary, tiles, extra: settings.extra },
-          {
-            status: (msg) => pushStatus(`① ${msg}`),
-            thinking: (t) => setRun((r) => ({ ...r, thinking: (r.thinking + t).slice(-4000) })),
-            text: (all) => setRun((r) => ({ ...r, planChars: all.length })),
-          },
-          ac.signal,
+        const planOut = await charged(
+          collect(
+            'plan',
+            { meta: m, summary: L.summary, tiles, extra: settings.extra },
+            {
+              status: (msg) => pushStatus(`① ${msg}`),
+              thinking: (t) => setRun((r) => ({ ...r, thinking: (r.thinking + t).slice(-4000) })),
+              text: (all) => setRun((r) => ({ ...r, planChars: all.length })),
+            },
+            ac.signal,
+          ),
         );
-        setRun((r) => ({ ...r, usage: addUsage(r.usage, planOut.usage), model: planOut.model }));
-        ({ bundle, report: planReport } = readPlan(planOut.text));
+        setRun((r) => ({ ...r, usage: addUsage(r.usage, planOut.usage), model: planOut.model, planMs: Date.now() - t0 }));
+        try {
+          ({ bundle, report: planReport } = readPlan(planOut.text));
+        } catch (e) {
+          // 계획을 못 읽어도 쓴 비용은 작업 기록에 남긴다 (원문은 화면 진행 기록에서 볼 수 있게)
+          updateJob((j) => ({ usage: addUsage(j.usage, planOut.usage), model: planOut.model }));
+          console.warn('[plan] 읽지 못한 응답 원문:\n', planOut.text);
+          throw new Error(`구조 계획 형식이 깨져 읽지 못했습니다 (${(e as Error).message}). 「마크업 만들기」를 다시 눌러 주세요 — 계속되면 관리자에게 알려 주세요.`);
+        }
         planRaw = planOut.text;
-        updateJob((j) => ({ plan: { bundle, report: planReport, raw: planRaw }, usage: addUsage(j.usage, planOut.usage), model: planOut.model }));
+        planReady = true;
+        updateJob((j) => ({ meta: m, baseUrl: base, extra: settings.extra, plan: { bundle, report: planReport, raw: planRaw }, sections: {}, failed: {}, revisionCount: 0, usage: addUsage(j.usage, planOut.usage), model: planOut.model }));
         pushStatus(`① 구조 계획 완료: 섹션 ${bundle.plan.sections.length}개, 사진 ${bundle.plan.photos?.length ?? 0}장`);
       }
       const plan = bundle.plan;
 
       if (plan.engine === 'code') {
         await buildFromPlan(m, base, bundle, planReport, planRaw, [], ac.signal);
-        setRun((r) => ({ ...r, phase: 'done' }));
+        setRun((r) => ({ ...r, phase: 'done', endedAt: Date.now() }));
         updateJob({ state: 'done' });
         return;
       }
@@ -675,12 +749,20 @@ export default function App() {
       });
       const sections = plan.sections.map((s) => outs.get(s.id)!);
       await finalize(m, base, bundle, planReport, planRaw, sections, cut.images, extraChecks);
-      setRun((r) => ({ ...r, phase: 'done' }));
+      setRun((r) => ({ ...r, phase: 'done', endedAt: Date.now() }));
       updateJob({ state: 'done' });
     } catch (e) {
       // 생성 중에 다른 PSD 를 열어 멈춘 경우: 이 오류를 새로 연 작업에 적지 않는다
       if (loadedRef.current !== L) return;
       const msg = ac.signal.aborted ? '취소했습니다.' : (e as Error).message;
+      // 새 계획을 받기 전에 실패했으면 이전 결과를 그대로 보여 주고 작업도 완료 상태로 둔다 (다시 만들기·수정 요청 가능)
+      if (!planReady && prevResult) {
+        setResult(prevResult);
+        setRevisionCount(prevRevisions);
+        setRun((r) => ({ ...r, phase: 'error', error: `${msg} — 이전 결과는 그대로 남아 있습니다.`, sections: stopRunning(r.sections) }));
+        updateJob({ state: 'done', error: undefined });
+        return;
+      }
       setRun((r) => ({ ...r, phase: 'error', error: msg, sections: stopRunning(r.sections) }));
       updateJob({ state: ac.signal.aborted ? 'stopped' : 'error', error: msg });
     } finally {
@@ -705,6 +787,9 @@ export default function App() {
       ...r,
       phase: 'running',
       error: undefined,
+      startedAt: Date.now(),
+      planMs: undefined,
+      endedAt: undefined,
       status: [...r.status, `수정 요청: ${ids.join(', ')}`],
       sections: result.sections.map((s) => ({ id: s.id, name: s.name, state: ids.includes(s.id) ? 'wait' : 'done', chars: s.raw.length })),
     }));
@@ -726,7 +811,7 @@ export default function App() {
       });
       await finalize(result.meta, result.baseUrl, result.bundle, result.planReport, result.planRaw, next, result.images, extraChecks);
       setRevisionCount((n) => n + 1);
-      setRun((r) => ({ ...r, phase: 'done' }));
+      setRun((r) => ({ ...r, phase: 'done', endedAt: Date.now() }));
       updateJob((j) => ({ state: 'done', revisionCount: j.revisionCount + 1 }));
     } catch (e) {
       if (loadedRef.current !== L0) return; // 다른 PSD 를 열어 멈춘 경우
@@ -750,29 +835,34 @@ export default function App() {
     const text = allSecs
       ? [...new Set(Object.values(feedback))].join('\n')
       : ids.map((id) => `- 섹션 ${id} ${result.sections.find((s) => s.id === id)?.name ?? ''}: ${feedback[id]}`).join('\n');
-    setRun((r) => ({ ...r, phase: 'running', error: undefined, planChars: 0, sections: [], status: [...r.status, `수정 요청 → 구조 계획 다시 받기: ${text.slice(0, 80)}`] }));
+    const t0 = Date.now();
+    setRun((r) => ({ ...r, phase: 'running', error: undefined, startedAt: t0, planMs: undefined, endedAt: undefined, planChars: 0, sections: [], status: [...r.status, `수정 요청 → 구조 계획 다시 받기: ${text.slice(0, 80)}`] }));
     const release = jobRef.current ? holdLock(jobRef.current.id) : () => {};
     updateJob({ state: 'running', error: undefined });
     try {
       const tiles = await workerRef.current.tiles();
-      const out = await collect(
-        'plan',
-        { meta: result.meta, summary: L0.summary, tiles, extra: settings.extra, revision: { previous: result.planRaw, feedback: text } },
-        {
-          status: (msg) => pushStatus(`① ${msg}`),
-          thinking: (t) => setRun((r) => ({ ...r, thinking: (r.thinking + t).slice(-4000) })),
-          text: (all) => setRun((r) => ({ ...r, planChars: all.length })),
-        },
-        ac.signal,
+      checkTileSize(tiles);
+      const out = await charged(
+        collect(
+          'plan',
+          { meta: result.meta, summary: L0.summary, tiles, extra: settings.extra, revision: { previous: result.planRaw, feedback: text } },
+          {
+            status: (msg) => pushStatus(`① ${msg}`),
+            thinking: (t) => setRun((r) => ({ ...r, thinking: (r.thinking + t).slice(-4000) })),
+            text: (all) => setRun((r) => ({ ...r, planChars: all.length })),
+          },
+          ac.signal,
+        ),
       );
-      setRun((r) => ({ ...r, usage: addUsage(r.usage, out.usage), model: out.model ?? r.model }));
-      const { bundle, report } = readPlan(out.text);
+      setRun((r) => ({ ...r, usage: addUsage(r.usage, out.usage), model: out.model ?? r.model, planMs: Date.now() - t0 }));
+      // 계획을 못 읽어도 쓴 비용은 남도록 읽기 전에 저장한다
       updateJob((j) => ({ usage: addUsage(j.usage, out.usage), model: out.model ?? j.model }));
+      const { bundle, report } = readPlan(out.text);
       await buildFromPlan(result.meta, result.baseUrl, bundle, report, out.text, [], ac.signal);
       // 새 계획은 마크업까지 성공한 뒤에 저장한다 (실패하면 이전 계획·결과를 그대로 둔다)
       updateJob({ plan: { bundle, report, raw: out.text } });
       setRevisionCount((n) => n + 1);
-      setRun((r) => ({ ...r, phase: 'done' }));
+      setRun((r) => ({ ...r, phase: 'done', endedAt: Date.now() }));
       updateJob((j) => ({ state: 'done', revisionCount: j.revisionCount + 1 }));
     } catch (e) {
       if (loadedRef.current !== L0) return;
@@ -828,12 +918,12 @@ export default function App() {
       }
       let done = skip.size;
       set({ phase: 'uploading', done, total });
-      // 4MB 안쪽으로 묶어 보낸다 (함수 요청 크기·150초 제한). 서버가 시간 때문에 남긴 파일(left)은 다음 묶음으로
+      // 4MB·40장 안쪽으로 묶어 보낸다 (서버는 한 번에 60장까지) (함수 요청 크기·150초 제한). 서버가 시간 때문에 남긴 파일(left)은 다음 묶음으로
       const queue = r.images.filter((im) => !skip.has(im.file));
       while (queue.length) {
         const batch: { file: string; data: string }[] = [];
         let bytes = 0;
-        while (queue.length && (!batch.length || bytes + queue[0].blob.size <= 4 * 1024 * 1024)) {
+        while (queue.length && batch.length < 40 && (!batch.length || bytes + queue[0].blob.size <= 4 * 1024 * 1024)) {
           const im = queue.shift()!;
           batch.push({ file: im.file, data: await blobToBase64(im.blob) });
           bytes += im.blob.size;
@@ -851,6 +941,12 @@ export default function App() {
       const want = await Promise.all(r.images.map(async (im) => ({ file: im.file, size: im.blob.size, sha256: await sha256Hex(im.blob) })));
       const results: { file: string; status: number; ok: boolean; checked: boolean }[] = [];
       for (let i = 0; i < want.length; i += 12) results.push(...(await uploadVerify(target, want.slice(i, i + 12), ac.signal)).results);
+      // 서버 시간 제한으로 확인하지 못한 것(checked=false)은 실패가 아니다 → 한 번 더 확인 요청
+      const unchecked = new Set(results.filter((x) => !x.checked).map((x) => x.file));
+      if (unchecked.size) {
+        const again = (await uploadVerify(target, want.filter((w) => unchecked.has(w.file)), ac.signal)).results;
+        for (const x of again) results[results.findIndex((y) => y.file === x.file)] = x;
+      }
       const bad = results.filter((x) => !x.ok).map((x) => ({ file: x.file, status: x.status }));
       set({
         phase: bad.length ? 'error' : 'done',
@@ -994,6 +1090,13 @@ export default function App() {
         newPsdDisabled={running || !!loading}
         onHome={goHome}
         homeBusy={running || !!loading}
+      />
+      {/* 화면 어디에 PSD 를 놓아도 연다 — PSD 를 연 뒤엔 끌고 있는 동안만 화면 전체 안내판 */}
+      <DropOverlay
+        enabled={allowed && !showLogin}
+        cover={!!loaded}
+        disabled={running || !!loading}
+        onFile={(f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f))}
       />
       <main className="app__main">
         {showLogin ? (

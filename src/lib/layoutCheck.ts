@@ -106,7 +106,7 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
     // 1~3글자 짧은 문구(숫자 라벨 등)는 PSD 위치 근처에 없으면 "못 찾음"으로 본다
     const SHORT = 3;
     type Cand = { start: number; end: number; a?: HTMLElement; b?: HTMLElement };
-    type Target = { t: TextInfo; key: string; cands: Cand[]; trail: number };
+    type Target = { t: TextInfo; key: string; cands: Cand[]; trail: number; lead: number };
     const targets: Target[] = [];
     for (const t of summary.texts) {
       if (skip.has(t.id)) continue;
@@ -117,7 +117,8 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
       const cands: Cand[] = [];
       for (let i = str.indexOf(key); i >= 0 && cands.length < 60; i = str.indexOf(key, i + 1)) cands.push({ start: i, end: i + key.length - 1 });
       // 가운데·오른쪽 정렬은 포토샵이 끝 공백까지 넣어 정렬한다 (규칙 4-1) → 끝 공백 수를 기억해 폭을 더한다
-      targets.push({ t, key, cands, trail: line.length - line.trimEnd().length });
+      // 줄 앞 공백(&nbsp;)도 폭을 차지한다 — 표식은 첫 글자에 있으므로 그 폭을 빼서 줄 시작 x 를 구한다
+      targets.push({ t, key, cands, trail: line.length - line.trimEnd().length, lead: line.length - line.trimStart().length });
     }
 
     // 표식(높이 0 inline-block) 넣기: top = 그 줄 기준선, left = 글자 시작/끝 x
@@ -148,7 +149,8 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
     const spaceWidth = (el: HTMLElement, n: number) => {
       if (!n || !el.parentElement) return 0;
       const cs = getComputedStyle(el.parentElement);
-      meas.font = cs.font;
+      // cs.font(축약)는 font-kerning 등이 기본값이 아니면 빈 문자열이라 캔버스가 10px 로 잰다 → 낱개 값으로 만든다
+      meas.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
       (meas as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing;
       return meas.measureText(' '.repeat(n)).width * k;
     };
@@ -156,7 +158,7 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
     const items: LayoutItem[] = [];
     for (const tg of targets) {
       const t = tg.t;
-      let best: { dy: number; dx: number | null; score: number; start: number } | null = null;
+      let best: { dy: number; dx: number | null; score: number; start: number; wrappedBox: boolean } | null = null;
       for (const c of tg.cands) {
         if (chosen.has(c.start)) continue;
         const a = rectOf(c.a!);
@@ -164,13 +166,17 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
         const dy = a.y - t.baseline;
         // 시작·끝 표식이 같은 줄일 때만 가로 비교 (줄이 바뀌었으면 줄바꿈 위치가 다른 것)
         let dx: number | null = null;
-        if (Math.abs(b.y - a.y) < 2) {
+        const ax = a.x - spaceWidth(c.a!, tg.lead);
+        const sameLine = Math.abs(b.y - a.y) < 2;
+        if (sameLine) {
           const bx = t.align === 'left' ? b.x : b.x + spaceWidth(c.b!, tg.trail);
-          const x = t.align === 'center' ? (a.x + bx) / 2 : t.align === 'right' ? bx : a.x;
+          const x = t.align === 'center' ? (ax + bx) / 2 : t.align === 'right' ? bx : ax;
           dx = x - t.anchorX;
-        }
-        const score = Math.abs(dy) + (dx == null ? 50 : Math.abs(dx));
-        if (!best || score < best.score) best = { dy, dx, score, start: c.start };
+        } else if (t.align === 'left' || t.align === 'justify') dx = ax - t.anchorX; // 첫 문단이 여러 줄로 자동 줄바꿈돼도 왼쪽 정렬은 시작 x 로 비교
+        // 가운데·오른쪽 정렬 상자 텍스트가 첫 문단에서 자동 줄바꿈되면 끝 x 를 알 수 없다 → 세로만 비교
+        const wrappedBox = !sameLine && dx == null && t.shape === 'box';
+        const score = Math.abs(dy) + (dx == null ? (wrappedBox ? 0 : 50) : Math.abs(dx));
+        if (!best || score < best.score) best = { dy, dx, score, start: c.start, wrappedBox };
       }
       // 짧은 문구가 PSD 위치 근처에 없으면 다른 곳의 같은 글자다 → 못 찾음(이미지로 구웠을 수 있음)
       if (!best || (tg.key.length <= SHORT && best.score > 60 * k)) {
@@ -178,7 +184,7 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
         continue;
       }
       chosen.add(best.start);
-      const ok = Math.abs(best.dy) <= TOL_Y * k && best.dx != null && Math.abs(best.dx) <= TOL_X * k; // 허용치는 화면 px 기준 (860 상한으로 줄면 PSD px 로 k 배)
+      const ok = Math.abs(best.dy) <= TOL_Y * k && (best.dx != null ? Math.abs(best.dx) <= TOL_X * k : best.wrappedBox); // 허용치는 화면 px 기준 (860 상한으로 줄면 PSD px 로 k 배)
       items.push({ id: t.id, text: tg.key.slice(0, 20), dy: Math.round(best.dy * 10) / 10, dx: best.dx == null ? null : Math.round(best.dx * 10) / 10, ok });
     }
 

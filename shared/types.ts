@@ -52,6 +52,11 @@ export interface TextInfo {
   lineHeight: number;
   /** 줄마다 행간이 다를 때만 — 줄 순서대로, 각 줄에서 가장 큰 행간 (규칙 4-1). lineHeight = 첫 줄 값 */
   lineHeights?: number[];
+  /**
+   * 줄마다 그 줄 문단의 포토샵 정렬 원문 (left·center·right·justify-left·justify-center·justify-right·justify-all) —
+   * 문단마다 정렬이 다르거나 양쪽 정렬일 때만. align 은 첫 문단 값
+   */
+  lineAligns?: string[];
   /** 줄마다 그 앞의 문단 간격 px (첫 줄 0). 문단마다 spaceBefore/After 가 다를 때를 위해 — 하나라도 0 이 아닐 때만 */
   paraGaps?: number[];
   weight: number;
@@ -81,6 +86,8 @@ export interface TextInfo {
   fx?: string[];
   /** 드롭섀도 → CSS text-shadow 값 (문서 px, 변형 배율 적용). color 는 rgba() */
   shadows?: { x: number; y: number; blur: number; color: string }[];
+  /** 색상 오버레이(혼합 모드 보통) — 글자색을 이 색으로 덮는다. color 는 hex(# 없음), opacity 0~1 */
+  overlay?: { color: string; opacity: number };
   /** 웹폰트 표에 없는 폰트 */
   unmappedFont?: boolean;
 }
@@ -236,7 +243,8 @@ export type StreamEvent =
   | { type: 'thinking'; text: string }
   | { type: 'text'; text: string }
   | { type: 'done'; stopReason: string | null; usage: UsageInfo; model: string }
-  | { type: 'error'; message: string };
+  /** usage: 실패했어도 이미 쓴 비용 (거절·시간 초과 등) — 화면이 작업 비용에 더한다 */
+  | { type: 'error'; message: string; usage?: UsageInfo; model?: string };
 
 /** 에이전트 한 턴의 SSE 이벤트 (서버 → 화면). 마지막에 turn 이벤트로 assistant 블록을 넘긴다 */
 export type TurnEvent =

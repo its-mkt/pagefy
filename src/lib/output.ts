@@ -3,6 +3,7 @@ import type { Plan, PsdSummary } from '../../shared/types';
 import { fontFaces, pretendardChars } from './fontLock';
 import { keepMap } from './codegen';
 import { GODO_MAX_W, godoMaxWidth } from '../../shared/width';
+import { UPLOAD_FILE_RE } from '../../core/upload';
 
 /** 합친 결과 (점검·미리보기·저장에 쓰는 모양) */
 export interface ParsedOutput {
@@ -79,15 +80,51 @@ function normalizeCodePlan(plan: Plan) {
   if (plan.engine !== 'code') delete plan.engine;
 }
 
+/**
+ * JSON 읽기. 실패하면 Claude 가 흔히 남기는 끝 쉼표·주석(// … , /* … *​/)만 지우고 한 번 더 읽는다
+ * (문자열 안의 // 는 건드리지 않게 문자열을 건너뛰며 지운다)
+ */
+function parseLenient(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch (first) {
+    let out = '';
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (c === '"') {
+        let j = i + 1;
+        while (j < s.length && s[j] !== '"') j += s[j] === '\\' ? 2 : 1;
+        out += s.slice(i, j + 1);
+        i = j;
+      } else if (c === '/' && s[i + 1] === '/') {
+        while (i < s.length && s[i] !== '\n') i++;
+        out += '\n';
+      } else if (c === '/' && s[i + 1] === '*') {
+        const end = s.indexOf('*/', i + 2);
+        i = end < 0 ? s.length : end + 1;
+      } else out += c;
+    }
+    try {
+      return JSON.parse(out.replace(/,(\s*[}\]])/g, '$1'));
+    } catch {
+      throw first;
+    }
+  }
+}
+
 export function parsePlanOutput(text: string): ParsedPlan {
   const raw = block(text, 'plan');
   let plan: Plan | null = null;
   let error: string | undefined;
   if (raw) {
     try {
-      plan = JSON.parse(stripFence(raw));
+      plan = parseLenient(stripFence(raw)) as Plan;
       if (!plan || typeof plan !== 'object') throw new Error('plan 이 객체가 아님');
       if (!Array.isArray(plan.sections) || !plan.sections.length) throw new Error('sections 가 비어 있음');
+      // 섹션 좌표가 "1200" 처럼 문자열로 와도 쓴다 (안 그러면 섹션이 모두 버려지고 문서 전체가 섹션 하나가 됨). null 항목은 버린다
+      plan.sections = plan.sections
+        .filter((s) => s && typeof s === 'object')
+        .map((s) => ({ ...s, id: String(s.id ?? ''), name: String(s.name ?? ''), y0: Number(s.y0), y1: Number(s.y1) }));
       if (!Array.isArray(plan.images)) plan.images = [];
       normalizeCodePlan(plan);
     } catch (e) {
@@ -123,7 +160,8 @@ export function copySection(html: string): string {
   return html.slice(from, to).trim();
 }
 
-const FILE_RE = /^s\d{2}_(bg|img|txt|ico|gif)\d+(-[a-z0-9]+(-[a-z0-9]+)*)?\.(jpg|png|gif)$/;
+/** 업로더(core/upload.ts)와 같은 규칙 — 화면 점검은 통과했는데 업로드에서 거절되는 일이 없게 */
+const FILE_RE = UPLOAD_FILE_RE;
 
 export interface Check {
   level: 'error' | 'warn' | 'ok';
@@ -131,7 +169,8 @@ export interface Check {
 }
 
 /** 규칙 6-1·7절·8-4 중 코드로 확인할 수 있는 것만 자동 점검 (화면 대조는 사람이 한다) */
-export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: string): Check[] {
+/** kept: 이미지에 일부러 남긴 글자 id (코드 생성 방식) — 텍스트 누락 검사에서 뺀다 */
+export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: string, kept?: Set<number>): Check[] {
   const checks: Check[] = [];
   const add = (level: Check['level'], message: string) => checks.push({ level, message });
   const { plan, html } = out;
@@ -209,7 +248,7 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     const plain = copy.replace(/<br\s*\/?>/gi, '\n').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
     const norm = (s: string) => s.replace(/\s+/g, '');
     const hay = norm(plain.replace(/<[^>]+>/g, ' ')) + norm([...copy.matchAll(/alt="([^"]*)"/g)].map((m) => m[1]).join(' '));
-    const missing = summary.texts.filter((t) => t.lines.some((l) => l.trim() && !hay.includes(norm(l))));
+    const missing = summary.texts.filter((t) => !kept?.has(t.id) && t.lines.some((l) => l.trim() && !hay.includes(norm(l))));
     if (missing.length) add('warn', `HTML 글자·alt 에서 못 찾은 텍스트 레이어 ${missing.length}개: ${missing.slice(0, 5).map((t) => `"${t.lines.find((l) => l.trim())?.slice(0, 20)}"`).join(', ')}${missing.length > 5 ? ' …' : ''}`);
     if (!checks.some((c) => c.level !== 'ok')) add('ok', '자동 점검 통과 (화면 대조·실제 채널 등록은 사람이 확인)');
   }

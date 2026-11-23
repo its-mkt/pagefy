@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { godoMaxWidth } from '../../shared/width';
 import type { Loaded, Result, RunState } from '../App';
 import { copySection } from '../lib/output';
 import { keepMap } from '../lib/codegen';
@@ -137,6 +138,25 @@ function runProgress(run: RunState): { step: Step; pct: number; label: string } 
 
 const LEVEL_ORDER = { error: 0, warn: 1, ok: 2 } as const;
 
+/** 3초 → "3초", 83초 → "1분 23초" */
+function fmtDur(ms: number) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분${s % 60 ? ` ${s % 60}초` : ''}`;
+}
+
+/** 초 단위로 반올림한 ms — 나눠 보여 줄 때 합이 전체와 맞게 */
+const secMs = (ms: number) => Math.round(ms / 1000) * 1000;
+
+/** 만드는 중 흐르는 시간 (1초마다 다시 그림) */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  return <span className="progress__time">{fmtDur(now - since)} 지남</span>;
+}
+
 export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onNewRev, onUndoUpload }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
   const [feedback, setFeedback] = useState('');
@@ -175,7 +195,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
           setZipping(true);
           setZipError(null);
           try {
-            download(await buildZip(result.meta.productName, result.meta.rev, result.parsed.html, result.images), `${result.meta.productName}.zip`);
+            download(await buildZip(result.meta.productName, result.meta.rev, result.parsed.html, result.images), `${safeFolderName(result.meta.productName) || 'pagefy'}.zip`);
           } catch (e) {
             setZipError(`zip을 만들지 못했습니다: ${(e as Error).message}`);
           } finally {
@@ -202,6 +222,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             <span className="spinner" />
             <span className="progress__label">{prog.label}</span>
             <span className="progress__pct">{pct}%</span>
+            {run.startedAt && <Elapsed since={run.startedAt} />}
             <button className="btn btn--ghost btn--sm" onClick={onCancel}>취소</button>
           </p>
           <div className="progress__bar" role="progressbar" aria-label="만드는 중" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
@@ -262,6 +283,16 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               {nErr > 0 && <span className="badge badge--error">오류 {nErr}</span>}
               {nWarn > 0 && <span className="badge badge--warn">확인 {nWarn}</span>}
               <span className="badge badge--ok">통과 {passed.length}</span>
+              {/* 이번 변환(또는 수정 요청)에 걸린 시간 — 대부분은 Claude 구조 계획, 나머지는 이 PC 의 코드 생성·점검 */}
+              {run.startedAt && run.endedAt && (
+                <span
+                  className="getit__time"
+                  title={run.planMs !== undefined ? `구조 계획(Claude) ${fmtDur(run.planMs)} · 마크업 생성·점검(이 PC) ${fmtDur(secMs(run.endedAt - run.startedAt) - secMs(run.planMs))}` : '저장된 구조 계획으로 만들어 Claude 호출 없음'}
+                >
+                  {fmtDur(run.endedAt - run.startedAt)} 걸림
+                  {run.planMs !== undefined && <small> · 구조 계획 {fmtDur(run.planMs)}</small>}
+                </span>
+              )}
             </div>
             {/* 담당자가 할 일은 「복사 → 붙여넣기」 하나. 이미지 업로드는 복사 버튼이 알아서 먼저 한다 */}
             <div className="getit__main">
@@ -461,7 +492,10 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
   const W = loaded.summary.width;
   const [view, setView] = useState<View>('compare');
   // 모바일은 비율 축소뿐이라(7-5) 따로 보지 않는다 — 모바일 확인(가로 스크롤·비율·가장 작은 글자)은 자동 점검이 한다
-  const width = W;
+  // 고도몰은 상세 영역이 최대 860px(7-2) → 결과물은 860px 로 줄어든다. 미리보기 칸도 그 폭으로 열어 양옆 흰 여백이 생기지 않게 하고,
+  // PSD 이미지와 같은 크기로 보이도록 그만큼 키워 보여 준다 (오픈마켓은 PSD 폭 그대로)
+  const width = result.meta.channel === 'openmarket' ? W : godoMaxWidth(W);
+  const fit = W / width;
   const [zoom, setZoom] = useState(0.5);
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(1000);
@@ -561,9 +595,11 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
           <figure className="preview__col preview__col--html">
             <figcaption className="preview__tag">
               <b>HTML 마크업 (결과물)</b>
-              <span>쇼핑몰에 들어갈 웹페이지 · PSD 폭 {W}px (모바일은 비율대로 줄어듦)</span>
+              <span>
+                쇼핑몰에 들어갈 웹페이지 · {width < W ? `폭 ${width}px (PSD ${W}px 비율 축소)` : `PSD 폭 ${W}px`} · 모바일도 비율대로
+              </span>
             </figcaption>
-            <div style={{ zoom }}>
+            <div style={{ zoom: zoom * fit }}>
               <iframe ref={frame} title="생성 HTML 미리보기" sandbox="allow-same-origin" scrolling="no" srcDoc={result.previewHtml} style={{ width, height }} />
             </div>
           </figure>

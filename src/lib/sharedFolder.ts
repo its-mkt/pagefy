@@ -85,10 +85,12 @@ export async function getSharedRoot(repick = false): Promise<FileSystemDirectory
 
 /** 윈도우 폴더·파일 이름에 못 쓰는 글자 빼기 (\ / : * ? " < > |, 끝의 점·공백) */
 export function safeFolderName(name: string) {
-  return name
+  const v = name
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '')
     .replace(/[. ]+$/, '')
     .trim();
+  // 윈도우 예약 이름(CON·AUX·NUL·COM1 …)은 폴더·파일로 못 만든다 → 뒤에 _ 를 붙인다
+  return /^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(v) ? `${v}_` : v;
 }
 
 export interface SaveInput {
@@ -116,12 +118,24 @@ export interface SaveResult {
   psd: 'copied' | 'exists' | 'none';
 }
 
+/** 파일이 없으면 null. 다른 오류(다른 프로그램이 잠금·네트워크 끊김 등)는 그대로 던진다 — "없음"으로 보면 확인 없이 덮어쓴다 */
 async function fileOf(dir: FileSystemDirectoryHandle, name: string): Promise<File | null> {
   try {
     return await (await dir.getFileHandle(name)).getFile();
-  } catch {
-    return null;
+  } catch (e) {
+    if ((e as DOMException)?.name === 'NotFoundError') return null;
+    throw new Error(`${name} 을(를) 읽지 못했습니다 (${(e as Error).message}). 다른 프로그램에서 열려 있으면 닫고 다시 저장하세요.`);
   }
+}
+
+/** 내용이 같은 파일인지 (크기 → 바이트) */
+async function sameContent(a: Blob, b: Blob) {
+  if (a.size !== b.size) return false;
+  const [x, y] = await Promise.all([a.arrayBuffer(), b.arrayBuffer()]);
+  const u = new Uint8Array(x);
+  const v = new Uint8Array(y);
+  for (let i = 0; i < u.length; i++) if (u[i] !== v[i]) return false;
+  return true;
 }
 
 async function write(dir: FileSystemDirectoryHandle, name: string, data: Blob | string) {
@@ -191,15 +205,19 @@ export async function saveToShared(root: FileSystemDirectoryHandle, inp: SaveInp
     html = 'kept';
   }
 
-  // 이미지: img\<rev>\ — 있는 파일은 건너뜀
+  // 이미지: img\<rev>\ — 같은 내용이면 건너뜀. 이름은 같은데 내용이 다르면(수정 요청 뒤 다시 저장 등)
+  // 폴더의 HTML 이 이번 것일 때만 바꾼다 (HTML 은 옛 것으로 두기로 했으면 이미지도 옛 것을 지켜 서로 맞게)
+  const htmlIsNew = html !== 'kept';
   const imgDir = await (await prod.getDirectoryHandle('img', { create: true })).getDirectoryHandle(inp.rev, { create: true });
   let n = 0;
   for (const im of inp.images) {
     onProgress?.(`이미지 저장 중 ${++n}/${inp.images.length}`);
-    if (await fileOf(imgDir, im.file)) skipped.push(`img\\${inp.rev}\\${im.file}`);
+    const rel = `img\\${inp.rev}\\${im.file}`;
+    const old = await fileOf(imgDir, im.file);
+    if (old && ((await sameContent(old, im.blob)) || !htmlIsNew)) skipped.push(rel);
     else {
       await write(imgDir, im.file, im.blob);
-      written.push(`img\\${inp.rev}\\${im.file}`);
+      written.push(old ? `${rel} (바꿈)` : rel);
     }
   }
 

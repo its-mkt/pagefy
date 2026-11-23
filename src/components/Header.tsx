@@ -66,7 +66,7 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
               type="button"
               className="btn btn--sm header__new"
               disabled={newPsdDisabled}
-              title={newPsdDisabled ? '만드는 중에는 다른 PSD 를 열 수 없습니다' : '다른 PSD 를 골라 새로 마크업합니다 (지금 작업은 「최근 작업」에 저장돼 있음)'}
+              title={newPsdDisabled ? '만드는 중에는 다른 PSD 를 열 수 없습니다' : '다른 PSD 를 골라 새로 마크업합니다 — 화면에 끌어다 놓아도 됩니다 (지금 작업은 「최근 작업」에 저장돼 있음)'}
               onClick={() => pick.current?.click()}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">

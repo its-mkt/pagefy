@@ -44,7 +44,8 @@ async function makeTiles(src: OffscreenCanvas, from = 0, to = src.height): Promi
   const tiles: Tile[] = [];
   for (let y = from; y < to; y += srcH) {
     const h = Math.min(srcH, to - y);
-    const c = new OffscreenCanvas(Math.round(src.width * scale), Math.round(h * scale));
+    // 높이가 0 으로 반올림되면 convertToBlob 이 IndexSizeError (아주 얇은 마지막 조각)
+    const c = new OffscreenCanvas(Math.max(1, Math.round(src.width * scale)), Math.max(1, Math.round(h * scale)));
     const ctx = c.getContext('2d')!;
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, c.width, c.height);
@@ -163,7 +164,12 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
               }
             }
           }
-          const blob = await c.convertToBlob(isJpg ? { type: 'image/jpeg', quality: 0.82 } : { type: 'image/png' });
+          // JPG 는 1MB(규칙 6절 목표)를 넘으면 품질을 조금씩 낮춰 다시 만든다 (업로드 한도 5MB 에 걸리지 않게)
+          let blob = await c.convertToBlob(isJpg ? { type: 'image/jpeg', quality: 0.82 } : { type: 'image/png' });
+          for (const q of [0.75, 0.68, 0.6]) {
+            if (!isJpg || blob.size <= 1024 * 1024) break;
+            blob = await c.convertToBlob({ type: 'image/jpeg', quality: q });
+          }
           results.push({ file: im.file, blob, width: w, height: h });
         } catch (err) {
           errors.push(`${im.file}: ${err instanceof Error ? err.message : String(err)}`);

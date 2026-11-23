@@ -4,7 +4,7 @@ import type { Effort, RunConfig } from '../core/run.ts';
 
 export const MODEL = process.env.PAGEFY_MODEL || 'claude-opus-5-5';
 export const EFFORT = (process.env.PAGEFY_EFFORT || 'medium') as Effort;
-/** 계획은 섹션 경계·이미지 목록만 정하므로 가볍게 (무료 Supabase 함수 150초 제한 — 2026-11-20 작은 PSD 도 medium 은 140초 초과) */
+/** 계획 effort. 2026-11-20(옛 방식: 계획이 CSS·지침까지 씀)엔 medium 이 140초를 넘었지만, 2026-11-23 구조 계획만 쓰는 지금 방식은 ZGX(860×17455) medium 95초 — 품질을 위해 medium. 시간 초과가 잦으면 PAGEFY_PLAN_EFFORT=low */
 export const PLAN_EFFORT = (process.env.PAGEFY_PLAN_EFFORT || 'medium') as Effort;
 
 /** 로컬은 시간 제한 없음 */

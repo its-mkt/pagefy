@@ -32,17 +32,25 @@ async function stream(path: 'plan' | 'section', body: PlanRequest | SectionReque
   if (!r.ok || !r.body) throw new Error(await errorOf(r));
   const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += value;
-    let i: number;
-    while ((i = buf.indexOf('\n\n')) >= 0) {
-      const chunk = buf.slice(0, i);
-      buf = buf.slice(i + 2);
-      const line = chunk.split('\n').find((l) => l.startsWith('data: '));
-      if (line) onEvent(JSON.parse(line.slice(6)) as StreamEvent);
+  const emit = (chunk: string) => {
+    const line = chunk.split('\n').find((l) => l.startsWith('data: '));
+    if (line) onEvent(JSON.parse(line.slice(6)) as StreamEvent);
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value.replace(/\r\n/g, '\n');
+      let i: number;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        emit(buf.slice(0, i));
+        buf = buf.slice(i + 2);
+      }
     }
+    if (buf.trim()) emit(buf); // 끝에 빈 줄 없이 끝난 마지막 이벤트
+  } finally {
+    // 읽다가 오류가 나도 연결을 닫는다 (안 닫으면 서버가 아무도 안 받는 응답을 계속 만든다)
+    reader.cancel().catch(() => {});
   }
 }
 
@@ -62,6 +70,8 @@ export async function collect(
 ): Promise<StreamResult> {
   const out: StreamResult = { text: '' };
   let failed: string | null = null;
+  /** 실패해도 이미 쓴 비용은 오류에 붙여 화면이 작업 비용에 더하게 한다 */
+  const fail = (msg: string) => Object.assign(new Error(msg), { usage: out.usage, model: out.model });
   let finished = false;
   await stream(path, body, (e) => {
     if (e.type === 'status') cb.status?.(e.message);
@@ -72,13 +82,16 @@ export async function collect(
     } else if (e.type === 'done') {
       finished = true;
       Object.assign(out, { usage: e.usage, model: e.model, stopReason: e.stopReason });
-    } else if (e.type === 'error') failed = e.message;
+    } else if (e.type === 'error') {
+      failed = e.message;
+      if (e.usage) Object.assign(out, { usage: e.usage, model: e.model });
+    }
   }, signal);
-  if (failed) throw new Error(failed);
+  if (failed) throw fail(failed);
   // 잘린 응답을 완료로 받아들이지 않는다 (닫히지 않은 HTML·CSS 가 저장되면 뒤 섹션까지 깨짐)
-  if (!finished) throw new Error('서버 연결이 응답 도중 끊겼습니다 (함수 실행 시간 제한 등). 다시 시도하세요.');
-  if (out.stopReason === 'max_tokens') throw new Error('응답이 출력 길이 한도에 걸려 잘렸습니다. 섹션을 더 작게 나누도록 수정 요청하거나 다시 시도하세요.');
-  if (out.stopReason && out.stopReason !== 'end_turn' && out.stopReason !== 'stop_sequence') throw new Error(`응답이 정상적으로 끝나지 않았습니다 (${out.stopReason}). 다시 시도하세요.`);
+  if (!finished) throw fail('서버 연결이 응답 도중 끊겼습니다 (함수 실행 시간 제한 등). 다시 시도하세요.');
+  if (out.stopReason === 'max_tokens') throw fail('응답이 출력 길이 한도에 걸려 잘렸습니다. 다시 시도하세요. 계속되면 관리자에게 알려 주세요.');
+  if (out.stopReason && out.stopReason !== 'end_turn' && out.stopReason !== 'stop_sequence') throw fail(`응답이 정상적으로 끝나지 않았습니다 (${out.stopReason}). 다시 시도하세요.`);
   return out;
 }
 

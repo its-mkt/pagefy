@@ -58,15 +58,16 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
   if (file) {
     return (
       <section className="panel panel--tight">
-        <div className={`filecard ${over ? 'is-over' : ''} ${blocked ? 'is-busy' : ''}`} {...dnd}>
+        {/* 다른 PSD 는 머리의 「새 PSD」 버튼이나 화면 어디에 끌어다 놓기로 연다 (DropOverlay) */}
+        <div className={`filecard ${blocked ? 'is-busy' : ''}`}>
           <img className="filecard__thumb" src={file.thumbUrl} alt="" />
           <div className="filecard__info">
             <b>{file.name}</b>
             <small>{fmtBytes(file.size)} · {file.width}×{file.height} px</small>
             {busy}
           </div>
-          <button type="button" className="btn btn--sm filecard__btn" disabled={blocked} onClick={open}>다른 PSD 올리기</button>
-          {fileInput}
+          {/* 끌어다 놓기는 눈에 안 보이는 기능이라 예전 버튼 자리에서 알려 준다 (만드는 중엔 받지 않으므로 숨김) */}
+          {!blocked && <p className="filecard__hint">다른 PSD 는 화면에 끌어다 놓아도 열립니다</p>}
         </div>
         {error && <p className="msg msg--error">{error}</p>}
       </section>

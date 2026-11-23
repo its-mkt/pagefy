@@ -43,7 +43,9 @@ export function pixelsToCanvas(pd: PixelData): OffscreenCanvas | null {
 /** 레이어 마스크를 알파 캔버스로 (x0,y0 = 결과 캔버스의 문서 좌표 원점) */
 function maskCanvas(layer: Layer, x0: number, y0: number, w: number, h: number): OffscreenCanvas | null {
   const m = layer.mask;
-  if (!m || m.disabled || !m.imageData) return null;
+  if (!m || m.disabled) return null;
+  // 픽셀 없는 "모두 가림" 마스크(빈 영역 + defaultColor 0) → 레이어 전체를 가린다 (null 이면 마스크 없음으로 보고 다 보여 버림)
+  if (!m.imageData) return (m.defaultColor ?? 255) > 127 ? null : new OffscreenCanvas(w, h);
   const c = new OffscreenCanvas(w, h);
   const ctx = c.getContext('2d')!;
   // 마스크 밖 영역 = defaultColor (0 이면 가림, 255 면 보임)
