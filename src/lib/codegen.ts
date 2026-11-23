@@ -556,7 +556,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
     for (const p of photos) {
       if (p.y0 > y) pushBg(y, p.y0);
       j++;
-      const role = (p.role || 'photo').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'photo';
+      const role = (p.role || 'photo').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'photo'; // 하이픈 여러 개는 하나로 (6-1 파일명 규칙)
       blocks.push({ type: 'img', y0: p.y0, y1: p.y1, file: `${sid}_img${j}-${role}.jpg`, alt: p.alt || sec.name });
       y = p.y1;
     }

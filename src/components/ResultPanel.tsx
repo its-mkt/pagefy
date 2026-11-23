@@ -14,6 +14,21 @@ interface Props {
   /** 중단된 작업의 남은 섹션 만들기 */
   onResume?: () => void;
   resumeLabel?: string;
+  /** 이미지 서버 업로드 (서버에 접속 정보가 있을 때만) */
+  upload?: UploadState;
+  onUpload?: () => void;
+  /** 같은 rev 폴더에 다른 이미지가 있을 때: 다음 번호 rev 로 다시 만들기 (계획 재사용, 비용 없음) */
+  onNewRev?: () => void;
+}
+
+export interface UploadState {
+  phase: 'idle' | 'checking' | 'uploading' | 'verifying' | 'done' | 'error' | 'conflict';
+  done: number;
+  total: number;
+  message?: string;
+  /** 확인 실패한 파일 */
+  bad?: { file: string; status: number }[];
+  nextRev?: string;
 }
 
 type Tab = 'preview' | 'code' | 'images' | 'report';
@@ -95,7 +110,7 @@ function runProgress(run: RunState): { step: Step; pct: number; label: string } 
 
 const LEVEL_ORDER = { error: 0, warn: 1, ok: 2 } as const;
 
-export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel }: Props) {
+export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onNewRev }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
   const [feedback, setFeedback] = useState('');
   const [target, setTarget] = useState('all');
@@ -216,7 +231,13 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             <h4 className="getit__sub">등록 순서</h4>
             <ol className="getit__steps">
               <li>
-                zip을 풀고 <code className="getit__code">img/{result.meta.rev}</code> 폴더 안 이미지를 아래 주소에 올리기
+                {upload && onUpload ? (
+                  <UploadBox upload={upload} total={result.images.length} onUpload={onUpload} onNewRev={onNewRev} />
+                ) : (
+                  <>
+                    zip을 풀고 <code className="getit__code">img/{result.meta.rev}</code> 폴더 안 이미지를 아래 주소에 올리기
+                  </>
+                )}
                 <span className="getit__url">
                   <code className="getit__code">{result.baseUrl}/</code>
                   <button className="btn btn--sm" onClick={() => copy('url', `${result.baseUrl}/`)}>{copied === 'url' ? '복사됨' : '주소 복사'}</button>
@@ -350,7 +371,8 @@ function ensureSelStyle(doc: Document) {
 function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
   const W = loaded.summary.width;
   const [view, setView] = useState<View>('compare');
-  const [width, setWidth] = useState<number>(W);
+  // 모바일은 비율 축소뿐이라(7-5) 따로 보지 않는다 — 모바일 확인(가로 스크롤·비율·가장 작은 글자)은 자동 점검이 한다
+  const width = W;
   const [zoom, setZoom] = useState(0.5);
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(1000);
@@ -422,12 +444,6 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
           <button className={view === 'psd' ? 'is-on' : ''} onClick={() => setView('psd')}>PSD 이미지</button>
           <button className={view === 'html' ? 'is-on' : ''} onClick={() => setView('html')}>HTML 마크업</button>
         </div>
-        {showHtml && (
-          <div className="seg" aria-label="HTML 폭">
-            <button className={width === W ? 'is-on' : ''} onClick={() => setWidth(W)}>PSD 폭 {W}px</button>
-            <button className={width === 360 ? 'is-on' : ''} onClick={() => setWidth(360)}>모바일 360px</button>
-          </div>
-        )}
         <label className="zoom">
           배율
           <select value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>
@@ -447,7 +463,7 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
       )}
       <p className="hint preview__hint">{VIEW_HINT[view]}</p>
       <div className="preview__cols">
-        {(view === 'psd' || (view === 'compare' && width === W)) && (
+        {(view === 'psd' || view === 'compare') && (
           <figure className="preview__col preview__col--psd">
             <figcaption className="preview__tag">
               <b>PSD 원본 이미지</b>
@@ -462,7 +478,7 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
           <figure className="preview__col preview__col--html">
             <figcaption className="preview__tag">
               <b>HTML 마크업 (결과물)</b>
-              <span>쇼핑몰에 들어갈 웹페이지 · {width === W ? `PSD 폭 ${W}px` : `모바일 ${width}px`}</span>
+              <span>쇼핑몰에 들어갈 웹페이지 · PSD 폭 {W}px (모바일은 비율대로 줄어듦)</span>
             </figcaption>
             <div style={{ zoom }}>
               <iframe ref={frame} title="생성 HTML 미리보기" sandbox="allow-same-origin" scrolling="no" srcDoc={result.previewHtml} style={{ width, height }} />
@@ -499,5 +515,46 @@ function Code({ html }: { html: string }) {
       </div>
       <pre className="pre pre--code">{text}</pre>
     </div>
+  );
+}
+
+/** 등록 순서 1번: 이미지 서버에 올리기 — 진행·결과·같은 날짜 폴더 충돌 안내 */
+function UploadBox({ upload: u, total, onUpload, onNewRev }: { upload: UploadState; total: number; onUpload: () => void; onNewRev?: () => void }) {
+  const busy = u.phase === 'checking' || u.phase === 'uploading' || u.phase === 'verifying';
+  return (
+    <span className="upbox">
+      {u.phase === 'done' ? (
+        <span className="upbox__ok">이미지 {u.total}장을 아래 주소에 올렸고, 모두 열리는 것을 확인했습니다.</span>
+      ) : (
+        <>
+          <span>이미지 {total}장을 아래 주소에 올리기</span>
+          <button className="btn btn--sm btn--primary" disabled={busy} onClick={onUpload}>
+            {busy ? (
+              <>
+                <span className="spinner" />
+                {u.phase === 'checking' ? '서버 확인 중…' : u.phase === 'uploading' ? `올리는 중 ${u.done}/${u.total}` : `주소 확인 중…`}
+              </>
+            ) : u.phase === 'error' ? (
+              '다시 올리기'
+            ) : (
+              '이미지 서버에 올리기'
+            )}
+          </button>
+        </>
+      )}
+      {u.phase === 'error' && <span className="msg msg--error">{u.message}</span>}
+      {u.bad?.length ? <span className="msg msg--error">열리지 않는 이미지: {u.bad.map((b) => `${b.file}(${b.status || '응답 없음'})`).join(', ')}</span> : null}
+      {u.phase === 'conflict' && (
+        <span className="upbox__conflict">
+          {u.message}
+          {onNewRev && u.nextRev && (
+            <button className="btn btn--sm" onClick={onNewRev}>
+              새 번호 {u.nextRev} 로 다시 만들기 (비용 없음)
+            </button>
+          )}
+        </span>
+      )}
+      <small className="hint">같은 이름 파일은 덮어쓰지 않습니다. 이미 판매 중인 페이지 이미지는 바뀌지 않습니다.</small>
+    </span>
   );
 }

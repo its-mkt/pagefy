@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import type { GenerateMeta, HealthInfo, PlanBundle, PsdSummary, SectionRequest, UsageInfo } from '../shared/types';
-import { CLOUD, collect, fetchHealth } from './lib/api';
+import { CLOUD, collect, fetchHealth, uploadCheck, uploadFiles, uploadVerify, type UploadTarget } from './lib/api';
 import { canUse, fetchRole, supabase, type Role } from './lib/supabase';
 import { bitmapToUrl, cutImages, localizeHtml, type CutImage } from './lib/images';
 import { checkOutput, parsePlanOutput, parseSectionOutput, type Check, type ParsedOutput } from './lib/output';
@@ -18,7 +18,7 @@ import LoginPanel from './components/LoginPanel';
 import UploadPanel from './components/UploadPanel';
 import SummaryPanel from './components/SummaryPanel';
 import SettingsPanel, { type Settings } from './components/SettingsPanel';
-import ResultPanel from './components/ResultPanel';
+import ResultPanel, { type UploadState } from './components/ResultPanel';
 import Stepper from './components/Stepper';
 
 export interface Loaded {
@@ -141,6 +141,16 @@ export default function App() {
   const [run, setRun] = useState<RunState>(emptyRun);
   const [result, setResult] = useState<Result | null>(null);
   const [revisionCount, setRevisionCount] = useState(0);
+  // 이미지 서버 업로드 진행 (결과가 바뀌면 처음 상태로)
+  const [upload, setUpload] = useState<UploadState>({ phase: 'idle', done: 0, total: 0 });
+  const uploadRunRef = useRef(0);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    // 결과가 바뀌면(수정·새 rev·다른 작업) 진행 중 업로드를 멈추고 처음 상태로
+    uploadRunRef.current++;
+    uploadAbortRef.current?.abort();
+    setUpload({ phase: 'idle', done: 0, total: 0 });
+  }, [result?.baseUrl, result?.images]);
   const abortRef = useRef<AbortController | null>(null);
   // 작업 목록 (IndexedDB) — 화면에 보이는 목록과, 지금 열린 작업의 최신본
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -663,6 +673,107 @@ export default function App() {
     }
   }
 
+  /**
+   * 이미지 서버에 올리기 (규칙 6절): 서버가 FTP 로 올리고 공개 주소를 열어 확인한다.
+   * - 이 작업의 표시(token)가 있는 rev 폴더만 쓴다 (같은 작업이 끊겼다 이어 올리면 같은 크기 파일은 건너뜀)
+   * - 표시가 없는 폴더(다른 작업·사람)가 이미 있으면 덮어쓰지 않고 새 번호 rev 로 다시 만들라고 안내한다
+   * - 결과가 바뀌면(수정·새 rev) 진행 중인 업로드를 멈추고, 늦게 온 응답은 버린다
+   */
+  async function uploadImages() {
+    if (!result) return;
+    const runId = ++uploadRunRef.current;
+    uploadAbortRef.current?.abort();
+    const ac = new AbortController();
+    uploadAbortRef.current = ac;
+    const live = () => runId === uploadRunRef.current && !ac.signal.aborted;
+    const set = (u: UploadState | ((u: UploadState) => UploadState)) => live() && setUpload(u);
+    const r = result;
+    const total = r.images.length;
+    try {
+      const big = r.images.find((im) => im.blob.size > 5 * 1024 * 1024);
+      if (big) throw new Error(`${big.file} 이(가) 5MB 를 넘어 올릴 수 없습니다 (규칙 6절 목표 1MB). 그 섹션을 나누거나 사진을 줄여 다시 만드세요.`);
+      const token = await uploadToken(jobRef.current?.id ?? r.baseUrl, r.meta.rev);
+      const target: UploadTarget = { channel: r.meta.channel, slug: r.meta.slug, rev: r.meta.rev, publicRoot: r.meta.publicRoot, token };
+      set({ phase: 'checking', done: 0, total });
+      const remote = await uploadCheck(target, ac.signal);
+      if (remote.exists && !remote.owned) {
+        set({
+          phase: 'conflict',
+          done: 0,
+          total,
+          nextRev: nextRev(r.meta.rev),
+          message: `서버에 ${r.meta.rev} 폴더가 이미 있습니다 (다른 작업이 올린 이미지 ${remote.files.length}개). 판매 중인 페이지가 바뀌지 않게 덮어쓰지 않습니다.`,
+        });
+        return;
+      }
+      // 같은 작업이 끊겼다 이어 올리는 경우: 같은 이름·크기 파일은 건너뛴다 (내용은 아래 확인에서 SHA-256 으로 다시 본다)
+      const sizes = new Map(r.images.map((im) => [im.file, im.blob.size]));
+      const skip = new Set(remote.files.filter((f) => sizes.get(f.file) === f.size).map((f) => f.file));
+      const stray = remote.files.filter((f) => !skip.has(f.file));
+      if (stray.length) {
+        set({ phase: 'conflict', done: 0, total, nextRev: nextRev(r.meta.rev), message: `서버의 ${r.meta.rev} 폴더에 이 결과와 다른 파일이 있습니다 (${stray.map((f) => f.file).slice(0, 3).join(', ')}…). 덮어쓰지 않습니다.` });
+        return;
+      }
+      let done = skip.size;
+      set({ phase: 'uploading', done, total });
+      // 4MB 안쪽으로 묶어 보낸다 (함수 요청 크기·150초 제한). 서버가 시간 때문에 남긴 파일(left)은 다음 묶음으로
+      const queue = r.images.filter((im) => !skip.has(im.file));
+      while (queue.length) {
+        const batch: { file: string; data: string }[] = [];
+        let bytes = 0;
+        while (queue.length && (!batch.length || bytes + queue[0].blob.size <= 4 * 1024 * 1024)) {
+          const im = queue.shift()!;
+          batch.push({ file: im.file, data: await blobToBase64(im.blob) });
+          bytes += im.blob.size;
+        }
+        const out = await uploadFiles(target, batch, ac.signal);
+        if (out.refused.length) throw new Error(out.refused.map((x) => `${x.file}: ${x.error}`).join(' / '));
+        done += out.done.length;
+        set((u) => ({ ...u, done }));
+        if (out.left?.length) {
+          if (!out.done.length) throw new Error('서버 시간 안에 한 장도 올리지 못했습니다. 잠시 뒤 다시 올리기를 누르세요.');
+          queue.unshift(...r.images.filter((im) => out.left!.includes(im.file)));
+        }
+      }
+      set((u) => ({ ...u, phase: 'verifying' }));
+      const want = await Promise.all(r.images.map(async (im) => ({ file: im.file, size: im.blob.size, sha256: await sha256Hex(im.blob) })));
+      const results: { file: string; status: number; ok: boolean; checked: boolean }[] = [];
+      for (let i = 0; i < want.length; i += 12) results.push(...(await uploadVerify(target, want.slice(i, i + 12), ac.signal)).results);
+      const bad = results.filter((x) => !x.ok).map((x) => ({ file: x.file, status: x.status }));
+      set({
+        phase: bad.length ? 'error' : 'done',
+        done,
+        total,
+        bad,
+        message: bad.length ? `올린 뒤 ${bad.length}장이 열리지 않거나 내용이 다릅니다. 잠시 뒤 「다시 올리기」로 다시 확인하고, 계속 다르면 새 번호 rev 로 다시 만드세요.` : undefined,
+      });
+    } catch (e) {
+      if (ac.signal.aborted) return;
+      set((u) => ({ ...u, phase: 'error', message: `업로드 실패: ${(e as Error).message}` }));
+    }
+  }
+
+  /** 같은 날짜 폴더를 다른 작업이 쓰고 있을 때: rev 를 다음 번호로 바꾸고 저장된 구조 계획으로 다시 만든다 (Claude 호출 없음) */
+  async function rebuildWithNextRev() {
+    if (!result || !loadedRef.current || running) return;
+    const plan = jobRef.current?.plan ?? { bundle: result.bundle, report: result.planReport, raw: result.planRaw };
+    if (plan.bundle.plan.engine !== 'code') return;
+    uploadAbortRef.current?.abort();
+    const rev = nextRev(result.meta.rev);
+    const m = { ...result.meta, rev };
+    const base = `${m.publicRoot.replace(/\/+$/, '')}/${m.channel}/${m.slug}/${rev}`;
+    setRun((r) => ({ ...r, phase: 'running', error: undefined, status: [...r.status, `rev 를 ${rev} 로 바꿔 다시 만듭니다 (비용 없음) — 전에 복사해 둔 HTML 이 있으면 새로 복사하세요`] }));
+    try {
+      await buildFromPlan(m, base, plan.bundle, plan.report, plan.raw);
+      // 다시 만들기가 끝난 뒤에만 설정·작업 기록을 바꾼다 (실패하면 이전 rev 그대로)
+      setSettings((st) => ({ ...st, rev }));
+      updateJob({ meta: m, baseUrl: base, state: 'done' });
+      setRun((r) => ({ ...r, phase: 'done' }));
+    } catch (e) {
+      setRun((r) => ({ ...r, phase: 'error', error: (e as Error).message }));
+    }
+  }
+
   async function removeJob(id: string) {
     if (jobRef.current?.id === id) {
       jobRef.current = null;
@@ -761,6 +872,9 @@ export default function App() {
                 onRevise={revise}
                 onCancel={() => abortRef.current?.abort()}
                 onResume={resume && canGenerate ? () => generate() : undefined}
+                upload={health?.upload && result?.bundle.plan.engine === 'code' ? upload : undefined}
+                onUpload={uploadImages}
+                onNewRev={rebuildWithNextRev}
                 resumeLabel={resume ? (resume.code ? "저장된 계획으로 마무리 (비용 없음)" : `이어서 만들기 (남은 섹션 ${resume.missing}개)`) : undefined}
               />
               </div>
@@ -771,4 +885,29 @@ export default function App() {
       </main>
     </div>
   );
+}
+
+/** 20261123 → 20261123-2, 20261123-2 → 20261123-3 (규칙 6-1: 같은 날 다시 올리면 -2, -3 …) */
+function nextRev(rev: string) {
+  const m = /^(\d{8})(?:-(\d+))?$/.exec(rev);
+  if (!m) return rev;
+  return `${m[1]}-${m[2] ? Number(m[2]) + 1 : 2}`;
+}
+
+async function blobToBase64(b: Blob): Promise<string> {
+  const bytes = new Uint8Array(await b.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+async function sha256Hex(b: Blob): Promise<string> {
+  const h = await crypto.subtle.digest('SHA-256', await b.arrayBuffer());
+  return [...new Uint8Array(h)].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
+
+/** 업로드 표시: 같은 작업·같은 rev 면 늘 같은 값 (끊겼다 이어 올릴 때 자기 폴더를 알아본다) */
+async function uploadToken(jobKey: string, rev: string): Promise<string> {
+  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`pagefy:${jobKey}:${rev}`));
+  return [...new Uint8Array(h)].slice(0, 12).map((x) => x.toString(16).padStart(2, '0')).join('');
 }

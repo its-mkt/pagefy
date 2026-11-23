@@ -9,6 +9,40 @@ import { buildPlanMessages, buildSectionMessages, buildSystem } from './core/pro
 import { describeError, runClaude, type Effort, type RunConfig } from './core/run.ts';
 import { validatePlan, validateSection } from './core/validate.ts';
 import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from './shared/types.ts';
+import type { Dial } from './core/ftp.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfigFrom, putFiles, verifyFiles } from './core/upload.ts';
+
+// 이미지 호스팅 업로드 (규칙 6절): 접속 정보는 함수 비밀값 PAGEFY_FTP_HOST·USER·PASS·ROOT·PUBLIC_BASE(·PORT) 에만 둔다.
+// 없으면 업로드 기능을 끈다 (화면에 버튼 없음). 같은 이름 파일은 덮어쓰지 않는다 (core/upload.ts)
+const ftpCfg = () => ftpConfigFrom((k) => Deno.env.get(`PAGEFY_FTP_${k}`));
+const denoDial: Dial = async (hostname, port) => {
+  const c = await Deno.connect({ hostname, port });
+  return {
+    write: async (b) => {
+      for (let off = 0; off < b.length; ) off += await c.write(b.subarray(off));
+    },
+    read: async () => {
+      const buf = new Uint8Array(64 * 1024);
+      const n = await c.read(buf);
+      return n === null ? null : buf.subarray(0, n);
+    },
+    close: async () => {
+      try {
+        c.close();
+      } catch {
+        // 이미 닫힘
+      }
+    },
+  };
+};
+/** 기록용: 토큰 안의 이메일 (권한은 whoami 로 이미 확인함 — 여기서는 누가 올렸는지 로그에만) */
+function emailOf(token: string) {
+  try {
+    return (JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as { email?: string }).email || '?';
+  } catch {
+    return '?';
+  }
+}
 
 const ALLOWED_ORIGINS = ['https://its.itket.com', 'http://localhost:1100', 'http://localhost:1101'];
 /** 광고 인사이트 수집기 웹앱 (권한 판정: admins·members 명단) */
@@ -120,7 +154,19 @@ Deno.serve(async (req) => {
   const t0 = Date.now();
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(req) });
   const path = new URL(req.url).pathname;
-  const action = path.endsWith('/health') ? 'health' : path.endsWith('/plan') ? 'plan' : path.endsWith('/section') ? 'section' : '';
+  const action = path.endsWith('/health')
+    ? 'health'
+    : path.endsWith('/plan')
+      ? 'plan'
+      : path.endsWith('/section')
+        ? 'section'
+        : path.endsWith('/upload/check')
+          ? 'upload-check'
+          : path.endsWith('/upload/files')
+            ? 'upload-files'
+            : path.endsWith('/upload/verify')
+              ? 'upload-verify'
+              : '';
   if (!action) return json(req, 404, { error: '없는 주소입니다.' });
 
   const token = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
@@ -147,10 +193,36 @@ Deno.serve(async (req) => {
       effort: EFFORT,
       rules: await loadRules().then((r) => ({ source: 'GitHub its-mkt/pagefy rules/detail_to_markup.md', updatedAt: r.updatedAt, fallback: false })).catch(() => ({ source: '(규칙 읽기 실패)', updatedAt: null, fallback: true })),
       role,
+      upload: !!ftpCfg(),
     };
     return json(req, 200, body);
   }
   if (req.method !== 'POST') return json(req, 405, { error: 'POST 로 요청하세요.' });
+
+  if (action.startsWith('upload-')) {
+    const cfg = ftpCfg();
+    if (!cfg) return json(req, 503, { error: '이미지 서버 접속 정보(함수 비밀값 PAGEFY_FTP_*)가 없습니다. 관리자에게 등록을 요청하세요.' });
+    let ub: { target?: UploadTarget; files?: unknown };
+    try {
+      ub = await req.json();
+    } catch {
+      return json(req, 400, { error: '요청 본문을 읽지 못했습니다.' });
+    }
+    const t = ub.target as UploadTarget;
+    const problem = checkTarget(cfg, t);
+    if (problem) return json(req, 400, { error: problem });
+    try {
+      if (action === 'upload-check') return json(req, 200, await checkFolder(cfg, denoDial, t));
+      if (action === 'upload-files') {
+        const out = await putFiles(cfg, denoDial, t, ub.files as UploadFile[], t0 + 130_000);
+        console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug}/${t.rev} 올림 ${out.done.length}개${out.refused.length ? ` · 거절 ${out.refused.length}개` : ''}`);
+        return json(req, 200, out);
+      }
+      return json(req, 200, { results: await verifyFiles(cfg, t, (ub.files as { file: string; size: number; sha256?: string }[]) || [], t0 + 130_000) });
+    } catch (err) {
+      return json(req, 502, { error: describeError(err) });
+    }
+  }
   if (!hasKey()) return json(req, 500, { error: 'Supabase 함수 비밀값 ANTHROPIC_API_KEY 가 없습니다. 관리자에게 등록을 요청하세요.' });
 
   let body: unknown;
