@@ -81,7 +81,8 @@ function cmpDesc(a: CharPos, b: CharPos) {
   return a.node.compareDocumentPosition(b.node) & Node.DOCUMENT_POSITION_FOLLOWING ? 1 : -1;
 }
 
-export async function checkLayout(html: string, summary: PsdSummary): Promise<LayoutResult> {
+/** skip: 이미지에 일부러 남긴 글자(keepMap) — HTML 에 없는 게 맞으므로 대조·「못 찾음」에서 뺀다 */
+export async function checkLayout(html: string, summary: PsdSummary, skip: ReadonlySet<number> = new Set()): Promise<LayoutResult> {
   const W = summary.width;
   // 고도몰 상세 영역은 최대 860px (규칙 7-2) → PSD 가 더 넓으면 860px 로 렌더하고 잰 값을 PSD px 로 되돌린다 (k 배)
   const VW = isGoodomall(html) ? Math.min(W, GODO_MAX_W) : W;
@@ -108,6 +109,7 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
     type Target = { t: TextInfo; key: string; cands: Cand[]; trail: number };
     const targets: Target[] = [];
     for (const t of summary.texts) {
+      if (skip.has(t.id)) continue;
       const line = t.lines.find((l) => nonSpace(l));
       if (!line) continue;
       const key = nonSpace(line);
@@ -217,7 +219,7 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
         message: `PSD 위치 대조: ${pass}/${found.length} 통과 (기준선 세로 ±${TOL_Y}px·가로 ±${TOL_X}px${k !== 1 ? `, PSD ${W}px → ${VW}px 로 렌더해 PSD px 로 환산` : ""})${bad.length ? ` — 어긋남 큰 순: ${bad.slice(0, 4).map((i) => `"${i.text}" ${fmt(i)}`).join(', ')}` : ''}`,
       });
     }
-    if (notFound) checks.push({ level: 'warn', message: `위치 대조 못 한 텍스트 ${notFound}개 (HTML 글자에서 첫 줄을 못 찾음 — 이미지로 구웠거나 빠짐)` });
+    if (notFound) checks.push({ level: 'warn', message: `HTML 에서 찾지 못한 글자 ${notFound}개 — 빠졌거나 이미지로 들어갔을 수 있으니 미리보기에서 확인` });
     // 반올림·이미지 높이 차이로 0.5% 또는 3px 까지는 같은 것으로 본다
     const offScale = scaleGap.filter((g) => Math.abs(g.gap) > Math.max(3, ((hPc * g.width) / VW) * 0.005));
     if (hPc > 0)

@@ -9,7 +9,6 @@ interface Props {
   disabled?: boolean;
 }
 
-const STEPS = ['PSD 올리기', '제품명·채널 확인', '마크업 만들기', 'zip 받아 쇼핑몰에 등록'];
 
 export default function UploadPanel({ onFile, loading, error, file, disabled }: Props) {
   const input = useRef<HTMLInputElement>(null);
@@ -106,14 +105,6 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
         {fileInput}
       </div>
       {error && <p className="msg msg--error">{error}</p>}
-      <ol className="steps">
-        {STEPS.map((t, i) => (
-          <li key={t} className={i === 0 ? 'is-on' : ''}>
-            <span className="steps__no">{i + 1}</span>
-            {t}
-          </li>
-        ))}
-      </ol>
     </section>
   );
 }

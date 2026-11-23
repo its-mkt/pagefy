@@ -1,5 +1,5 @@
-/** 지금 어느 단계인지 — PSD 올리기 → 확인·설정 → 만들기 → 받아 가기 */
-const STEPS = ['PSD 올리기', '확인·설정', '마크업 만들기', '받아 가기'] as const;
+/** 지금 어느 단계인지 — PSD 올리기 → 확인·설정 → 만들기 → 복사해 붙여넣기 */
+const STEPS = ['PSD 올리기', '확인·설정', '마크업 만들기', '복사해 붙여넣기'] as const;
 
 export default function Stepper({ step }: { step: number }) {
   return (
