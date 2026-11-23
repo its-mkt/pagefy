@@ -40,31 +40,123 @@ function layoutFeedback(result: Result, loaded: Loaded): Record<string, string> 
   );
 }
 
+/** 복사 버튼 — 누르면 1.5초 동안 "복사됨" */
+/** 클립보드에 쓴다. http 주소·권한 거부 등으로 막히면 옛 방식(execCommand)으로 한 번 더, 그래도 안 되면 false */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+    document.body.appendChild(ta);
+    ta.select();
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    ta.remove();
+    return ok;
+  }
+}
+
+/** copied: 복사한 버튼 key, 실패하면 'fail:key' */
+function useCopy(): [string | null, (key: string, text: string) => Promise<void>] {
+  const [copied, setCopied] = useState<string | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async (key: string, text: string) => {
+    setCopied((await copyText(text)) ? key : `fail:${key}`);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setCopied(null), 1500);
+  };
+  return [copied, copy];
+}
+
+type Step = 'plan' | 'sections' | 'check';
+const STEPS: [Step, string][] = [
+  ['plan', '계획'],
+  ['sections', '섹션 작성'],
+  ['check', '점검'],
+];
+
+/** 진행 단계·퍼센트·상태 한 줄 */
+function runProgress(run: RunState): { step: Step; pct: number; label: string } {
+  const total = run.sections.length;
+  if (!total) return { step: 'plan', pct: Math.min(15, 3 + run.planChars / 400), label: '① 계획 세우는 중…' };
+  const done = run.sections.filter((s) => s.state === 'done').length;
+  const finished = run.sections.filter((s) => s.state === 'done' || s.state === 'error').length;
+  if (finished >= total) return { step: 'check', pct: 97, label: '③ 결과 점검 중…' };
+  return { step: 'sections', pct: 15 + (80 * finished) / total, label: `② 섹션 작성 중 ${done}/${total}` };
+}
+
+const LEVEL_ORDER = { error: 0, warn: 1, ok: 2 } as const;
+
 export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
   const [feedback, setFeedback] = useState('');
   const [target, setTarget] = useState('all');
+  const [copied, copy] = useCopy();
+  const [zipping, setZipping] = useState(false);
+  const [zipError, setZipError] = useState<string | null>(null);
   const running = run.phase === 'running';
   const auto = result ? layoutFeedback(result, loaded) : {};
-  const autoCount = Object.keys(auto).length;
-  const done = run.sections.filter((s) => s.state === 'done').length;
+  // 코드 생성 방식은 위치를 PSD 값으로 계산하므로 Claude 에게 위치 수정을 보내지 않는다 (옛 섹션 방식 결과에만)
+  const codeEngine = result?.bundle.plan.engine === "code";
+  const autoCount = codeEngine ? 0 : Object.keys(auto).length;
+  const prog = runProgress(run);
+  const pct = Math.round(prog.pct);
+  const stepIdx = STEPS.findIndex(([k]) => k === prog.step);
+
+  const checks = result ? [...result.checks].sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) : [];
+  const issues = checks.filter((c) => c.level !== 'ok');
+  const passed = checks.filter((c) => c.level === 'ok');
+  const nErr = checks.filter((c) => c.level === 'error').length;
+  const nWarn = checks.filter((c) => c.level === 'warn').length;
+  const openmarket = result?.meta.channel === 'openmarket';
 
   return (
     <section className="panel">
-      <h2 className="panel__title">4. 결과 {revisionCount > 0 && <small>(수정 {revisionCount}회)</small>}</h2>
+      <h2 className="panel__title">결과 {revisionCount > 0 && <small>(수정 {revisionCount}회)</small>}</h2>
+
+      {running && (
+        <div className="progress">
+          <p className="progress__now">
+            <span className="spinner" />
+            <span className="progress__label">{prog.label}</span>
+            <span className="progress__pct">{pct}%</span>
+            <button className="btn btn--ghost btn--sm" onClick={onCancel}>취소</button>
+          </p>
+          <div className="progress__bar" role="progressbar" aria-label="만드는 중" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+            <span style={{ width: `${pct}%` }} />
+          </div>
+          <ol className="runsteps" aria-label="진행 단계">
+            {STEPS.map(([k, label], i) => (
+              <li key={k} className={i < stepIdx ? 'is-done' : i === stepIdx ? 'is-on' : ''} aria-current={i === stepIdx ? 'step' : undefined}>
+                {label}
+              </li>
+            ))}
+          </ol>
+          <p className="hint progress__hint">창을 닫거나 새로고침해도 끝난 섹션은 저장돼 있어 이어서 만들 수 있습니다.</p>
+        </div>
+      )}
+
+      {run.phase === 'error' && (
+        <div className="progress-error">
+          <p className="msg msg--error progress-error__msg">{run.error || '만드는 중 문제가 생겼습니다.'}</p>
+          {onResume && (
+            <div className="actions">
+              <button className="btn btn--primary" onClick={onResume}>{resumeLabel}</button>
+            </div>
+          )}
+        </div>
+      )}
 
       {(running || run.phase === 'error') && (
-        <div className="progress">
-          <ul className="progress__log">
-            {run.status.map((s, i) => <li key={i}>{s}</li>)}
-          </ul>
-          {running && (
-            <p className="progress__now">
-              <span className="spinner" />
-              {run.sections.length ? `섹션 ${done}/${run.sections.length} 완료` : `계획 받는 중 (${run.planChars.toLocaleString()}자)`}
-              <button className="btn btn--ghost btn--sm" onClick={onCancel}>취소</button>
-            </p>
-          )}
+        <>
           {run.sections.length > 0 && (
             <ul className="secs">
               {run.sections.map((s) => (
@@ -74,39 +166,91 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               ))}
             </ul>
           )}
-          {running && !run.sections.length && run.thinking && <pre className="progress__thinking">{run.thinking.slice(-600)}</pre>}
-          {run.phase === 'error' && <p className="msg msg--error">{run.error}</p>}
-          {run.phase === 'error' && onResume && (
-            <div className="actions">
-              <button className="btn btn--primary" onClick={onResume}>{resumeLabel}</button>
-            </div>
+          {(run.status.length > 0 || (running && run.thinking)) && (
+            <details className="fold">
+              <summary>진행 기록 보기</summary>
+              <ul className="progress__log">
+                {run.status.map((s, i) => <li key={i}>{s}</li>)}
+              </ul>
+              {running && !run.sections.length && run.thinking && <pre className="progress__thinking">{run.thinking.slice(-600)}</pre>}
+            </details>
           )}
-        </div>
+        </>
       )}
 
       {result && !running && (
         <>
-          <div className="result-head">
+          <div className="getit">
+            <h3 className="getit__title">
+              마크업이 준비됐습니다{nErr > 0 && <em> — 오류 {nErr}건 확인 필요</em>}
+            </h3>
+            <div className="getit__badges">
+              {nErr > 0 && <span className="badge badge--error">오류 {nErr}</span>}
+              {nWarn > 0 && <span className="badge badge--warn">확인 {nWarn}</span>}
+              <span className="badge badge--ok">통과 {passed.length}</span>
+            </div>
+            <div className="actions getit__actions">
+              <button
+                className="btn btn--primary"
+                disabled={!result.parsed.html || zipping}
+                onClick={async () => {
+                  setZipping(true);
+                  setZipError(null);
+                  try {
+                    download(await buildZip(result.meta.productName, result.meta.rev, result.parsed.html, result.images), `${result.meta.productName}.zip`);
+                  } catch (e) {
+                    setZipError(`zip을 만들지 못했습니다: ${(e as Error).message}`);
+                  } finally {
+                    setZipping(false);
+                  }
+                }}
+              >
+                {zipping ? 'zip 만드는 중…' : 'zip 내려받기'}
+              </button>
+              <button className="btn" disabled={!result.parsed.html} onClick={() => copy('html', copySection(result.parsed.html))}>
+                {copied === 'html' ? '복사됨' : 'HTML 복사 (쇼핑몰 등록용)'}
+              </button>
+            </div>
+            {zipError && <p className="msg msg--error">{zipError}</p>}
+            {copied?.startsWith('fail:') && <p className="msg msg--error">복사하지 못했습니다. 아래 「HTML」 탭에서 직접 선택해 복사하세요.</p>}
+            <h4 className="getit__sub">등록 순서</h4>
+            <ol className="getit__steps">
+              <li>
+                zip을 풀고 <code className="getit__code">img/{result.meta.rev}</code> 폴더 안 이미지를 아래 주소에 올리기
+                <span className="getit__url">
+                  <code className="getit__code">{result.baseUrl}/</code>
+                  <button className="btn btn--sm" onClick={() => copy('url', `${result.baseUrl}/`)}>{copied === 'url' ? '복사됨' : '주소 복사'}</button>
+                </span>
+              </li>
+              <li>
+                <b>HTML 복사</b> 후 {openmarket ? '오픈마켓 상세 편집기의 HTML 입력에 붙여넣기' : '고도몰 상품 상세설명(HTML 모드)에 붙여넣기'}
+              </li>
+              <li>상품 페이지에서 이미지가 모두 뜨는지 확인</li>
+            </ol>
+          </div>
+          {run.usage && (
+            <p className="usage">
+              {run.model} · 입력 {run.usage.input.toLocaleString()} / 캐시 {run.usage.cacheRead.toLocaleString()} / 출력 {run.usage.output.toLocaleString()} 토큰 · 약 ${run.usage.costUsd.toFixed(2)}
+            </p>
+          )}
+
+          {issues.length > 0 && (
             <ul className="checks">
-              {result.checks.map((c, i) => (
+              {issues.map((c, i) => (
                 <li key={i} className={`check check--${c.level}`}>{c.message}</li>
               ))}
             </ul>
-            <div className="result-head__side">
-              {run.usage && (
-                <p className="usage">
-                  {run.model} · 입력 {run.usage.input.toLocaleString()} / 캐시 {run.usage.cacheRead.toLocaleString()} / 출력 {run.usage.output.toLocaleString()} 토큰 · 약 ${run.usage.costUsd.toFixed(2)}
-                </p>
-              )}
-              <button
-                className="btn btn--primary"
-                disabled={!result.parsed.html}
-                onClick={async () => download(await buildZip(result.meta.productName, result.meta.rev, result.parsed.html, result.images), `${result.meta.productName}.zip`)}
-              >
-                zip 내려받기 (HTML + img/{result.meta.rev})
-              </button>
-            </div>
-          </div>
+          )}
+          {passed.length > 0 && (
+            <details className="fold">
+              <summary>통과한 점검 {passed.length}개</summary>
+              <ul className="checks">
+                {passed.map((c, i) => (
+                  <li key={i} className="check check--ok">{c.message}</li>
+                ))}
+              </ul>
+            </details>
+          )}
 
           <div className="tabs">
             {(
@@ -147,6 +291,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             </div>
           )}
 
+          <h3 className="revise__title">고칠 곳이 있으면</h3>
           <div className="revise">
             {autoCount > 0 && (
               <button className="btn btn--sm" onClick={() => onRevise(auto)} title="PSD 위치 대조에서 어긋난 텍스트가 있는 섹션만 골라 고치게 합니다">
@@ -159,7 +304,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 <option key={s.id} value={s.id}>{s.id} {s.name}</option>
               ))}
             </select>
-            <textarea rows={3} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="고칠 내용을 적고 섹션을 고르면 그 섹션만 다시 만듭니다. 예) 제목 줄바꿈이 PSD와 달라요 / 스펙 영역을 <table>로 바꿔 줘" />
+            <textarea rows={3} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder={codeEngine ? "구조를 고칠 내용을 적어 주세요. 위치·크기·자간은 PSD 값으로 자동 계산됩니다. 예) 메인 제목은 이미지로 남겨 줘 / 두 번째 제품 사진을 사진 영역(img)으로 빼 줘 / \"주요 사양\"을 대제목으로" : "고칠 내용을 적고 섹션을 고르면 그 섹션만 다시 만듭니다. 예) 제목 줄바꿈이 PSD와 달라요 / 스펙 영역을 <table>로 바꿔 줘"} />
             <button
               className="btn"
               disabled={!feedback.trim()}
@@ -193,7 +338,11 @@ function ensureSelStyle(doc: Document) {
   if (doc.getElementById('pf-sel') || !doc.head) return;
   const st = doc.createElement('style');
   st.id = 'pf-sel';
-  st.textContent = '::selection{background:rgba(45,95,209,.45)!important;color:inherit}';
+  // 규칙 7-6 글자 선택 막기(.prefix * {user-select:none!important}, ::selection 투명)를 미리보기에서만 푼다 → "글자 전체 선택"으로 실제 글자인지 확인.
+  // 상세 CSS 도 !important 라 특이도가 더 높아야 이긴다: html:root body * = (0,1,2) > .prefix * = (0,1,1)
+  st.textContent =
+    'html:root body *,html:root body *::before,html:root body *::after{-webkit-user-select:text!important;user-select:text!important}' +
+    'html:root body ::selection,html:root body *::selection{background:rgba(45,95,209,.45)!important;color:inherit}';
   doc.head.appendChild(st);
 }
 
@@ -217,7 +366,9 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
     if (!f) return;
     // srcdoc 은 load 가 effect 보다 먼저 끝날 수 있고, 이미지가 늦게 뜨면 높이가 바뀐다 → 잠시 동안 주기적으로 잰다
     const measure = () => {
-      const h = f.contentDocument?.documentElement.scrollHeight;
+      // documentElement.scrollHeight 는 iframe 높이보다 작아지지 않아(폭을 360→PSD 폭으로 넓혀도 줄지 않음) 내용 높이인 body 로 잰다
+      const d = f.contentDocument;
+      const h = d?.body ? Math.max(Math.ceil(d.documentElement.getBoundingClientRect().height), d.body.scrollHeight) : undefined;
       if (h) setHeight(h);
     };
     let n = 0;
@@ -302,7 +453,7 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
         )}
         {showHtml && (
           <div className="preview__col">
-            <iframe ref={frame} title="생성 HTML 미리보기" sandbox="allow-same-origin" srcDoc={result.previewHtml} style={{ width, height }} />
+            <iframe ref={frame} title="생성 HTML 미리보기" sandbox="allow-same-origin" scrolling="no" srcDoc={result.previewHtml} style={{ width, height }} />
           </div>
         )}
       </div>
@@ -312,7 +463,7 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
 
 function Code({ html }: { html: string }) {
   const [which, setWhich] = useState<'copy' | 'full'>('copy');
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<boolean | null>(false);
   const text = which === 'copy' ? copySection(html) : html;
   return (
     <div className="code">
@@ -324,12 +475,12 @@ function Code({ html }: { html: string }) {
         <button
           className="btn btn--sm"
           onClick={async () => {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
+            const ok = await copyText(text);
+            setCopied(ok ? true : null);
+            if (ok) setTimeout(() => setCopied(false), 1500);
           }}
         >
-          {copied ? '복사됨' : '복사'}
+          {copied ? '복사됨' : copied === null ? '복사 실패 — 아래 글을 직접 선택하세요' : '복사'}
         </button>
         <span className="hint">{text.length.toLocaleString()}자 · 이미지 주소는 업로드 후 실제로 열리는지 확인하세요 (9절 6항)</span>
       </div>
