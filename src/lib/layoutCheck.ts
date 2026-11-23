@@ -188,6 +188,16 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
     f.style.width = '360px';
     await new Promise((r) => setTimeout(r, 200));
     const overflow360 = Math.max(0, (doc.scrollingElement?.scrollWidth ?? 360) - 360);
+    // 모바일에서 가장 작은 글자 — 비율 축소(7-5)라 PSD 의 작은 글자가 그대로 작아진다. 미리보기 대신 숫자로 알려 준다
+    let minFont: { px: number; text: string } | null = null;
+    for (const el of doc.body.querySelectorAll<HTMLElement>('*')) {
+      const own = [...el.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent ?? '').join('').trim();
+      if (!own) continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width || !r.height) continue;
+      const px = parseFloat(doc.defaultView!.getComputedStyle(el).fontSize);
+      if (px > 0 && (!minFont || px < minFont.px)) minFont = { px, text: own.slice(0, 14) };
+    }
     // 7-5 모바일 = 이미지처럼 비율 축소: 높이도 폭 비율대로 줄어야 한다 (360px 폰 → 고도몰 상세 영역 약 323px)
     const scaleGap: { width: number; gap: number }[] = [];
     for (const w of [360, 323]) {
@@ -217,6 +227,14 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
           : { level: 'ok', message: `모바일 비율 축소 확인 (360·323px 폭 높이 = PC 높이 × 비율)` },
       );
     checks.push(overflow360 > 0 ? { level: 'error', message: `모바일 360px 에서 가로 스크롤 ${overflow360}px 생김 (9절 5항)` } : { level: 'ok', message: '모바일 360px 가로 스크롤 없음' });
+    if (minFont) {
+      const px = Math.round(minFont.px * 10) / 10;
+      // 규칙 7-5 는 모바일 작은 글자를 허용한다(최소 글자 크기 없음) → 오류·확인이 아니라 참고로만 보여 준다
+      checks.push({
+        level: 'ok',
+        message: `모바일 360px 에서 가장 작은 글자 약 ${px}px ("${minFont.text}")${px < 6 ? ' — 규칙상 비율 축소만 하므로(7-5) 그대로 둠. 읽기 어렵다면 PSD 에서 키우거나 완료 보고의 제안으로' : ''}`,
+      });
+    }
 
     const feedback = bad.length
       ? `PSD 자동 대조 결과 위치가 다른 텍스트 ${bad.length}개 (기준선 기준, +는 PSD보다 아래·오른쪽):\n${bad
