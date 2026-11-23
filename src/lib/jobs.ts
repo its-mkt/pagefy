@@ -109,7 +109,14 @@ async function cleanFiles() {
 
 /** 앞서 열려 있던 탭이 새로고침·닫힘으로 끊긴 작업은 "중단됨" 으로 */
 export async function markInterrupted() {
-  for (const j of await listJobs()) if (j.state === 'running') await putJob({ ...j, state: 'stopped' });
+  const busy = await busyJobIds();
+  for (const j of await listJobs()) if (j.state === 'running' && !busy.has(j.id)) await putJob({ ...j, state: 'stopped' });
+}
+
+/** 다른 탭이 지금 생성 중인 작업 id (App holdLock 이 잡는 Web Lock 'pagefy-job-<id>') */
+export async function busyJobIds(): Promise<Set<string>> {
+  const q = await navigator.locks?.query?.().catch(() => null);
+  return new Set((q?.held ?? []).map((l) => l.name ?? '').filter((n) => n.startsWith('pagefy-job-')).map((n) => n.slice('pagefy-job-'.length)));
 }
 
 export const sameMeta = (a: GenerateMeta, b: GenerateMeta) =>

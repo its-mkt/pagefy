@@ -112,6 +112,8 @@ if (fs.existsSync(dist)) {
   app.get(new RegExp(`^${BASE_PATH}(/(?!api/).*)?$`), (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
 
-app.listen(PORT, () => {
-  console.log(`[pagefy api] http://localhost:${PORT}  model=${MODEL} effort=${EFFORT}${MOCK ? '  (MOCK 모드)' : ''}${hasKey() ? '' : '  ⚠ API 키 없음'}`);
+// 이 PC 에서만 받는다 (사내망에 열면 누구나 인증 없이 이 PC 의 API 키로 생성할 수 있음). 꼭 열어야 하면 API_HOST=0.0.0.0
+const HOST = process.env.API_HOST || '127.0.0.1';
+app.listen(PORT, HOST, () => {
+  console.log(`[pagefy api] http://${HOST === '127.0.0.1' ? 'localhost' : HOST}:${PORT}  model=${MODEL} effort=${EFFORT}${MOCK ? '  (MOCK 모드)' : ''}${hasKey() ? '' : '  ⚠ API 키 없음'}`);
 });

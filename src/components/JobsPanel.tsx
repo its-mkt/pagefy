@@ -30,6 +30,8 @@ function ago(t: number) {
 
 function progress(j: Job) {
   if (!j.plan) return j.state === 'ready' ? '-' : '계획 전';
+  // 코드 생성 방식은 섹션을 따로 요청하지 않는다 (계획만 있으면 마크업을 다시 만들 수 있음)
+  if (j.plan.bundle.plan.engine === 'code') return `섹션 ${j.plan.bundle.plan.sections.length}개`;
   const total = j.plan.bundle.plan.sections.length;
   return `섹션 ${Object.keys(j.sections).length}/${total}`;
 }

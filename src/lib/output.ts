@@ -1,6 +1,8 @@
-// Claude 응답 해석(계획 <plan>/<style>/<notes>/<report>, 섹션 <section_html>/<section_css>/<section_notes>) + 자동 점검
+// Claude 응답 해석(계획 <plan>/<report> — 옛 방식은 <style>/<notes> 도, 섹션 <section_html>/<section_css>/<section_notes>) + 자동 점검
 import type { Plan, PsdSummary } from '../../shared/types';
 import { fontFaces, pretendardChars } from './fontLock';
+import { keepMap } from './codegen';
+import { GODO_MAX_W, godoMaxWidth } from '../../shared/width';
 
 /** 합친 결과 (점검·미리보기·저장에 쓰는 모양) */
 export interface ParsedOutput {
@@ -27,6 +29,56 @@ export interface ParsedPlan {
   report: string;
 }
 
+const toId = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN;
+  return Number.isFinite(n) ? Math.round(n) : null;
+};
+
+/** 구조 계획(engine 'code') 필드 정리: 형식이 틀린 항목은 버리고, 고칠 수 있는 것은 고친다 */
+function normalizeCodePlan(plan: Plan) {
+  const sections = plan.sections;
+  if (plan.photos != null) {
+    const list = Array.isArray(plan.photos) ? plan.photos : [];
+    plan.photos = list.flatMap((p) => {
+      if (!p || typeof p !== 'object') return [];
+      const y0 = Math.round(Number(p.y0));
+      const y1 = Math.round(Number(p.y1));
+      if (!Number.isFinite(y0) || !Number.isFinite(y1) || y0 >= y1) return [];
+      const role =
+        String(p.role ?? '')
+          .toLowerCase()
+          .replace(/[^a-z0-9-]+/g, '-')
+          .replace(/-+/g, '-')
+          .replace(/^-|-$/g, '') || 'photo';
+      let section = typeof p.section === 'string' ? p.section : '';
+      if (!sections.some((s) => s.id === section)) {
+        const home = sections.find((s) => y0 >= s.y0 && y0 < s.y1) ?? sections[sections.length - 1];
+        section = home.id;
+      }
+      return [{ section, y0, y1, role, alt: String(p.alt ?? '').trim() }];
+    });
+  }
+  if (plan.keepInImage != null) {
+    const list = Array.isArray(plan.keepInImage) ? plan.keepInImage : [];
+    plan.keepInImage = list.flatMap((k) => {
+      const id = toId(typeof k === 'object' && k ? k.id : k);
+      return id == null ? [] : [{ id, reason: String((typeof k === 'object' && k ? k.reason : '') ?? '') }];
+    });
+  }
+  if (plan.headings != null) {
+    const src = typeof plan.headings === 'object' && !Array.isArray(plan.headings) ? plan.headings : {};
+    const out: Record<string, 2 | 3 | 4> = {};
+    for (const [k, v] of Object.entries(src)) {
+      const id = toId(k);
+      const lv = Number(v);
+      if (id != null && (lv === 2 || lv === 3 || lv === 4)) out[String(id)] = lv;
+    }
+    plan.headings = out;
+  }
+  if (!plan.engine && (plan.photos || plan.keepInImage || plan.headings)) plan.engine = 'code';
+  if (plan.engine !== 'code') delete plan.engine;
+}
+
 export function parsePlanOutput(text: string): ParsedPlan {
   const raw = block(text, 'plan');
   let plan: Plan | null = null;
@@ -34,8 +86,10 @@ export function parsePlanOutput(text: string): ParsedPlan {
   if (raw) {
     try {
       plan = JSON.parse(stripFence(raw));
-      if (!Array.isArray(plan?.sections) || !plan.sections.length) throw new Error('sections 가 비어 있음');
+      if (!plan || typeof plan !== 'object') throw new Error('plan 이 객체가 아님');
+      if (!Array.isArray(plan.sections) || !plan.sections.length) throw new Error('sections 가 비어 있음');
       if (!Array.isArray(plan.images)) plan.images = [];
+      normalizeCodePlan(plan);
     } catch (e) {
       plan = null;
       error = `계획 JSON 해석 실패: ${(e as Error).message}`;
@@ -93,9 +147,10 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
       if (!(im.x0 >= 0 && im.y0 >= 0 && im.x1 <= summary.width && im.y1 <= summary.height && im.x1 > im.x0 && im.y1 > im.y0)) add('error', `${im.file}: 자르기 영역이 문서 밖이거나 비어 있음 (${im.x0},${im.y0}~${im.x1},${im.y1})`);
       if (im.y1 - im.y0 > 3000) add('warn', `${im.file}: 세로 ${im.y1 - im.y0}px — 3,000px 넘으면 나누기 (6절)`);
       if (im.source === 'layer' && im.layerId == null) add('error', `${im.file}: source "layer" 인데 layerId 없음`);
-      if (im.source === 'composite') {
+      // 코드 생성 방식의 kind 'txt' 는 글자 모양으로만 칠하는 배경(background-clip:text)이라 겹치는 게 맞다
+      if (im.source === 'composite' && !(plan.engine === 'code' && im.kind === 'txt')) {
         const hit = summary.texts.filter((t) => !(t.b[3] <= im.y0 || t.b[1] >= im.y1 || t.b[2] <= im.x0 || t.b[0] >= im.x1));
-        const baked = new Set((plan.bakedTexts || []).map((b) => b.layerId));
+        const baked = new Set([...(plan.bakedTexts || []).map((b) => b.layerId), ...(plan.engine === 'code' ? keepMap(summary, plan, !/<style/i.test(html)).keys() : [])]);
         const live = hit.filter((t) => !baked.has(t.id));
         if (live.length) add('warn', `${im.file}: 글자 포함 원본 합성인데 HTML 글자 ${live.length}개와 영역이 겹침 → 글자가 두 번 보일 수 있음 (${live.slice(0, 3).map((t) => t.lines[0]).join(' / ')})`);
       }
@@ -132,6 +187,18 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     if (/max\(\s*\d+(\.\d+)?px\s*,\s*calc\(/i.test(copy)) add('warn', 'max(…px, calc(…)) 최소 글자 크기 — 7-5: 글자만 커지면 배경과 어긋나므로 쓰지 않음');
     const goodomall = /<style[\s>]/i.test(copy);
     if (goodomall) {
+      // 7-2: 고도몰 상세 영역은 최대 860px → 최상위 max-width 는 min(PSD 폭, 860)px
+      const maxW = godoMaxWidth(summary.width);
+      const widths = [...copy.matchAll(/max-width\s*:\s*(\d+(?:\.\d+)?)px/gi)].map((m) => +m[1]);
+      if (!widths.includes(maxW)) add('warn', `최상위 max-width:${maxW}px 가 없음 — 고도몰 상세 영역 최대 ${GODO_MAX_W}px (7-2)${summary.width > GODO_MAX_W ? `, PSD 폭 ${summary.width}px 는 ${GODO_MAX_W}px 안에서 비율대로 줄임` : ''}`);
+      if (widths.some((w) => w > GODO_MAX_W)) add('warn', `max-width ${Math.max(...widths)}px — 고도몰 상세 영역은 최대 ${GODO_MAX_W}px (7-2)`);
+      // 7-6: 글자 선택 막기 — 상세 영역 안 전부, 예외 없음
+      if (!/user-select\s*:\s*none\s*!important/i.test(copy)) add('warn', '글자 선택 막기(user-select:none!important)가 없음 (7-6)');
+      if (/user-select\s*:\s*(text|auto|all)/i.test(copy)) add('warn', '선택을 다시 허용하는 user-select:text/auto/all 이 있음 — 7-6: 예외 없이 모두 막음');
+      // 클래스 없이 body·html·* 처럼 페이지 전체에 거는 선택자 (.dp-x * 는 괜찮음)
+      const styleText = [...copy.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]).join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/@import[^;]*;/gi, '');
+      const unscoped = [...styleText.matchAll(/([^{}]+)\{[^}]*user-select[^}]*\}/gi)].flatMap((m) => m[1].split(',')).map((s) => s.trim()).filter((s) => s && !/\.[\w-]/.test(s));
+      if (unscoped.length) add('error', `user-select 를 상세 영역 밖까지 걸었음 (${unscoped.slice(0, 3).join(', ')}) — 7-6 2항: 상세 영역(.prefix) 안만 (쇼핑몰 입력칸까지 막힘)`);
       // 7-2-1: 아이티켓 스킨이 상세 영역 h3 를 숨김 (.item_goods_sec h3{display:none})
       const h3 = (copy.match(/<h3[\s>]/gi) || []).length;
       if (h3) add('error', `복사 구간에 <h3> ${h3}개 — 아이티켓 스킨이 상세 영역 h3 를 숨김 (7-2-1). 소제목은 <p role="heading" aria-level="3">`);

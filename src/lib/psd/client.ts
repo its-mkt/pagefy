@@ -81,7 +81,13 @@ export class PsdWorker {
     this.worker.postMessage(msg);
   }
 
+  /** 워커를 끝내고, 기다리던 요청은 실패로 끝낸다 (안 그러면 기다리던 생성 흐름이 영원히 멈춤) */
   dispose() {
     this.worker.terminate();
+    const err = new Error('PSD 를 닫았습니다.');
+    this.openCb?.reject(err);
+    this.openCb = null;
+    this.pending.forEach((p) => p.reject(err));
+    this.pending.clear();
   }
 }

@@ -109,6 +109,8 @@ A_상세페이지/
 2. **글자 상자에 고정 높이 금지.** `height` 를 고정하지 않는다
 3. **폭**: 최상위 `width:100%; max-width:<PSD 폭>px; margin:0 auto`. 이미지는 `display:block; width:100%; height:auto`.
    고정 px 폭 박스를 만들지 않는다
+   - **고도몰 상세 영역은 최대 860px (사용자 지시 2026-11-20)** → 고도몰 최상위는 `max-width:min(PSD 폭, 860)px`.
+     PSD 가 860px 보다 넓으면(예: 1000px) 860px 안에서 전체가 비율대로 줄고, 좁으면 늘리지 않고 가운데에 둔다 (7-2 배율 예시)
 4. **한국어 줄바꿈**: `word-break: keep-all; overflow-wrap: anywhere;` 를 최상위에 건다
 5. **폰트 매핑**: PSD 폰트(PostScript 이름)를 웹폰트로 1:1 매핑한다. 아래 표에 없는 폰트가 나오면
    **임의로 대체하지 말고** 사용자에게 묻고, 정해지면 표에 추가한다
@@ -251,6 +253,11 @@ HTML 안 이미지는 모두 **NHN 이미지 호스팅에 올린 절대 URL(http
   @supports (width:1cqw) { .dp-zgx > * { --u: calc(100cqw / 860); } }        /* 860 = PSD 폭 */
   .dp-zgx h2 { font-size: calc(40 * var(--u)); }                             /* 40 = PSD px 값 */
   ```
+  PSD 폭이 860px 보다 넓으면 크기 숫자는 PSD px 그대로 두고 최대 폭과 대체값만 860 에 맞춘다 (예: PSD 1000px):
+  ```css
+  .dp-x { max-width: 860px; --u: min(0.86px, calc(100vw / 1000)); container-type: inline-size; } /* 0.86 = 860 / PSD 폭 */
+  @supports (width:1cqw) { .dp-x > * { --u: calc(100cqw / 1000); } }                            /* 1000 = PSD 폭 */
+  ```
 - 스킨 CSS 방어: 최상위 `.dp-…` 에 letter-spacing·text-transform·font-weight·font-size·padding 을 직접 고정하고,
   `.dp-… *` 에 `margin:0;padding:0;font:inherit;color:inherit;letter-spacing:inherit` 를 건다
   (최상위 div 자체가 스킨의 `div{…}` 를 받으면 안쪽 전체로 번진다 ― 첫 변환에서 확인)
@@ -347,6 +354,24 @@ HTML 하나를 7개 채널(스마트스토어·쿠팡·컴퓨존·11번가·G마
 5. **PSD 단계 제안**: 휴대폰에서 읽혀야 하는 문구는 PSD 에서 크게(본문 28px 이상 → 360px 폰에서 약 12px) 만들도록
    완료 보고 "검색 최적화 제안"에 적는다 (PSD 는 고치지 않는다)
 6. 고도몰 **모바일 상세설명**: 상품 등록의 "PC 상세설명과 동일" 사용을 기본으로 본다
+
+### 7-6. 글자 선택 막기 (사용자 지시 2026-11-20) ― 고도몰용
+
+1. **상세 영역 안 모든 요소의 글자 선택을 막는다 (예외 없음)**:
+   ```css
+   .dp-x,.dp-x *,.dp-x *::before,.dp-x *::after{-webkit-user-select:none!important;-moz-user-select:none!important;
+     -ms-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}
+   .dp-x::selection,.dp-x *::selection{background:transparent!important}   /* 혹시 선택돼도 보이지 않게 */
+   .dp-x img{-webkit-user-drag:none!important;user-drag:none!important}     /* 사진 끌어서 저장 막기 */
+   ```
+   - `!important` 로 거는 이유: 스킨 CSS 가 `user-select:text` 를 걸어도 다시 선택되지 않게
+   - 마우스 드래그·더블클릭·전체 선택(Ctrl+A)·휴대폰 길게 누르기 모두 해당
+   - (처음에 두었던 "모델명·사양만 선택 허용" 예외는 사용자 지시로 폐기)
+2. **범위는 상세 영역(`.dp-x`) 안만.** `body`·`*` 처럼 페이지 전체에 걸지 않는다 → 상품 옵션·수량 입력칸, 후기·문의 작성란까지 막혀 쇼핑몰이 고장 남
+3. **한계 (보안 기능 아님)**: 소스 보기·개발자 도구·읽기 모드·화면 캡처/OCR 로는 가져갈 수 있다. 가벼운 복사를 막는 정도
+4. 검색 최적화 영향 없음: 글자는 HTML 에 그대로 있어 검색엔진·AI 는 똑같이 읽는다 (숨긴 글자 아님)
+5. 확인: 실제 쇼핑몰 페이지에서 상세 영역 모든 요소의 계산값이 `none`, 글자 요소마다 드래그·더블클릭 → 선택 0, 전체 선택에 상세 글자 미포함
+   (PC Chromium·WebKit, iPhone·Android 엔진)
 
 ## 8. 검색 최적화 (SEO · GEO · AEO)
 

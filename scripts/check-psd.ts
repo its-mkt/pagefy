@@ -12,7 +12,7 @@ if (!file) {
 const t0 = Date.now();
 const buf = fs.readFileSync(file);
 const psd = readPsd(buf, { skipLayerImageData: true, skipCompositeImageData: true, skipThumbnail: true, useImageData: true });
-const s = extractSummary(psd, file.split(/[\/]/).pop() || file);
+const s = extractSummary(psd, file.split(/[\\/]/).pop() || file);
 console.log(`${s.fileName}  ${s.width}x${s.height}  ${s.dpi}ppi  (${Date.now() - t0}ms)`);
 console.log(`사용 레이어 ${s.layers.length} / 제외(숨김) ${s.hiddenCount} / 텍스트 ${s.texts.length}`);
 console.log('폰트:', s.fonts.map((f) => `${f.name}×${f.count}${f.bake ? ' (이미지로 굽기)' : f.mapped ? '' : ' (표에 없음)'}`).join(', '));

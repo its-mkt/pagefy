@@ -1,0 +1,53 @@
+// 진행 단계 — 한 줄 4칸, 지금 단계는 강조 바탕, 끝난 단계는 체크
+.stepper {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 2px;
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+    padding: 0.625rem 0.875rem;
+    background: var(--card);
+    color: var(--sub);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border-bottom: 2px solid transparent;
+
+    &.is-cur { color: var(--ink); font-weight: 600; border-color: var(--acc); }
+    &.is-done { color: var(--ink2); }
+  }
+
+  &__num {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 1.375rem;
+    height: 1.375rem;
+    background: var(--bg);
+    font-size: 0.75rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+
+    .is-cur & { background: var(--acc); color: #fff; }
+    .is-done & { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+  }
+
+  &__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  // 좁은 화면: 숫자만, 지금 단계만 글자
+  @media (max-width: 640px) {
+    display: flex;
+    &__item { flex: 0 0 2.75rem; justify-content: center; padding: 0.5rem; }
+    &__item.is-cur { flex: 1 1 auto; justify-content: flex-start; }
+    &__item:not(.is-cur) &__label { display: none; }
+  }
+}
+
+// 생성 시작 때 결과 칸으로 내릴 때 위쪽 고정 머리에 가리지 않게
+.app__anchor { scroll-margin-top: 5rem; }

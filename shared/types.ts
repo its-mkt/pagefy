@@ -50,6 +50,10 @@ export interface TextInfo {
   font: string;
   size: number;
   lineHeight: number;
+  /** 줄마다 행간이 다를 때만 — 줄 순서대로, 각 줄에서 가장 큰 행간 (규칙 4-1). lineHeight = 첫 줄 값 */
+  lineHeights?: number[];
+  /** 줄마다 그 앞의 문단 간격 px (첫 줄 0). 문단마다 spaceBefore/After 가 다를 때를 위해 — 하나라도 0 이 아닐 때만 */
+  paraGaps?: number[];
   weight: number;
   color: string;
   ls: number;
@@ -63,6 +67,10 @@ export interface TextInfo {
   lineTop: number;
   /** 정렬 기준 x (left=왼쪽, center=가운데, right=오른쪽) */
   anchorX: number;
+  /** 상자(단락) 텍스트의 상자 폭 px — 포토샵이 이 폭에서 자동 줄바꿈한다 */
+  boxWidth?: number;
+  /** 레이어·바깥 그룹 불투명도의 곱 (1 이면 없음) */
+  opacity?: number;
   /** 스타일이 섞여 있을 때만 */
   runs?: TextRun[];
   /** 문단 간격 (px) */
@@ -71,6 +79,8 @@ export interface TextInfo {
   /** 이미지로 구워야 할 이유 (뒤틀기·패스 위 글자 등) */
   bakeHint?: string;
   fx?: string[];
+  /** 드롭섀도 → CSS text-shadow 값 (문서 px, 변형 배율 적용). color 는 rgba() */
+  shadows?: { x: number; y: number; blur: number; color: string }[];
   /** 웹폰트 표에 없는 폰트 */
   unmappedFont?: boolean;
 }
@@ -129,6 +139,19 @@ export interface PlanImage {
   x1: number;
   y1: number;
   alt?: string;
+  /** source "notext" 위에 PSD 원본 합성(composite)을 덧그릴 영역들 [x0,y0,x1,y1] — 이미지에 남기는 글자(keepInImage)를 배경에 살린다 */
+  patches?: [number, number, number, number][];
+}
+
+/** 구조 계획(코드 생성 방식): 글자와 겹치지 않는 전체 폭 사진 띠 → <img alt> (규칙 8-2 7항) */
+export interface PlanPhoto {
+  /** 들어갈 섹션 id */
+  section: string;
+  y0: number;
+  y1: number;
+  /** 파일명용 영문 소문자·하이픈 (예: hero-product) */
+  role: string;
+  alt: string;
 }
 
 export interface PlanSection {
@@ -145,6 +168,17 @@ export interface Plan {
   bakedTexts?: { layerId: number; file: string; reason: string }[];
   /** 오픈마켓(인라인 전용)일 때 바깥 div 의 style 값 */
   wrapperStyle?: string;
+  /**
+   * 'code' = 구조 계획만 Claude 가 정하고 마크업은 프로그램이 PSD 값으로 만든다 (psd2html build.js 방식, 2026-11-23~).
+   * 없으면 예전 방식(섹션별로 Claude 가 마크업 작성) — 저장된 옛 작업용
+   */
+  engine?: 'code';
+  /** engine 'code': 전체 폭 사진 띠 */
+  photos?: PlanPhoto[];
+  /** engine 'code': 이미지(배경)에 그대로 남길 텍스트 레이어 — bakeHint 있는 것은 프로그램이 자동으로 더한다 */
+  keepInImage?: { id: number; reason: string }[];
+  /** engine 'code': 텍스트 레이어 id → 제목 단계 (2 = 섹션 대제목 h2, 3·4 = 소제목). 없는 레이어는 p */
+  headings?: Record<string, 2 | 3 | 4>;
 }
 
 /**
@@ -156,6 +190,8 @@ export interface PlanRequest {
   summary: PsdSummary;
   tiles: Tile[];
   extra?: string;
+  /** 구조 계획 수정 요청: 지난 계획 응답 원문 + 고칠 내용 */
+  revision?: { previous: string; feedback: string };
 }
 
 /** 계획 단계 결과 (화면이 응답에서 꺼낸 것) — 섹션 요청에 그대로 다시 보낸다 */

@@ -2,7 +2,7 @@
 // 용도: '글자 뺀 배경'(텍스트 레이어 제외) 만들기. 규칙 7-2: 섹션 배경 = 글자를 뺀 PSD 합성 이미지
 // 효과: 드롭 섀도·외부 광선·색상/그라데이션 오버레이·획은 effects.ts 로 근사. 조정 레이어·그 밖의 효과는 빠지고, 표준 외 혼합모드는 캔버스 합성으로 근사한다
 import type { Layer, PixelData, Psd } from 'ag-psd';
-import { isUsable } from './extract';
+import { groupBounds, isUsable } from './extract';
 import { hasRenderableEffects, renderEffects } from './effects';
 
 type Ctx = OffscreenCanvasRenderingContext2D;
@@ -54,9 +54,9 @@ function maskCanvas(layer: Layer, x0: number, y0: number, w: number, h: number):
   const src = m.imageData;
   const alpha = new Uint8ClampedArray(src.width * src.height * 4);
   const s = src.data;
-  for (let i = 0; i < src.width * src.height; i++) {
-    alpha[i * 4 + 3] = Number(s[i * 4]) > 255 ? Number(s[i * 4]) >> 8 : Number(s[i * 4]);
-  }
+  // 비트 깊이에 맞게 0~255 로 (16비트 = 0~65535, 32비트 = 0~1 실수) — 값 크기로 짐작하면 어두운 16비트 마스크·32비트 마스크가 틀어짐
+  const to8 = s instanceof Uint16Array ? (v: number) => v >> 8 : s instanceof Float32Array ? (v: number) => v * 255 : (v: number) => v;
+  for (let i = 0; i < src.width * src.height; i++) alpha[i * 4 + 3] = to8(s[i * 4]);
   const mc = new OffscreenCanvas(src.width, src.height);
   mc.getContext('2d')!.putImageData(new ImageData(alpha, src.width, src.height), 0, 0);
   const mx = (m.left ?? 0) - x0;
@@ -103,6 +103,8 @@ interface Rendered {
   ax: number;
   ay: number;
   opacity: number;
+  /** 레이어 불투명도만 (칠 불투명도 제외) — 클리핑된 레이어에 곱한다 (포토샵은 기준 레이어의 칠 불투명도를 클리핑에 적용하지 않음) */
+  baseOpacity: number;
   blend: GlobalCompositeOperation;
 }
 
@@ -119,16 +121,18 @@ function renderLayer(psd: Psd, layer: Layer, opt: RenderOptions): Rendered | nul
     applyMask(off, layer, 0, 0);
     if (fx) {
       // 그룹 효과: 그룹 영역만 잘라서 효과를 입힌다 (문서 전체 크기로 하면 느림)
-      const gl = Math.max(0, layer.left ?? 0), gt = Math.max(0, layer.top ?? 0);
-      const gw = Math.min(psd.width, layer.right ?? psd.width) - gl, gh = Math.min(psd.height, layer.bottom ?? psd.height) - gt;
+      // ag-psd 는 그룹 영역을 0 으로 주므로 하위 레이어 영역을 합쳐 쓴다 (하위 효과가 번진 만큼 여유)
+      const gb = groupBounds(layer, psd), pad = 200;
+      const gl = Math.max(0, gb[0] - pad), gt = Math.max(0, gb[1] - pad);
+      const gw = Math.min(psd.width, gb[2] + pad) - gl, gh = Math.min(psd.height, gb[3] + pad) - gt;
       if (gw > 0 && gh > 0) {
         const part = new OffscreenCanvas(gw, gh);
         part.getContext('2d')!.drawImage(off, gl, gt, gw, gh, 0, 0, gw, gh);
         const r = renderEffects(part, gl, gt, layer, globalAngleOf(psd), layer.fillOpacity ?? 1);
-        return { img: r.canvas, x: r.x, y: r.y, alpha: r.body, ax: r.x, ay: r.y, opacity: layer.opacity ?? 1, blend };
+        return { img: r.canvas, x: r.x, y: r.y, alpha: r.body, ax: r.x, ay: r.y, opacity: layer.opacity ?? 1, baseOpacity: layer.opacity ?? 1, blend };
       }
     }
-    return { img: off, x: 0, y: 0, alpha: off, ax: 0, ay: 0, opacity: layer.opacity ?? 1, blend };
+    return { img: off, x: 0, y: 0, alpha: off, ax: 0, ay: 0, opacity: layer.opacity ?? 1, baseOpacity: layer.opacity ?? 1, blend };
   }
 
   if (layer.adjustment) return null; // 조정 레이어는 반영하지 않는다 (경고로 안내)
@@ -142,9 +146,9 @@ function renderLayer(psd: Psd, layer: Layer, opt: RenderOptions): Rendered | nul
   if (fx) {
     // 칠 불투명도는 본체·오버레이에만, 레이어 불투명도는 효과 포함 전체에
     const r = renderEffects(lc, x0, y0, layer, globalAngleOf(psd), layer.fillOpacity ?? 1);
-    return { img: r.canvas, x: r.x, y: r.y, alpha: r.body, ax: r.x, ay: r.y, opacity: layer.opacity ?? 1, blend };
+    return { img: r.canvas, x: r.x, y: r.y, alpha: r.body, ax: r.x, ay: r.y, opacity: layer.opacity ?? 1, baseOpacity: layer.opacity ?? 1, blend };
   }
-  return { img: lc, x: x0, y: y0, alpha: lc, ax: x0, ay: y0, opacity: (layer.opacity ?? 1) * (layer.fillOpacity ?? 1), blend };
+  return { img: lc, x: x0, y: y0, alpha: lc, ax: x0, ay: y0, opacity: (layer.opacity ?? 1) * (layer.fillOpacity ?? 1), baseOpacity: layer.opacity ?? 1, blend };
 }
 
 function drawLayer(psd: Psd, layer: Layer, clipped: Layer[], ctx: Ctx, opt: RenderOptions) {
@@ -174,7 +178,7 @@ function drawLayer(psd: Psd, layer: Layer, clipped: Layer[], ctx: Ctx, opt: Rend
     t.globalCompositeOperation = 'destination-in';
     t.drawImage(r.alpha, 0, 0);
     ctx.save();
-    ctx.globalAlpha = cr.opacity * r.opacity;
+    ctx.globalAlpha = cr.opacity * r.baseOpacity;
     ctx.globalCompositeOperation = cr.blend;
     ctx.drawImage(tmp, r.ax, r.ay);
     ctx.restore();

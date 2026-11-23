@@ -29,12 +29,17 @@ export function pretendardChars(summary: PsdSummary): Map<number, Set<number>> {
     const set = out.get(w) ?? out.set(w, new Set()).get(w)!;
     for (const c of text) {
       const cp = c.codePointAt(0)!;
-      if (cp > 32) set.add(cp);
+      // 공백(U+20)·줄바꿈 없는 공백(U+A0)도 넣는다 — 폭이 폰트마다 달라 줄바꿈 위치가 바뀜
+      if (cp >= 32 && cp !== 127) set.add(cp);
     }
+    // 가운데·오른쪽 정렬의 끝 공백은 &nbsp;(U+A0)로 나간다(규칙 4-1) → 조각에 없으면 대체 폰트 폭으로 그려져 줄 위치가 몇 px 흔들린다
+    if (set.has(32)) set.add(0xa0);
   };
   for (const t of summary.texts) {
-    if (t.runs?.length) for (const r of t.runs) add(r.font, r.weight, r.text);
-    else add(t.font, t.weight, t.text);
+    // 모두 대문자(caps) 레이어는 화면에 대문자로 나오므로 대문자도 넣는다
+    const each = (font: string, weight: number, text: string) => add(font, weight, t.caps ? text + text.toUpperCase() : text);
+    if (t.runs?.length) for (const r of t.runs) each(r.font, r.weight, r.text);
+    else each(t.font, t.weight, t.text);
   }
   return out;
 }
@@ -72,7 +77,21 @@ export function fontFaces(chars: Map<number, Set<number>>): FontFaces {
 
 /** 'Pretendard' 로 시작하는 font-family 값 앞에 'dp-pretendard' 를 붙인다 (CSS·인라인 style 공통, 이미 붙었으면 그대로) */
 export function lockFamily(s: string): string {
-  return s.replace(/(font-family\s*:\s*)(['"]?)Pretendard(?: Variable)?\2(?=\s*[,;"'}]|\s*$)/gi, (_m, p: string, q: string) => `${p}'${FONT_FAMILY}',${q}Pretendard${q}`);
+  // @font-face 안의 font-family 는 글꼴 이름 선언이라 건드리지 않는다
+  return s
+    .split(/(@font-face\s*\{[^}]*\})/i)
+    .map((part, i) => (i % 2 ? part : lockPart(part)))
+    .join('');
+}
+
+// 뒤에 , ; } " ' !important 가 오거나 끝
+const FAMILY_RE = /(font-family\s*:\s*)(['"]?)Pretendard(?: Variable)?\2(?=\s*(?:[,;"'}!]|$))/gi;
+// font 단축 속성: font: 700 16px/1.5 'Pretendard', sans-serif (크기 뒤 첫 글꼴)
+const SHORTHAND_RE = /(\bfont\s*:[^;{}]*?\d(?:px|em|rem|%|pt)(?:\s*\/\s*[\d.]+(?:px|em|rem|%)?)?\s+)(['"]?)Pretendard(?: Variable)?\2(?=\s*(?:[,;"'}!]|$))/gi;
+
+function lockPart(s: string): string {
+  const put = (_m: string, p: string, q: string) => `${p}'${FONT_FAMILY}',${q}Pretendard${q}`;
+  return s.replace(FAMILY_RE, put).replace(SHORTHAND_RE, put);
 }
 
 export interface FontLock {
@@ -92,7 +111,9 @@ export function applyFontLock(prefix: string, summary: PsdSummary, modelCss: str
   let usedPretendard = /pretendard/i.test(modelCss);
   // @import 는 <style> 맨 앞에 있어야 효과가 있다 → 끌어올림. Pretendard 는 버전 고정한 대체 하나만 남긴다
   const rest = lockFamily(
-    modelCss.replace(/@import\s+(?:url\()?\s*['"]?([^'")\s;]+)['"]?\s*\)?[^;]*;\s*/gi, (m, url: string) => {
+    // 주소 안의 ; (Google Fonts 의 wght@400;700 등) 에서 끊기지 않게 따옴표·url() 단위로 읽는다
+    modelCss.replace(/@import\s+(?:url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)|"([^"]*)"|'([^']*)')[^;]*;\s*/gi, (m, a?: string, b?: string, c?: string, d?: string, e?: string) => {
+      const url = a ?? b ?? c ?? d ?? e ?? '';
       if (!/pretendard/i.test(url) && !others.includes(m.trim())) others.push(m.trim());
       return '';
     }),

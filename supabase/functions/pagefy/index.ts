@@ -20,13 +20,13 @@ let rulesCache: { text: string; at: number; updatedAt: string | null } | null = 
 async function loadRules() {
   if (rulesCache && Date.now() - rulesCache.at < 10 * 60_000) return rulesCache;
   try {
-    const r = await fetch(RULES_URL, { cache: 'no-store' });
+    const r = await fetch(RULES_URL, { cache: 'no-store', signal: AbortSignal.timeout(8_000) });
     if (!r.ok) throw new Error(`${r.status}`);
     const text = await r.text();
     // 마지막 커밋 시각 (규칙을 언제 반영했는지 화면에 표시)
     let updatedAt: string | null = null;
     try {
-      const c = await fetch('https://api.github.com/repos/its-mkt/pagefy/commits?path=rules/detail_to_markup.md&per_page=1', { headers: { 'User-Agent': 'pagefy' } });
+      const c = await fetch('https://api.github.com/repos/its-mkt/pagefy/commits?path=rules/detail_to_markup.md&per_page=1', { headers: { 'User-Agent': 'pagefy' }, signal: AbortSignal.timeout(5_000) });
       updatedAt = ((await c.json()) as { commit?: { committer?: { date?: string } } }[])[0]?.commit?.committer?.date ?? null;
     } catch {
       // 시각을 못 읽어도 규칙은 쓴다
@@ -34,6 +34,8 @@ async function loadRules() {
     rulesCache = { text, at: Date.now(), updatedAt };
   } catch (err) {
     if (!rulesCache) throw new Error(`규칙 파일을 읽지 못했습니다 (${RULES_URL}): ${(err as Error).message}`);
+    // 예전 규칙으로 계속 쓰되, 매 요청마다 다시 읽느라 느려지지 않게 1분 뒤에 다시 시도
+    rulesCache.at = Date.now() - 9 * 60_000;
   }
   return rulesCache!;
 }
@@ -42,7 +44,7 @@ const MODEL = Deno.env.get('PAGEFY_MODEL') || 'claude-opus-5-5';
 const EFFORT = (Deno.env.get('PAGEFY_EFFORT') || 'medium') as Effort;
 const RUN: RunConfig = { model: MODEL, effort: EFFORT, maxTokens: 32000, timeLimitMs: 140_000 };
 /** 계획은 섹션 경계·이미지 목록만 정하므로 가볍게 (2026-11-20: 작은 PSD 도 medium 은 140초 초과) */
-const PLAN_RUN: RunConfig = { ...RUN, effort: (Deno.env.get('PAGEFY_PLAN_EFFORT') || 'low') as Effort, maxTokens: 16000 };
+const PLAN_RUN: RunConfig = { ...RUN, effort: (Deno.env.get('PAGEFY_PLAN_EFFORT') || 'medium') as Effort, maxTokens: 16000 };
 const hasKey = () => !!Deno.env.get('ANTHROPIC_API_KEY');
 
 let client: Anthropic | null = null;
@@ -55,7 +57,8 @@ async function roleOf(token: string): Promise<string> {
   const hit = roleCache.get(token);
   if (hit && Date.now() - hit.at < 5 * 60_000) return hit.role;
   try {
-    const r = await fetch(`${ROLE_URL}?whoami=1&access_token=${encodeURIComponent(token)}`);
+    const r = await fetch(`${ROLE_URL}?whoami=1&access_token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) return 'unknown'; // 웹앱 오류는 기억하지 않는다 (5분간 "로그인 만료"로 굳지 않게)
     const j = (await r.json()) as { role?: string };
     const role = j.role || 'invalid';
     if (roleCache.size > 500) roleCache.clear();
@@ -110,7 +113,11 @@ function sse(req: Request, work: (send: (e: StreamEvent) => void, signal: AbortS
   return new Response(body, { headers: { ...corsHeaders(req), 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform' } });
 }
 
+/** 요청이 들어온 뒤 흐른 시간을 빼고 남은 시간만 Claude 에 준다 (권한 확인·규칙 읽기도 150초 안에 들어감) */
+const within = (cfg: RunConfig, t0: number): RunConfig => ({ ...cfg, timeLimitMs: Math.max(20_000, cfg.timeLimitMs - (Date.now() - t0)) });
+
 Deno.serve(async (req) => {
+  const t0 = Date.now();
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(req) });
   const path = new URL(req.url).pathname;
   const action = path.endsWith('/health') ? 'health' : path.endsWith('/plan') ? 'plan' : path.endsWith('/section') ? 'section' : '';
@@ -120,13 +127,15 @@ Deno.serve(async (req) => {
   const role = await roleOf(token);
   if (!ALLOWED_ROLES.has(role)) {
     const why: Record<string, string> = {
-      guest: '로그인이 필요합니다.',
-      invalid: '로그인이 만료됐습니다. 다시 로그인하세요.',
-      pending: '광고 인사이트 계정 승인을 기다리는 중입니다.',
-      none: '광고 인사이트에서 가입·승인 요청을 먼저 하세요.',
+      guest: '회사 계정으로 로그인해야 쓸 수 있습니다.',
+      invalid: '로그인이 만료됐습니다. 새로고침한 뒤 다시 로그인하세요.',
+      pending: '계정 승인을 기다리는 중입니다. 관리자가 승인하면 쓸 수 있습니다.',
+      none: '아직 사용 승인을 요청하지 않은 계정입니다. 계정 관리 화면(광고 인사이트)에서 승인을 요청하세요.',
+      rejected: '승인 요청이 거절된 계정입니다. 마케팅팀 관리자에게 문의하세요.',
+      revoked: '사용 권한이 해제된 계정입니다. 마케팅팀 관리자에게 문의하세요.',
       unknown: '권한을 확인하지 못했습니다. 잠시 뒤 다시 시도하세요.',
     };
-    return json(req, role === 'guest' || role === 'invalid' ? 401 : 403, { error: why[role] || '승인된 계정만 쓸 수 있습니다.', role });
+    return json(req, role === 'guest' || role === 'invalid' ? 401 : 403, { error: why[role] || '승인된 회사 계정만 쓸 수 있습니다.', role });
   }
 
   if (action === 'health') {
@@ -157,12 +166,16 @@ Deno.serve(async (req) => {
     if (problem) return json(req, 400, { error: problem });
     return sse(req, async (send, signal) => {
       send({ type: 'status', message: `계획 요청 중… (타일 ${b.tiles.length}장, 텍스트 ${b.summary.texts.length}개)` });
-      await runClaude(getClient(), PLAN_RUN, buildSystem((await loadRules()).text), buildPlanMessages(b), send, signal);
+      const system = buildSystem((await loadRules()).text);
+      await runClaude(getClient(), within(PLAN_RUN, t0), system, buildPlanMessages(b), send, signal);
     });
   }
 
   const b = body as SectionRequest;
   const problem = validateSection(b);
   if (problem) return json(req, 400, { error: problem });
-  return sse(req, async (send, signal) => runClaude(getClient(), RUN, buildSystem((await loadRules()).text), buildSectionMessages(b), send, signal));
+  return sse(req, async (send, signal) => {
+    const system = buildSystem((await loadRules()).text);
+    await runClaude(getClient(), within(RUN, t0), system, buildSectionMessages(b), send, signal);
+  });
 });
