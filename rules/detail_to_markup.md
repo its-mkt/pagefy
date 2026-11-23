@@ -69,7 +69,7 @@ A_상세페이지/
 
 | PSD 레이어 | HTML/CSS 변환 | 이미지로 굽는(bake) 경우 |
 |---|---|---|
-| **텍스트 레이어** | `h2`·`h3`·`p`·`span` 등 실제 텍스트. 크기·행간·자간·색·정렬을 PSD 값으로 지정 | 뒤틀기(warp)·3D·패턴/그라데이션 채운 장식 글자·이미지 클리핑된 글자·로고 타입 → 이미지로 내보내고 `alt` 에 원문 그대로 |
+| **텍스트 레이어** | `h2`·`h3`·`p`·`span` 등 실제 텍스트. 크기·행간·자간·색·정렬을 PSD 값으로 지정. **이미지·그라데이션 레이어가 클리핑 마스크로 얹힌 글자**(제품명 제목 등)도 고도몰용은 실제 글자로 두고, 글자 상자 영역의 PSD 합성 이미지를 `background-clip:text` 로 글자 모양에만 칠해 PSD 색을 그대로 낸다 (검색·제목 유지, 사용자 지시 2026-11-23) | 뒤틀기(warp)·3D·패턴/그라데이션 채운 장식 글자·로고 타입 → 이미지로 내보내고 `alt` 에 원문 그대로. 클리핑된 글자는 **오픈마켓용만** 이미지로 (에디터가 `background-clip` 을 지울 수 있음) |
 | **이미지(픽셀·스마트오브젝트)** | `<img>` (사진 JPG, 투명이 필요하면 PNG) | 위에 조정 레이어·클리핑·비표준 혼합모드가 걸려 있으면 **겹친 결과를 합쳐서** 한 장으로 내보낸다 |
 | **스타일 레이어 ― 단색 채우기·사각형 셰이프** | `background-color`, 둥근 모서리는 `border-radius`, 획은 `border` | 사각형이 아닌 자유 도형 → PNG |
 | **스타일 레이어 ― 그라데이션 채우기** | `linear-gradient` / `radial-gradient` (각도·색 정지점 PSD 값 그대로) | 노이즈·디더가 보이는 복잡한 그라데이션, 또는 오픈마켓용에서 그라데이션이 지워지는 경우 → 이미지 |
@@ -359,16 +359,20 @@ HTML 하나를 7개 채널(스마트스토어·쿠팡·컴퓨존·11번가·G마
 
 1. **상세 영역 안 모든 요소의 글자 선택을 막는다 (예외 없음)**:
    ```css
-   .dp-x,.dp-x *,.dp-x *::before,.dp-x *::after{-webkit-user-select:none!important;-moz-user-select:none!important;
-     -ms-user-select:none!important;user-select:none!important;-webkit-touch-callout:none!important}
-   .dp-x::selection,.dp-x *::selection{background:transparent!important}   /* 혹시 선택돼도 보이지 않게 */
-   .dp-x img{-webkit-user-drag:none!important;user-drag:none!important}     /* 사진 끌어서 저장 막기 */
+   .dp-x:not(#dp-x1):not(#dp-x2), .dp-x:not(#dp-x1):not(#dp-x2) *,
+   .dp-x:not(#dp-x1):not(#dp-x2) *::before, .dp-x:not(#dp-x1):not(#dp-x2) *::after{
+     -webkit-user-select:none!important;-moz-user-select:none!important;-ms-user-select:none!important;
+     user-select:none!important;-webkit-touch-callout:none!important}
+   .dp-x:not(#dp-x1):not(#dp-x2)::selection, .dp-x:not(#dp-x1):not(#dp-x2) *::selection{background:transparent!important}
+   .dp-x:not(#dp-x1):not(#dp-x2) img{-webkit-user-drag:none!important}
    ```
-   - `!important` 로 거는 이유: 스킨 CSS 가 `user-select:text` 를 걸어도 다시 선택되지 않게
-   - 마우스 드래그·더블클릭·전체 선택(Ctrl+A)·휴대폰 길게 누르기 모두 해당
+   - `<img>` 에는 `draggable="false"` 도 넣는다 (Firefox 는 `-webkit-user-drag` 를 모름)
+   - `!important` + `:not(#없는아이디)` 두 번 = ID 두 개 수준 우선순위 → 스킨이 `#아이디 *{user-select:text!important}` 로 덮어도 진다
+     (2026-11-20 아이티켓·온코어 실페이지에 그런 규칙을 일부러 넣고 시험 → 선택 가능 요소 0)
    - (처음에 두었던 "모델명·사양만 선택 허용" 예외는 사용자 지시로 폐기)
 2. **범위는 상세 영역(`.dp-x`) 안만.** `body`·`*` 처럼 페이지 전체에 걸지 않는다 → 상품 옵션·수량 입력칸, 후기·문의 작성란까지 막혀 쇼핑몰이 고장 남
-3. **한계 (보안 기능 아님)**: 소스 보기·개발자 도구·읽기 모드·화면 캡처/OCR 로는 가져갈 수 있다. 가벼운 복사를 막는 정도
+3. **한계 (보안 기능 아님, CSS 로 못 막음)**: 소스 보기·개발자 도구·읽기 모드·인쇄/PDF·번역·찾기(Ctrl+F)·화면 캡처/OCR(라이브 텍스트·Lens)·
+   안드로이드 이미지 길게 눌러 저장. iOS Safari 에서 바깥부터 드래그한 뒤 복사하면 들어갈 수 있다는 보고가 있음(실기기 미검증). 일반 사용자의 드래그·길게 누르기를 막는 정도
 4. 검색 최적화 영향 없음: 글자는 HTML 에 그대로 있어 검색엔진·AI 는 똑같이 읽는다 (숨긴 글자 아님)
 5. 확인: 실제 쇼핑몰 페이지에서 상세 영역 모든 요소의 계산값이 `none`, 글자 요소마다 드래그·더블클릭 → 선택 0, 전체 선택에 상세 글자 미포함
    (PC Chromium·WebKit, iPhone·Android 엔진)

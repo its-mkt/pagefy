@@ -360,8 +360,10 @@ export function keepMap(summary: PsdSummary, plan: Plan, openmarket = false): Ma
     if (r) m.set(t.id, r);
   }
   // 고도몰은 클리핑된 글자를 background-clip:text 로 PSD 색 그대로 칠한다. 오픈마켓 에디터는 그 CSS 를 지울 수 있어 이미지로
-  if (openmarket) for (const id of clippedTexts(summary)) if (!m.has(id)) m.set(id, '클리핑 마스크로 칠한 글자 (오픈마켓은 CSS 로 못 옮김)');
-  for (const k of plan.keepInImage || []) if (!m.has(k.id)) m.set(k.id, k.reason || '계획에서 이미지로');
+  const clipped = clippedTexts(summary);
+  if (openmarket) for (const id of clipped) if (!m.has(id)) m.set(id, '클리핑 마스크로 칠한 글자 (오픈마켓은 CSS 로 못 옮김)');
+  // 고도몰은 클리핑된 글자를 계획이 이미지로 남기라고 해도 실제 글자로 둔다 (규칙 4절 표, 사용자 지시 2026-11-23: 제목·검색 유지)
+  for (const k of plan.keepInImage || []) if (!m.has(k.id) && (openmarket || !clipped.has(k.id))) m.set(k.id, k.reason || '계획에서 이미지로');
   return m;
 }
 
@@ -484,6 +486,12 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
     for (const t of secTexts) {
       const lv = headings[String(t.id)];
       if (lv) levelOf.set(t.id, lv);
+    }
+    // 계획이 이미지로 남기려던 클리핑 글자(제품명 제목 등)를 실제 글자로 되돌렸고 섹션에서 가장 큰 글자면 대제목으로 (원래 h2 는 소제목으로)
+    const biggest = secTexts.length ? secTexts.reduce((a, b) => (b.size > a.size ? b : a)) : null;
+    if (biggest && goodomall && clipped.has(biggest.id) && (plan.keepInImage || []).some((k) => k.id === biggest.id) && levelOf.get(biggest.id) !== 2) {
+      for (const [id, lv] of levelOf) if (lv === 2) levelOf.set(id, 3);
+      levelOf.set(biggest.id, 2);
     }
     if (secTexts.length && ![...levelOf.values()].includes(2)) {
       const big = secTexts.reduce((a, b) => (b.size > a.size ? b : a));

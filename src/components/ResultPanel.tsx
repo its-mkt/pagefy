@@ -326,9 +326,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
 type View = 'compare' | 'psd' | 'html';
 
 const VIEW_HINT: Record<View, string> = {
-  compare: '왼쪽 PSD 합성 / 오른쪽 생성 HTML (이미지는 아직 업로드 전이라 로컬 파일로 표시)',
-  psd: 'PSD 합성 렌더 (원본 이미지)',
-  html: '생성 HTML — 마우스로 끌어 글자가 긁히는지 보세요. 긁히지 않는 글자는 이미지로 구운 것입니다.',
+  compare: '왼쪽(회색 이름표) = PSD 원본 이미지, 오른쪽(파란 이름표) = 만들어진 HTML 마크업. 두 쪽이 같아 보이면 잘 된 것입니다. (HTML 의 이미지는 업로드 전이라 이 PC 파일로 표시)',
+  psd: 'PSD 원본 이미지만 봅니다 (디자인 그대로의 그림).',
+  html: '만들어진 HTML 마크업만 봅니다 — 마우스로 끌어 글자가 긁히는지 보세요. 긁히지 않는 글자는 이미지로 구운 것입니다.',
 };
 
 const countChars = (t: string) => t.replace(/\s/g, '').length;
@@ -339,10 +339,11 @@ function ensureSelStyle(doc: Document) {
   const st = doc.createElement('style');
   st.id = 'pf-sel';
   // 규칙 7-6 글자 선택 막기(.prefix * {user-select:none!important}, ::selection 투명)를 미리보기에서만 푼다 → "글자 전체 선택"으로 실제 글자인지 확인.
-  // 상세 CSS 도 !important 라 특이도가 더 높아야 이긴다: html:root body * = (0,1,2) > .prefix * = (0,1,1)
+  // 상세 CSS 도 !important 라 특이도가 더 높아야 이긴다: 규칙 7-6 은 .prefix:not(#a):not(#b) * = (2,1,0) →
+  // html:root body:not(#pf-s1):not(#pf-s2):not(#pf-s3) * = (3,1,2) 로 이긴다
   st.textContent =
-    'html:root body *,html:root body *::before,html:root body *::after{-webkit-user-select:text!important;user-select:text!important}' +
-    'html:root body ::selection,html:root body *::selection{background:rgba(45,95,209,.45)!important;color:inherit}';
+    'html:root body:not(#pf-s1):not(#pf-s2):not(#pf-s3) *,html:root body:not(#pf-s1):not(#pf-s2):not(#pf-s3) *::before,html:root body:not(#pf-s1):not(#pf-s2):not(#pf-s3) *::after{-webkit-user-select:text!important;user-select:text!important}' +
+    'html:root body:not(#pf-s1):not(#pf-s2):not(#pf-s3) ::selection,html:root body:not(#pf-s1):not(#pf-s2):not(#pf-s3) *::selection{background:rgba(45,95,209,.45)!important;color:inherit}';
   doc.head.appendChild(st);
 }
 
@@ -445,16 +446,28 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
         </div>
       )}
       <p className="hint preview__hint">{VIEW_HINT[view]}</p>
-      <div className="preview__cols" style={{ zoom }}>
+      <div className="preview__cols">
         {(view === 'psd' || (view === 'compare' && width === W)) && (
-          <div className="preview__col">
-            <img src={loaded.compositeUrl} width={W} alt="PSD 합성 렌더" />
-          </div>
+          <figure className="preview__col preview__col--psd">
+            <figcaption className="preview__tag">
+              <b>PSD 원본 이미지</b>
+              <span>디자인 그대로의 그림 · 글자를 긁을 수 없음</span>
+            </figcaption>
+            <div style={{ zoom }}>
+              <img src={loaded.compositeUrl} width={W} alt="PSD 합성 렌더" />
+            </div>
+          </figure>
         )}
         {showHtml && (
-          <div className="preview__col">
-            <iframe ref={frame} title="생성 HTML 미리보기" sandbox="allow-same-origin" scrolling="no" srcDoc={result.previewHtml} style={{ width, height }} />
-          </div>
+          <figure className="preview__col preview__col--html">
+            <figcaption className="preview__tag">
+              <b>HTML 마크업 (결과물)</b>
+              <span>쇼핑몰에 들어갈 웹페이지 · {width === W ? `PSD 폭 ${W}px` : `모바일 ${width}px`}</span>
+            </figcaption>
+            <div style={{ zoom }}>
+              <iframe ref={frame} title="생성 HTML 미리보기" sandbox="allow-same-origin" scrolling="no" srcDoc={result.previewHtml} style={{ width, height }} />
+            </div>
+          </figure>
         )}
       </div>
     </div>

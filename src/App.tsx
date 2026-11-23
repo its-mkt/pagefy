@@ -172,12 +172,13 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!CLOUD) return;
+    // 로그인 상태를 읽기 전(authReady 전)에는 판정하지 않는다 — 안 그러면 첫 화면에 몇 초간 "승인된 계정만" 안내가 잘못 뜬다
+    if (!CLOUD || !authReady) return;
     // 약 1시간마다 토큰이 갱신될 때 role 을 null 로 비우면 작업 화면이 로그인 화면으로 바뀌어 결과가 사라진다 → 확인이 끝날 때까지 이전 역할 유지
     // 확인 요청이 잠깐 실패(null)하면, 이미 승인된 역할이 있었을 때는 그대로 둔다 (처음 확인일 때만 invalid)
     if (session) fetchRole(session.access_token).then((r) => setRole((prev) => r ?? (canUse(prev) ? prev : 'invalid')));
     else setRole('guest');
-  }, [session?.access_token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [authReady, session?.access_token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allowed = canUse(role);
   useEffect(() => {
@@ -670,7 +671,7 @@ export default function App() {
   }, [running]);
 
   // 토큰 갱신 중(role 확인 중)이라도 이미 로그인돼 있으면 작업 화면을 유지한다
-  const showLogin = CLOUD && authReady && !allowed && !(session && role === null);
+  const showLogin = CLOUD && authReady && !allowed && !(session && (role === null || role === 'guest'));
 
   return (
     <div className="app">
