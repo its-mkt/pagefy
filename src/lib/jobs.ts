@@ -423,6 +423,26 @@ async function fillOldInfo(rows: Job[]) {
   }
 }
 
+/**
+ * 주소(?job=…)로 연 작업 찾기. 계정이면 계정에서(이 브라우저 사본보다 새로울 수 있음), 아니면 브라우저 사본.
+ * 휴지통에 있거나 없는 작업(다른 계정 것 포함)은 null. noFile = 이 브라우저에 PSD 원본이 없음
+ */
+export async function jobById(id: string): Promise<Job | null> {
+  const cloud = await cloudReady();
+  const keys = new Set((await req((await store('files')).getAllKeys())) as string[]);
+  const local = await getLocal(id);
+  const mark = (j: Job): Job => ({ ...j, noFile: !keys.has(j.fileKey) });
+  const usableLocal = local && !local.deletedAt && (!uid || !local.owner || local.owner === uid) ? mark(local) : null;
+  if (!cloud) return usableLocal;
+  try {
+    // updatedAt 을 무한대로 둔 가벼운 사본 → fullJob 이 계정에서 읽는다 (네트워크 오류면 브라우저 사본)
+    const j = await fullJob({ id, lite: true, updatedAt: Infinity } as Job);
+    return j.deletedAt ? null : mark(j);
+  } catch {
+    return null;
+  }
+}
+
 /** 열기 전에 전체 작업 받기: 가벼운 사본이면 브라우저 사본(같거나 더 새로우면) 또는 계정에서 전체를 읽는다 */
 export async function fullJob(j: Job): Promise<Job> {
   if (!j.lite) return j;

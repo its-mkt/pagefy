@@ -11,7 +11,7 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, fileKeyOf, fullJob, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
+import { busyJobIds, deleteJob, fileKeyOf, fullJob, jobById, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
 import Header from './components/Header';
 import JobsPanel from './components/JobsPanel';
 import SavedView from './components/SavedView';
@@ -70,6 +70,26 @@ export interface Result {
   previewHtml: string;
   checks: Check[];
   layout?: LayoutResult;
+}
+
+// ───── 주소(쿼리) ↔ 화면 ─────
+// GitHub Pages 라 경로(/pagefy/job/…)는 새로고침하면 404 → 쿼리로 둔다
+//   /pagefy/                    첫 화면
+//   /pagefy/?job=<작업 id>       작업 열기 (새로고침해도 다시 열림 — 저장된 계획으로 다시 만들어 Claude 비용 없음)
+//   /pagefy/?job=<id>&view=html  PSD 없이 저장된 HTML 결과 보기
+//   /pagefy/?trash              휴지통
+interface Route {
+  job?: string;
+  html?: boolean;
+  trash?: boolean;
+}
+function readRoute(): Route {
+  const q = new URLSearchParams(window.location.search);
+  return { job: q.get('job') || undefined, html: q.get('view') === 'html', trash: q.has('trash') };
+}
+function routeUrl(r: Route) {
+  const q = r.job ? `?job=${encodeURIComponent(r.job)}${r.html ? '&view=html' : ''}` : r.trash ? '?trash' : '';
+  return window.location.pathname + q;
 }
 
 /** 마지막으로 확인한 권한 (계정 id 와 함께) — 다음 접속 때 화면을 바로 열기 위함 */
@@ -480,6 +500,88 @@ export default function App() {
     workerRef.current?.dispose();
     workerRef.current = null;
   }
+
+  // ───── 주소 ↔ 화면 맞추기 ─────
+  /** 주소를 읽어 화면을 맞춘 뒤부터 화면 → 주소 반영 (처음 열 때 주소의 ?job 을 지우지 않게) */
+  const routeReady = useRef(false);
+  /** 주소대로 화면을 바꾸는 중 — 그동안 바뀌는 중간 상태를 주소에 쓰지 않는다 */
+  const routeBusy = useRef(false);
+  const viewJobRef = useRef(viewJob);
+  viewJobRef.current = viewJob;
+  const trashOpenRef = useRef(false);
+  trashOpenRef.current = trash !== null;
+  /** 지금 화면에 맞는 주소 */
+  const currentRoute = (): Route => (viewJobRef.current ? { job: viewJobRef.current.id, html: true } : jobRef.current ? { job: jobRef.current.id } : trashOpenRef.current ? { trash: true } : {});
+  function syncUrl(replace = false) {
+    const want = routeUrl(currentRoute());
+    if (want === window.location.pathname + window.location.search) return;
+    if (replace) window.history.replaceState(null, '', want);
+    else window.history.pushState(null, '', want);
+  }
+  // 화면이 바뀌면 주소에 쌓는다 (뒤로 가기로 돌아올 수 있게)
+  useEffect(() => {
+    if (routeReady.current && !routeBusy.current) syncUrl();
+  }, [viewJob, jobId, trash !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 주소대로 화면 맞추기 (처음 열 때·뒤로/앞으로 가기) */
+  async function applyRoute(r: Route) {
+    if (running || loading) {
+      // 만드는 중엔 떠나지 않는다 — 주소를 지금 화면으로 되돌린다
+      syncUrl();
+      setLoadError('만드는 중에는 다른 화면으로 갈 수 없습니다. 멈추거나 끝난 뒤에 이동하세요.');
+      return;
+    }
+    routeBusy.current = true;
+    try {
+      if (!r.job) {
+        if (loadedRef.current || viewJobRef.current) closeCurrent();
+        if (r.trash) await openTrash();
+        else setTrash(null);
+        return;
+      }
+      if (!r.html && jobRef.current?.id === r.job && loadedRef.current) {
+        setViewJob(null);
+        return;
+      }
+      if (r.html && viewJobRef.current?.id === r.job) return;
+      const job = await jobById(r.job);
+      if (!job) {
+        setLoadError('주소의 작업을 찾지 못했습니다 (지워졌거나 휴지통에 있는 작업, 또는 다른 계정의 작업).');
+        return;
+      }
+      if (r.html) {
+        if (loadedRef.current) closeCurrent();
+        await showSaved(job);
+      } else if (!job.noFile) await openJob(job);
+      else if (listInfo(job).html) {
+        // 이 PC 에 PSD 원본이 없으면 저장된 결과(HTML)라도 보여 준다
+        if (loadedRef.current) closeCurrent();
+        await showSaved(job);
+        setLoadError('이 PC 브라우저에 PSD 원본이 없어 저장된 결과를 보여 줍니다. 고치려면 작업 목록의 「PSD 고르기」로 같은 PSD를 골라 주세요.');
+      } else setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 고르기」로 같은 PSD를 골라 주세요.');
+    } finally {
+      routeBusy.current = false;
+      // 화면이 다 바뀐 뒤 주소를 실제 화면에 맞춘다 (못 연 작업이면 첫 화면 주소로)
+      requestAnimationFrame(() => syncUrl(true));
+    }
+  }
+  const applyRouteRef = useRef(applyRoute);
+  applyRouteRef.current = applyRoute;
+  // 처음 열 때: 권한 확인·작업 목록을 읽은 뒤 주소대로
+  useEffect(() => {
+    if (!allowed || jobsLoading || routeReady.current) return;
+    routeReady.current = true;
+    const r = readRoute();
+    if (r.job || r.trash) applyRouteRef.current(r);
+  }, [allowed, jobsLoading]);
+  // 뒤로/앞으로 가기
+  useEffect(() => {
+    const onPop = () => {
+      if (routeReady.current) applyRouteRef.current(readRoute());
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   /** 머리의 Pagefy 를 누르면 첫 화면(PSD 올리기 + 최근 작업)으로. 생성 중·읽는 중엔 작업을 잃지 않게 그대로 둔다 */
   function goHome() {
