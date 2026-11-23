@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import type { GenerateMeta, HealthInfo, PlanBundle, PsdSummary, SectionRequest, UsageInfo } from '../shared/types';
-import { CLOUD, collect, fetchHealth, uploadCheck, uploadFiles, uploadVerify, type UploadTarget } from './lib/api';
+import { CLOUD, collect, fetchHealth, uploadCheck, uploadFiles, uploadRemove, uploadVerify, type UploadTarget } from './lib/api';
 import { canUse, fetchRole, supabase, type Role } from './lib/supabase';
 import { bitmapToUrl, cutImages, localizeHtml, type CutImage } from './lib/images';
 import { checkOutput, parsePlanOutput, parseSectionOutput, type Check, type ParsedOutput } from './lib/output';
@@ -11,9 +11,10 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, fileKeyOf, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
+import { busyJobIds, deleteJob, fileKeyOf, fullJob, listTrash, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
 import Header from './components/Header';
 import JobsPanel from './components/JobsPanel';
+import SavedView from './components/SavedView';
 import LoginPanel from './components/LoginPanel';
 import UploadPanel from './components/UploadPanel';
 import SummaryPanel from './components/SummaryPanel';
@@ -64,6 +65,8 @@ export interface Result {
   layout?: LayoutResult;
 }
 
+/** 마지막으로 확인한 권한 (계정 id 와 함께) — 다음 접속 때 화면을 바로 열기 위함 */
+const ROLE_KEY = 'pagefy.role';
 const DEFAULT_PUBLIC_ROOT = 'https://itketweb.hgodo.com/data/detail';
 /** 섹션을 동시에 몇 개씩 만들지 (API 요청 한도 고려) */
 const CONCURRENCY = 4;
@@ -140,6 +143,8 @@ export default function App() {
   }));
   const [run, setRun] = useState<RunState>(emptyRun);
   const [result, setResult] = useState<Result | null>(null);
+  /** PSD 원본 없이 보는 저장된 결과 */
+  const [viewJob, setViewJob] = useState<Job | null>(null);
   const [revisionCount, setRevisionCount] = useState(0);
   // 이미지 서버 업로드 진행 (결과가 바뀌면 처음 상태로)
   const [upload, setUpload] = useState<UploadState>({ phase: 'idle', done: 0, total: 0 });
@@ -147,10 +152,24 @@ export default function App() {
   const uploadAbortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     // 결과가 바뀌면(수정·새 rev·다른 작업) 진행 중 업로드를 멈추고 처음 상태로
-    uploadRunRef.current++;
+    const runId = ++uploadRunRef.current;
     uploadAbortRef.current?.abort();
     setUpload({ phase: 'idle', done: 0, total: 0 });
-  }, [result?.baseUrl, result?.images]);
+    // 다시 연 작업: 이미지 서버에 이 작업이 올린 폴더가 그대로 있으면 「올려 둔 상태」로 보여 준다 → 되돌리기 링크가 다시 보임.
+    // 이름·크기가 이 결과 이미지와 모두 같을 때만 (일부만 있으면 「HTML 복사」가 이어서 올림). 조용히 확인하고 실패해도 화면은 그대로
+    const r = result;
+    if (!r || !health?.upload || r.bundle.plan.engine !== 'code' || !r.images.length) return;
+    const ac = new AbortController();
+    uploadAbortRef.current = ac;
+    (async () => {
+      const token = await uploadToken(jobRef.current?.id ?? r.baseUrl, r.meta.rev);
+      const remote = await uploadCheck({ channel: r.meta.channel, slug: r.meta.slug, rev: r.meta.rev, publicRoot: r.meta.publicRoot, token }, ac.signal);
+      if (runId !== uploadRunRef.current || ac.signal.aborted || !remote.exists || !remote.owned) return;
+      const sizes = new Map(remote.files.map((f) => [f.file, f.size]));
+      const all = r.images.length === remote.files.length && r.images.every((im) => sizes.get(im.file) === im.blob.size);
+      if (all) setUpload({ phase: 'done', done: r.images.length, total: r.images.length, restored: true });
+    })().catch(() => {});
+  }, [result?.baseUrl, result?.images, health?.upload]);
   const abortRef = useRef<AbortController | null>(null);
   // 작업 목록 (IndexedDB) — 화면에 보이는 목록과, 지금 열린 작업의 최신본
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -169,14 +188,55 @@ export default function App() {
   // 작업 목록: 계정 저장이면 최근 20개씩 ("더 보기"로 늘림). quick = 방금 저장한 것만 반영 (계정을 다시 읽지 않음)
   const [moreJobs, setMoreJobs] = useState(false);
   const jobLimitRef = useRef(20);
-  const refreshJobs = (quick = false) =>
-    listJobsPage(jobLimitRef.current, quick).then(
-      (p) => {
-        setJobs(p.jobs);
-        setMoreJobs(p.more);
-      },
-      (e) => console.warn('[jobs]', e),
-    );
+  // 계정에서 목록을 읽는 동안 (처음 열 때·더 보기) 작업 목록에 불러오는 중 표시. quick 은 브라우저 사본만 합쳐 금방 끝나 표시하지 않는다
+  const [jobsLoading, setJobsLoading] = useState(true);
+  // 휴지통: 열면 목록(trash), 닫혀 있으면 null. 개수는 최근 작업 머리에 표시
+  const [trash, setTrash] = useState<Job[] | null>(null);
+  const [trashN, setTrashN] = useState(0);
+  const [trashLoading, setTrashLoading] = useState(false);
+  const refreshTrashN = () => trashCount().then(setTrashN, () => {});
+  async function openTrash() {
+    setTrash((t) => t ?? []);
+    setTrashLoading(true);
+    try {
+      const list = await listTrash();
+      setTrash(list);
+      setTrashN(list.length);
+    } catch (e) {
+      console.warn('[jobs] 휴지통', e);
+    } finally {
+      setTrashLoading(false);
+    }
+  }
+  async function restoreFromTrash(id: string) {
+    try {
+      await untrashJob(id);
+    } catch (e) {
+      setLoadError((e as Error).message);
+    }
+    await openTrash();
+    refreshJobs();
+  }
+  async function purgeFromTrash(id: string) {
+    await deleteJob(id).catch((e) => setLoadError(`영구 삭제하지 못했습니다 (${(e as Error).message})`));
+    await openTrash();
+  }
+  const refreshJobs = (quick = false) => {
+    if (!quick) setJobsLoading(true);
+    const show = (p: { jobs: Job[]; more: boolean }) => {
+      setJobs(p.jobs);
+      setMoreJobs(p.more);
+    };
+    return listJobsPage(jobLimitRef.current, quick, show)
+      .then(
+        (p) => {
+          setJobs(p.jobs);
+          setMoreJobs(p.more);
+        },
+        (e) => console.warn('[jobs]', e),
+      )
+      .finally(() => !quick && setJobsLoading(false));
+  };
   const showMoreJobs = () => {
     jobLimitRef.current += 20;
     refreshJobs();
@@ -205,8 +265,17 @@ export default function App() {
     if (!CLOUD || !authReady) return;
     // 약 1시간마다 토큰이 갱신될 때 role 을 null 로 비우면 작업 화면이 로그인 화면으로 바뀌어 결과가 사라진다 → 확인이 끝날 때까지 이전 역할 유지
     // 확인 요청이 잠깐 실패(null)하면, 이미 승인된 역할이 있었을 때는 그대로 둔다 (처음 확인일 때만 invalid)
-    if (session) fetchRole(session.access_token).then((r) => setRole((prev) => r ?? (canUse(prev) ? prev : 'invalid')));
-    else setRole('guest');
+    // 권한 확인(구글 Apps Script)은 1~3초 걸린다 → 이 계정이 지난번에 승인돼 있었으면 그 역할로 먼저 화면을 열고, 확인 결과로 바로잡는다
+    // (화면만 먼저 여는 것 — 생성·저장 요청은 서버·DB 가 매번 권한을 다시 확인한다)
+    if (session) {
+      const uid = session.user.id;
+      const cached = readLocal<{ uid: string; role: Role } | null>(ROLE_KEY, null);
+      if (cached?.uid === uid && canUse(cached.role)) setRole((prev) => prev ?? cached.role);
+      fetchRole(session.access_token).then((r) => {
+        setRole((prev) => r ?? (canUse(prev) ? prev : 'invalid'));
+        if (r) writeLocal(ROLE_KEY, { uid, role: r });
+      });
+    } else setRole('guest');
   }, [authReady, session?.access_token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const allowed = canUse(role);
@@ -225,7 +294,14 @@ export default function App() {
   useEffect(() => {
     if (!allowed) return;
     requestPersist();
-    markInterrupted().catch(() => {}).finally(refreshJobs);
+    // 목록은 바로 읽고, 끊긴 작업 표시는 따로 (바뀐 게 있을 때만 목록을 한 번 더 맞춘다)
+    refreshJobs().then(refreshTrashN);
+    markInterrupted().then(
+      (changed) => {
+        if (changed) refreshJobs(true);
+      },
+      () => {},
+    );
   }, [allowed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 설정을 바꾸면 작업에도 저장 (입력 중엔 잠깐 기다렸다가)
@@ -250,6 +326,12 @@ export default function App() {
   /** 저장된 작업 열기: PSD 를 다시 읽고 계획·완료한 섹션을 되살린다 (API 호출 없음) */
   // picked: 다른 PC 등 이 브라우저에 PSD 원본이 없을 때 사용자가 고른 PSD
   async function openJob(job: Job, picked?: File) {
+    try {
+      job = await fullJob(job);
+    } catch (e) {
+      setLoadError((e as Error).message);
+      return;
+    }
     let file = picked ?? (await getFile(job.fileKey).catch(() => undefined));
     if (!file) {
       setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 골라 열기」로 같은 PSD를 골라 주세요.');
@@ -270,6 +352,17 @@ export default function App() {
       file = picked;
     }
     await openPsd(file, job);
+  }
+
+  async function showSaved(job: Job) {
+    try {
+      job = await fullJob(job);
+    } catch (e) {
+      setLoadError((e as Error).message);
+      return;
+    }
+    setViewJob(job);
+    requestAnimationFrame(() => document.querySelector(".saved")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
 
   async function restoreJob(job: Job) {
@@ -330,11 +423,14 @@ export default function App() {
       .then(() => prune(nj.id))
       .then(() => refreshJobs(true))
       .then(() => saveFile(file))
-      .then((ok) => !ok && updateJob({ noFile: true }))
+      // 저장되면 목록의 「이 PC에 PSD 없음」 표시를 바로 지운다 (안 하면 다음 새로고침까지 남음)
+      .then((ok) => (ok ? refreshJobs(true) : updateJob({ noFile: true })))
       .catch((e) => console.warn('[jobs]', e));
   }
 
-  async function openPsd(file: File, job?: Job) {
+  /** 지금 연 PSD·결과를 닫는다 (메모리도 바로 놓음) — 다른 PSD 열기·첫 화면으로 가기 공용 */
+  function closeCurrent() {
+    setViewJob(null);
     // 생성 중에 다른 PSD 를 열면 이전 섹션 결과가 새 작업에 섞이므로 먼저 멈춘다 (화면에서도 생성 중엔 업로드를 막음)
     abortRef.current?.abort();
     setLoadError(null);
@@ -354,6 +450,18 @@ export default function App() {
     jobRef.current = null;
     setJobId(null);
     workerRef.current?.dispose();
+    workerRef.current = null;
+  }
+
+  /** 머리의 Pagefy 를 누르면 첫 화면(PSD 올리기 + 최근 작업)으로. 생성 중·읽는 중엔 작업을 잃지 않게 그대로 둔다 */
+  function goHome() {
+    if (running || loading) return;
+    closeCurrent();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function openPsd(file: File, job?: Job) {
+    closeCurrent();
     const worker = new PsdWorker();
     workerRef.current = worker;
     try {
@@ -442,12 +550,16 @@ export default function App() {
     let layout: LayoutResult | undefined;
     pushStatus('PSD 위치 대조 중 (PSD 폭 렌더·모바일 360px)…');
     try {
-      layout = await checkLayout(previewHtml, L.summary);
+      // 코드 생성 방식은 이미지에 일부러 남긴 글자를 대조에서 뺀다 (HTML 에 없는 게 맞음 — 미리보기의 「이미지에 남긴 글자」로 따로 보여 줌)
+      const kept = bundle.plan.engine === 'code' ? new Set(keepMap(L.summary, bundle.plan, m.channel === 'openmarket').keys()) : undefined;
+      layout = await checkLayout(previewHtml, L.summary, kept);
     } catch (e) {
       extraChecks.push({ level: 'warn', message: `위치 대조 실패: ${(e as Error).message}` });
     }
     const checks = [...extraChecks, ...(layout?.checks ?? []), ...checkOutput(parsed, L.summary, base)];
     setResult({ meta: m, baseUrl: base, bundle, planReport, planRaw, sections, parsed, images, previewHtml, checks, layout });
+    // 완성 HTML 도 작업에 저장 → PSD 원본이 없는 PC 에서도 「결과 보기」로 볼 수 있다 (같으면 다시 저장하지 않음)
+    if (jobRef.current && jobRef.current.html !== html) updateJob({ html });
   }
 
   /**
@@ -679,8 +791,8 @@ export default function App() {
    * - 표시가 없는 폴더(다른 작업·사람)가 이미 있으면 덮어쓰지 않고 새 번호 rev 로 다시 만들라고 안내한다
    * - 결과가 바뀌면(수정·새 rev) 진행 중인 업로드를 멈추고, 늦게 온 응답은 버린다
    */
-  async function uploadImages() {
-    if (!result) return;
+  async function uploadImages(): Promise<boolean> {
+    if (!result) return false;
     const runId = ++uploadRunRef.current;
     uploadAbortRef.current?.abort();
     const ac = new AbortController();
@@ -704,7 +816,7 @@ export default function App() {
           nextRev: nextRev(r.meta.rev),
           message: `서버에 ${r.meta.rev} 폴더가 이미 있습니다 (다른 작업이 올린 이미지 ${remote.files.length}개). 판매 중인 페이지가 바뀌지 않게 덮어쓰지 않습니다.`,
         });
-        return;
+        return false;
       }
       // 같은 작업이 끊겼다 이어 올리는 경우: 같은 이름·크기 파일은 건너뛴다 (내용은 아래 확인에서 SHA-256 으로 다시 본다)
       const sizes = new Map(r.images.map((im) => [im.file, im.blob.size]));
@@ -712,7 +824,7 @@ export default function App() {
       const stray = remote.files.filter((f) => !skip.has(f.file));
       if (stray.length) {
         set({ phase: 'conflict', done: 0, total, nextRev: nextRev(r.meta.rev), message: `서버의 ${r.meta.rev} 폴더에 이 결과와 다른 파일이 있습니다 (${stray.map((f) => f.file).slice(0, 3).join(', ')}…). 덮어쓰지 않습니다.` });
-        return;
+        return false;
       }
       let done = skip.size;
       set({ phase: 'uploading', done, total });
@@ -747,13 +859,53 @@ export default function App() {
         bad,
         message: bad.length ? `올린 뒤 ${bad.length}장이 열리지 않거나 내용이 다릅니다. 잠시 뒤 「다시 올리기」로 다시 확인하고, 계속 다르면 새 번호 rev 로 다시 만드세요.` : undefined,
       });
+      return !bad.length && live();
     } catch (e) {
-      if (ac.signal.aborted) return;
+      if (ac.signal.aborted) return false;
       set((u) => ({ ...u, phase: 'error', message: `업로드 실패: ${(e as Error).message}` }));
+      return false;
     }
   }
 
   /** 같은 날짜 폴더를 다른 작업이 쓰고 있을 때: rev 를 다음 번호로 바꾸고 저장된 구조 계획으로 다시 만든다 (Claude 호출 없음) */
+  /**
+   * 잘못 올린 것 되돌리기 — 방금 이 작업이 올린 rev 폴더를 지운다 (서버가 이 작업 폴더인지·다른 파일이 없는지 다시 확인).
+   * 다 지우면 업로드 전 상태로 돌아가 「HTML 복사」를 누르면 다시 올린다
+   */
+  async function undoUpload() {
+    if (!result) return;
+    const runId = ++uploadRunRef.current;
+    uploadAbortRef.current?.abort();
+    const ac = new AbortController();
+    uploadAbortRef.current = ac;
+    const live = () => runId === uploadRunRef.current && !ac.signal.aborted;
+    const set = (u: UploadState | ((u: UploadState) => UploadState)) => live() && setUpload(u);
+    const r = result;
+    const total = r.images.length;
+    try {
+      const token = await uploadToken(jobRef.current?.id ?? r.baseUrl, r.meta.rev);
+      const target: UploadTarget = { channel: r.meta.channel, slug: r.meta.slug, rev: r.meta.rev, publicRoot: r.meta.publicRoot, token };
+      set({ phase: 'removing', done: 0, total });
+      const files = r.images.map((im) => im.file);
+      let removed = 0;
+      // 함수 시간 제한으로 남긴 파일이 있으면 이어서 요청 (조금도 못 지우면 멈춤)
+      for (let i = 0; i < 10; i++) {
+        const out = await uploadRemove(target, files, ac.signal);
+        removed += out.removed.length;
+        set((u) => ({ ...u, done: removed }));
+        if (out.folderRemoved) {
+          set({ phase: 'removed', done: removed, total, message: `이미지 서버에서 ${r.meta.rev} 폴더(이미지 ${removed}장)를 지웠습니다.` });
+          return;
+        }
+        if (!out.removed.length) break;
+      }
+      throw new Error('서버 시간 안에 다 지우지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
+    } catch (e) {
+      if (ac.signal.aborted) return;
+      set((u) => ({ ...u, phase: 'error', message: `되돌리기 실패: ${(e as Error).message}` }));
+    }
+  }
+
   async function rebuildWithNextRev() {
     if (!result || !loadedRef.current || running) return;
     const plan = jobRef.current?.plan ?? { bundle: result.bundle, report: result.planReport, raw: result.planRaw };
@@ -775,16 +927,24 @@ export default function App() {
   }
 
   async function removeJob(id: string) {
+    setViewJob((v) => (v?.id === id ? null : v));
     if (jobRef.current?.id === id) {
       jobRef.current = null;
       setJobId(null);
     }
-    await deleteJob(id).catch((e) => console.warn('[jobs]', e));
+    // 지우기 = 휴지통으로 (30일 안에 복원). 영구 삭제는 휴지통에서
+    try {
+      await trashJob(id);
+    } catch (e) {
+      setLoadError((e as Error).message);
+    }
     refreshJobs();
+    refreshTrashN();
   }
 
   // 이어서 만들 수 있는지: 저장된 계획이 있고, 계획 때 설정과 지금 설정이 같고, 남은 섹션이 있을 때
-  const cur = jobId ? jobs.find((j) => j.id === jobId) ?? jobRef.current : null;
+  // 목록 쪽은 가벼운 사본일 수 있어 지금 연 작업(jobRef)을 먼저 본다
+  const cur = jobId ? (jobRef.current?.id === jobId ? jobRef.current : jobs.find((j) => j.id === jobId)) ?? null : null;
   const resumeInfo = (() => {
     if (!cur?.plan || !cur.meta || cur.state === 'done' || cur.state === 'running') return null;
     const total = cur.plan.bundle.plan.sections.length;
@@ -829,6 +989,11 @@ export default function App() {
             : undefined
         }
         onLogout={CLOUD && session ? () => supabase.auth.signOut() : undefined}
+        // 첫 화면(PSD 올리기 칸이 크게 보임)에선 숨기고, PSD 를 연 뒤·저장된 결과를 볼 때만
+        onNewPsd={allowed && (loaded || viewJob) ? (f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f)) : undefined}
+        newPsdDisabled={running || !!loading}
+        onHome={goHome}
+        homeBusy={running || !!loading}
       />
       <main className="app__main">
         {showLogin ? (
@@ -843,7 +1008,8 @@ export default function App() {
               disabled={running}
               file={loaded ? { name: loaded.file.name, size: loaded.file.size, width: loaded.summary.width, height: loaded.summary.height, thumbUrl: loaded.compositeUrl } : null}
             />
-            {!loaded && jobs.length > 0 && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} />}
+            {viewJob && <SavedView job={viewJob} onClose={() => setViewJob(null)} />}
+            {!loaded && allowed && (jobs.length > 0 || jobsLoading || trashN > 0 || !!trash) && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} loading={jobsLoading} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} onView={showSaved} trash={trash} trashN={trashN} trashLoading={trashLoading} onTrashOpen={openTrash} onTrashClose={() => setTrash(null)} onRestore={restoreFromTrash} onPurge={purgeFromTrash} />}
             {loaded && !hasResult && <SummaryPanel loaded={loaded} />}
             {loaded && (
               <SettingsPanel
@@ -875,11 +1041,12 @@ export default function App() {
                 upload={health?.upload && result?.bundle.plan.engine === 'code' ? upload : undefined}
                 onUpload={uploadImages}
                 onNewRev={rebuildWithNextRev}
+                onUndoUpload={undoUpload}
                 resumeLabel={resume ? (resume.code ? "저장된 계획으로 마무리 (비용 없음)" : `이어서 만들기 (남은 섹션 ${resume.missing}개)`) : undefined}
               />
               </div>
             )}
-            {loaded && jobs.length > 0 && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} />}
+            {loaded && (jobs.length > 0 || jobsLoading || trashN > 0 || !!trash) && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} loading={jobsLoading} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} onView={showSaved} trash={trash} trashN={trashN} trashLoading={trashLoading} onTrashOpen={openTrash} onTrashClose={() => setTrash(null)} onRestore={restoreFromTrash} onPurge={purgeFromTrash} />}
           </>
         )}
       </main>
