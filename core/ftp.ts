@@ -145,12 +145,12 @@ export class FtpClient {
     return r.code === 213 ? Number(r.text.trim()) : null;
   }
 
-  /** 폴더 안 파일 이름들 (없거나 비었으면 빈 목록) */
-  async list(dir: string): Promise<string[]> {
+  /** 폴더 안 파일 이름들 (없거나 비었으면 빈 목록). all = 점(.)으로 시작하는 숨김 파일까지 (NLST -a) */
+  async list(dir: string, all = false): Promise<string[]> {
     const d = await this.data();
     let raw = '';
     try {
-      const r = await this.cmd(`NLST ${dir}`, [125, 150, 450, 550]);
+      const r = await this.cmd(`NLST ${all ? '-a ' : ''}${dir}`, [125, 150, 450, 550]);
       if (r.code === 450 || r.code === 550) return []; // 데이터 연결을 쓰지 않은 응답 — 읽지 않고 닫는다
       for (let c = await withTimeout(d.read(), '목록 읽기'); c; c = await withTimeout(d.read(), '목록 읽기')) raw += dec.decode(c, { stream: true });
     } catch (e) {
@@ -195,7 +195,7 @@ export class FtpClient {
     if (![226, 250].includes(done.code)) this.fail(new Error(`파일 올리기 실패 (${done.code})`));
   }
 
-  /** 점검·정리용 (서비스 흐름에서는 쓰지 않는다 — 업로드는 지우거나 덮어쓰지 않음) */
+  /** 지우기 — 서비스에서는 core/upload.ts removeUpload(이 작업이 올린 폴더 되돌리기)에서만 쓴다 */
   async remove(path: string) {
     await this.cmd(`DELE ${path}`, [250]);
   }

@@ -10,7 +10,7 @@ import { describeError, runClaude, type Effort, type RunConfig } from './core/ru
 import { validatePlan, validateSection } from './core/validate.ts';
 import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from './shared/types.ts';
 import type { Dial } from './core/ftp.ts';
-import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfigFrom, putFiles, verifyFiles } from './core/upload.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfigFrom, putFiles, removeUpload, verifyFiles } from './core/upload.ts';
 
 // 이미지 호스팅 업로드 (규칙 6절): 접속 정보는 함수 비밀값 PAGEFY_FTP_HOST·USER·PASS·ROOT·PUBLIC_BASE(·PORT) 에만 둔다.
 // 없으면 업로드 기능을 끈다 (화면에 버튼 없음). 같은 이름 파일은 덮어쓰지 않는다 (core/upload.ts)
@@ -166,7 +166,9 @@ Deno.serve(async (req) => {
             ? 'upload-files'
             : path.endsWith('/upload/verify')
               ? 'upload-verify'
-              : '';
+              : path.endsWith('/upload/remove')
+                ? 'upload-remove'
+                : '';
   if (!action) return json(req, 404, { error: '없는 주소입니다.' });
 
   const token = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
@@ -216,6 +218,12 @@ Deno.serve(async (req) => {
       if (action === 'upload-files') {
         const out = await putFiles(cfg, denoDial, t, ub.files as UploadFile[], t0 + 130_000);
         console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug}/${t.rev} 올림 ${out.done.length}개${out.refused.length ? ` · 거절 ${out.refused.length}개` : ''}`);
+        return json(req, 200, out);
+      }
+      // 잘못 올린 것 되돌리기 — 이 작업이 올린 폴더만, 폴더 안 파일이 모두 이 결과의 이미지일 때만 (core/upload.ts removeUpload)
+      if (action === 'upload-remove') {
+        const out = await removeUpload(cfg, denoDial, t, ub.files as string[], t0 + 130_000);
+        console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug}/${t.rev} 되돌림 ${out.removed.length}개${out.folderRemoved ? ' · 폴더 삭제' : ''}`);
         return json(req, 200, out);
       }
       return json(req, 200, { results: await verifyFiles(cfg, t, (ub.files as { file: string; size: number; sha256?: string }[]) || [], t0 + 130_000) });
