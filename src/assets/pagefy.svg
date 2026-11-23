@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Pagefy: 보라(#7c3aed) 둥근 네모 + 흰 변환 화살표(lucide arrow-right-left) — PSD 를 HTML 마크업으로 바꾸는 서비스.
+       광고 인사이트(파란 네모 + 막대그래프)·사이트 분석(주황 동그라미 + 흐름선)과 색·아이콘이 달라 구분된다 -->
+  <rect width="24" height="24" rx="6" fill="#7c3aed"/>
+  <g transform="translate(4 4) scale(0.6667)" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="m16 3 4 4-4 4"/>
+    <path d="M20 7H4"/>
+    <path d="m8 21-4-4 4-4"/>
+    <path d="M4 17h16"/>
+  </g>
+</svg>

@@ -75,15 +75,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
     &.is-busy { cursor: not-allowed; &:hover h1 { color: inherit; } }
   }
 
+  // 로고 이미지 (src/assets/pagefy.svg — 둥근 보라 네모가 그림 안에 있음)
   &__mark {
     width: 2rem;
     height: 2rem;
     flex: none;
-    display: grid;
-    place-items: center;
-    background: var(--acc);
-    color: #fff;
-    svg { width: 1.125rem; height: 1.125rem; }
+    display: block;
   }
 
   h1 {
