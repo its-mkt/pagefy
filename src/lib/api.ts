@@ -62,15 +62,22 @@ export async function collect(
 ): Promise<StreamResult> {
   const out: StreamResult = { text: '' };
   let failed: string | null = null;
+  let finished = false;
   await stream(path, body, (e) => {
     if (e.type === 'status') cb.status?.(e.message);
     else if (e.type === 'thinking') cb.thinking?.(e.text);
     else if (e.type === 'text') {
       out.text += e.text;
       cb.text?.(out.text);
-    } else if (e.type === 'done') Object.assign(out, { usage: e.usage, model: e.model, stopReason: e.stopReason });
-    else if (e.type === 'error') failed = e.message;
+    } else if (e.type === 'done') {
+      finished = true;
+      Object.assign(out, { usage: e.usage, model: e.model, stopReason: e.stopReason });
+    } else if (e.type === 'error') failed = e.message;
   }, signal);
   if (failed) throw new Error(failed);
+  // 잘린 응답을 완료로 받아들이지 않는다 (닫히지 않은 HTML·CSS 가 저장되면 뒤 섹션까지 깨짐)
+  if (!finished) throw new Error('서버 연결이 응답 도중 끊겼습니다 (함수 실행 시간 제한 등). 다시 시도하세요.');
+  if (out.stopReason === 'max_tokens') throw new Error('응답이 출력 길이 한도에 걸려 잘렸습니다. 섹션을 더 작게 나누도록 수정 요청하거나 다시 시도하세요.');
+  if (out.stopReason && out.stopReason !== 'end_turn' && out.stopReason !== 'stop_sequence') throw new Error(`응답이 정상적으로 끝나지 않았습니다 (${out.stopReason}). 다시 시도하세요.`);
   return out;
 }

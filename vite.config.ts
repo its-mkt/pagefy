@@ -13,7 +13,7 @@ export default defineConfig(({ command }) => ({
     port: 1100,
     strictPort: true,
     // Claude API 호출은 API 키가 있는 서버(server/index.ts)에서만 한다 → /api 는 서버로 넘긴다
-    proxy: { '/api': { target: `http://localhost:${API_PORT}`, changeOrigin: true } },
+    proxy: { '/api': { target: `http://127.0.0.1:${API_PORT}`, changeOrigin: true } },
   },
   worker: { format: 'es' },
 }));

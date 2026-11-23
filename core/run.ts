@@ -20,13 +20,35 @@ const PRICE: Record<string, [number, number, number]> = {
   'claude-haiku-5-5': [0.1, 0.5, 0.01],
 };
 
+/** 표에 없는 모델(날짜 붙은 이름·대체 모델)은 계열 이름으로 찾는다 */
+function priceOf(model: string | null | undefined): [number, number, number] {
+  const m = model || '';
+  if (PRICE[m]) return PRICE[m];
+  const family = ['fable', 'opus', 'sonnet', 'haiku'].find((f) => m.includes(f));
+  const key = family && Object.keys(PRICE).find((k) => k.includes(family));
+  return key ? PRICE[key] : PRICE['claude-opus-5-5'];
+}
+
+type Tok = { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+const costOf = (p: [number, number, number], t: Tok) =>
+  ((t.input_tokens ?? 0) * p[0] + (t.output_tokens ?? 0) * p[1] + (t.cache_read_input_tokens ?? 0) * p[2] + (t.cache_creation_input_tokens ?? 0) * p[0] * 1.25) / 1e6;
+
 export function usageOf(model: string, u: Anthropic.Beta.BetaUsage | undefined): UsageInfo {
-  const input = u?.input_tokens ?? 0;
-  const output = u?.output_tokens ?? 0;
-  const cacheRead = u?.cache_read_input_tokens ?? 0;
-  const cacheWrite = u?.cache_creation_input_tokens ?? 0;
-  const p = PRICE[model] || PRICE['claude-opus-5-5'];
-  const costUsd = (input * p[0] + output * p[1] + cacheRead * p[2] + cacheWrite * p[0] * 1.25) / 1e6;
+  let input = u?.input_tokens ?? 0;
+  let output = u?.output_tokens ?? 0;
+  let cacheRead = u?.cache_read_input_tokens ?? 0;
+  let cacheWrite = u?.cache_creation_input_tokens ?? 0;
+  let costUsd = costOf(priceOf(model), u ?? {});
+  // 대체 모델로 넘어간 요청은 시도(거절된 모델 + 대체 모델)마다 따로 센다 — 맨 위 합계만 보면 적게 잡힘
+  const its = (u?.iterations ?? []).filter((it) => it.type === 'message' || it.type === 'fallback_message') as (Tok & { model?: string | null })[];
+  if (its.length > 1) {
+    const sum = (k: keyof Tok) => its.reduce((n, it) => n + (it[k] ?? 0), 0);
+    input = Math.max(input, sum('input_tokens'));
+    output = Math.max(output, sum('output_tokens'));
+    cacheRead = Math.max(cacheRead, sum('cache_read_input_tokens'));
+    cacheWrite = Math.max(cacheWrite, sum('cache_creation_input_tokens'));
+    costUsd = Math.max(costUsd, its.reduce((n, it) => n + costOf(priceOf(it.model ?? model), it), 0));
+  }
   return { input, output, cacheRead, cacheWrite, costUsd: Math.round(costUsd * 1000) / 1000 };
 }
 

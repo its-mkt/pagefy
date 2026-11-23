@@ -2,6 +2,7 @@
 // 지원: 색상 오버레이, 그라데이션 오버레이(선형·방사), 획(안·가운데·밖), 드롭 섀도, 외부 광선
 // 미지원(무시): 내부 그림자·내부 광선·경사와 엠보스·새틴·패턴 오버레이 → 경고로 안내
 import type { Color, Layer, LayerEffectGradientOverlay, UnitsValue } from 'ag-psd';
+import { rgbOf } from './extract';
 
 const BLEND: Record<string, GlobalCompositeOperation> = {
   normal: 'source-over',
@@ -27,10 +28,9 @@ export const blendOp = (m?: string): GlobalCompositeOperation => BLEND[m || 'nor
 export const SUPPORTED_EFFECTS = ['dropShadow', 'outerGlow', 'colorOverlay', 'gradientOverlay', 'stroke'];
 
 function rgba(c: Color | undefined, a = 1) {
-  if (!c) return `rgba(0,0,0,${a})`;
-  if ('r' in c) return `rgba(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)},${a})`;
-  if ('fr' in c) return `rgba(${Math.round(c.fr * 255)},${Math.round(c.fg * 255)},${Math.round(c.fb * 255)},${a})`;
-  return `rgba(0,0,0,${a})`;
+  // CMYK·회색조 등도 RGB 로 환산 (예전엔 검정으로 그려짐)
+  const [r, g, b] = rgbOf(c).map((v) => Math.max(0, Math.min(255, Math.round(v))));
+  return `rgba(${r},${g},${b},${a})`;
 }
 
 const px = (u?: UnitsValue) => (u ? u.value : 0);
@@ -112,7 +112,6 @@ function gradientFill(ctx: OffscreenCanvasRenderingContext2D, g: LayerEffectGrad
     }
     return get(sorted[sorted.length - 1]);
   };
-  const rgbOf = (c: Color) => ('r' in c ? [c.r, c.g, c.b] : 'fr' in c ? [c.fr * 255, c.fg * 255, c.fb * 255] : [0, 0, 0]);
   for (const t of locs) {
     const [r, gg, b] = lerp(grad.colorStops, t, (s) => rgbOf(s.color));
     const [op] = grad.opacityStops.length ? lerp(grad.opacityStops, t, (s) => [s.opacity]) : [1];
@@ -138,7 +137,7 @@ export function renderEffects(content: OffscreenCanvas, x0: number, y0: number, 
   const shadows = on(fx.dropShadow);
   const glows = on(fx.outerGlow);
   const strokes = on(fx.stroke);
-  const pad = Math.ceil(Math.max(2, ...shadows.map((s) => px(s.distance) + px(s.size) * 1.5), ...glows.map((g) => px(g.size) * 1.5), ...strokes.map((s) => px(s.size))) + 2);
+  const pad = Math.ceil(Math.max(2, ...shadows.map((s) => px(s.distance) + px(s.size) * 1.5), ...glows.map((g) => px(g.size) * (1.5 + px(g.choke) / 100)), ...strokes.map((s) => px(s.size))) + 2);
   const W = content.width + pad * 2;
   const H = content.height + pad * 2;
 
