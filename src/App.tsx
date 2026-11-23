@@ -10,8 +10,8 @@ import { generateMarkup, keepMap } from './lib/codegen';
 import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
-import { kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, fileKeyOf, getFile, listJobs, markInterrupted, prune, putJob, requestPersist, saveFile, sameMeta, type Job } from './lib/jobs';
+import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
+import { busyJobIds, deleteJob, fileKeyOf, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
 import Header from './components/Header';
 import JobsPanel from './components/JobsPanel';
 import LoginPanel from './components/LoginPanel';
@@ -81,7 +81,12 @@ function holdLock(jobId: string) {
   let release = () => {};
   const p = new Promise<void>((r) => (release = r));
   navigator.locks?.request(`pagefy-job-${jobId}`, () => p).catch(() => {});
-  return release;
+  // 다른 PC·브라우저용 생성 중 표시(계정 저장)를 1분마다 연장 — 끊기면 3분 뒤 풀린다
+  const beat = window.setInterval(() => touchRunning(jobId).catch(() => {}), 60_000);
+  return () => {
+    window.clearInterval(beat);
+    release();
+  };
 }
 
 /** 멈춘 뒤에도 '작성 중'으로 남지 않게 — 끝나지 않은 섹션은 대기로 되돌린다 */
@@ -111,7 +116,7 @@ async function poolWarm<T>(items: T[], n: number, fn: (item: T, onStart: () => v
   await Promise.all([firstRun, pool(rest, n - 1, (it) => fn(it, () => {}))]);
 }
 
-const BUSY_MSG = '다른 탭(창)에서 이 작업을 만들고 있습니다. 그 탭에서 이어서 보거나, 그 탭을 닫은 뒤 다시 시도하세요.';
+const BUSY_MSG = '다른 탭(창)이나 다른 PC에서 이 작업을 만들고 있습니다. 그곳에서 이어서 보거나, 끝난 뒤 다시 시도하세요. (그쪽 창을 닫았다면 3분 뒤 다시 할 수 있습니다)';
 
 export default function App() {
   // 로그인 (배포 모드에서만 — 광고 인사이트 계정)
@@ -151,14 +156,28 @@ export default function App() {
   };
   const dropCut = () => setCut(null);
 
-  const refreshJobs = () => listJobs().then(setJobs, (e) => console.warn('[jobs]', e));
+  // 작업 목록: 계정 저장이면 최근 20개씩 ("더 보기"로 늘림). quick = 방금 저장한 것만 반영 (계정을 다시 읽지 않음)
+  const [moreJobs, setMoreJobs] = useState(false);
+  const jobLimitRef = useRef(20);
+  const refreshJobs = (quick = false) =>
+    listJobsPage(jobLimitRef.current, quick).then(
+      (p) => {
+        setJobs(p.jobs);
+        setMoreJobs(p.more);
+      },
+      (e) => console.warn('[jobs]', e),
+    );
+  const showMoreJobs = () => {
+    jobLimitRef.current += 20;
+    refreshJobs();
+  };
   /** 지금 작업을 고쳐 저장 (섹션이 동시에 끝나도 ref 에서 이어 붙여 잃지 않는다) */
   function updateJob(patch: Partial<Job> | ((j: Job) => Partial<Job>)) {
     const cur = jobRef.current;
     if (!cur) return;
     const next = { ...cur, ...(typeof patch === 'function' ? patch(cur) : patch), updatedAt: Date.now() };
     jobRef.current = next;
-    putJob(next).then(refreshJobs, (e) => console.warn('[jobs] 저장 실패', e));
+    putJob(next).then(() => refreshJobs(true), (e) => console.warn('[jobs] 저장 실패', e));
   }
 
   useEffect(() => {
@@ -219,11 +238,26 @@ export default function App() {
   }, [running]);
 
   /** 저장된 작업 열기: PSD 를 다시 읽고 계획·완료한 섹션을 되살린다 (API 호출 없음) */
-  async function openJob(job: Job) {
-    const file = await getFile(job.fileKey).catch(() => undefined);
+  // picked: 다른 PC 등 이 브라우저에 PSD 원본이 없을 때 사용자가 고른 PSD
+  async function openJob(job: Job, picked?: File) {
+    let file = picked ?? (await getFile(job.fileKey).catch(() => undefined));
     if (!file) {
-      setLoadError('이 작업의 PSD 원본이 브라우저에 저장돼 있지 않습니다. 같은 PSD를 다시 올려 주세요.');
+      setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 골라 열기」로 같은 PSD를 골라 주세요.');
       return;
+    }
+    if (picked) {
+      if (!sameFile(job, picked)) {
+        setLoadError(`고른 파일이 이 작업의 PSD와 다릅니다 (작업: ${job.fileName}, ${fmtBytes(job.fileSize)} / 고른 파일: ${picked.name}, ${fmtBytes(picked.size)}).`);
+        return;
+      }
+      // 이 브라우저에 PSD 를 저장하고, 수정 시각이 달라 키가 바뀌었으면 작업에도 새 키를 적는다
+      await saveFile(picked);
+      const key = fileKeyOf(picked);
+      if (key !== job.fileKey) {
+        job = { ...job, fileKey: key, updatedAt: Date.now() };
+        await putJob(job).catch(() => {});
+      }
+      file = picked;
     }
     await openPsd(file, job);
   }
@@ -284,7 +318,7 @@ export default function App() {
     setJobId(nj.id);
     putJob(nj)
       .then(() => prune(nj.id))
-      .then(refreshJobs)
+      .then(() => refreshJobs(true))
       .then(() => saveFile(file))
       .then((ok) => !ok && updateJob({ noFile: true }))
       .catch((e) => console.warn('[jobs]', e));
@@ -689,7 +723,7 @@ export default function App() {
               disabled={running}
               file={loaded ? { name: loaded.file.name, size: loaded.file.size, width: loaded.summary.width, height: loaded.summary.height, thumbUrl: loaded.compositeUrl } : null}
             />
-            {!loaded && jobs.length > 0 && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} onOpen={openJob} onRemove={removeJob} />}
+            {!loaded && jobs.length > 0 && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} />}
             {loaded && !hasResult && <SummaryPanel loaded={loaded} />}
             {loaded && (
               <SettingsPanel
@@ -722,7 +756,7 @@ export default function App() {
               />
               </div>
             )}
-            {loaded && jobs.length > 0 && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} onOpen={openJob} onRemove={removeJob} />}
+            {loaded && jobs.length > 0 && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} />}
           </>
         )}
       </main>

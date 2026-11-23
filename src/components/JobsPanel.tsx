@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { Job, JobState } from '../lib/jobs';
 import { fmtBytes } from '../lib/util';
 
@@ -7,7 +7,13 @@ interface Props {
   currentId: string | null;
   /** 생성 중엔 다른 작업을 열거나 지우지 않는다 */
   busy: boolean;
-  onOpen: (job: Job) => void;
+  /** 로그인한 계정에 저장 중이면 true (아니면 이 브라우저에만) */
+  account: boolean;
+  /** 더 오래된 작업이 남아 있음 */
+  more: boolean;
+  onMore: () => void;
+  /** file: 이 브라우저에 PSD 원본이 없을 때 사용자가 고른 PSD */
+  onOpen: (job: Job, file?: File) => void;
   onRemove: (id: string) => void;
 }
 
@@ -36,16 +42,19 @@ function progress(j: Job) {
   return `섹션 ${Object.keys(j.sections).length}/${total}`;
 }
 
-/** 이 브라우저에 저장된 작업 목록 — 새로고침·탭 닫힘 뒤에도 이어서 할 수 있다 */
-export default function JobsPanel({ jobs, currentId, busy, onOpen, onRemove }: Props) {
+/** 작업 목록 — 계정(또는 이 브라우저)에 저장돼 새로고침·다른 PC 에서도 이어서 볼 수 있다 */
+export default function JobsPanel({ jobs, currentId, busy, account, more, onMore, onOpen, onRemove }: Props) {
   // 지우기는 두 번 눌러 확정 (브라우저 확인 창 대신)
   const [armed, setArmed] = useState<string | null>(null);
+  // PSD 원본이 이 브라우저에 없는 작업: 파일 고르기 창을 띄워 같은 PSD 를 받는다
+  const picker = useRef<HTMLInputElement>(null);
+  const [pickFor, setPickFor] = useState<Job | null>(null);
   if (!jobs.length) return null;
 
   return (
     <section className="panel jobs">
       <h2 className="panel__title">
-        최근 작업 <small>이 브라우저에만 저장 · 최근 8개</small>
+        최근 작업 <small>{account ? '내 계정에 저장 (다른 PC에서도 보임) · PSD 원본은 이 PC에만' : '이 브라우저에만 저장 · 최근 8개'}</small>
       </h2>
       <ul className="jobs__list">
         {jobs.map((j) => {
@@ -57,7 +66,7 @@ export default function JobsPanel({ jobs, currentId, busy, onOpen, onRemove }: P
                 <b>{j.settings.productName || j.fileName}</b>
                 <small>
                   {j.fileName} · {fmtBytes(j.fileSize)}
-                  {j.noFile ? ' · PSD 미저장(다시 올려야 함)' : ''}
+                  {j.noFile ? ' · 이 PC에 PSD 없음' : ''}
                 </small>
               </span>
               <span className={`badge ${st.tone ? `badge--${st.tone}` : ''}`}>{st.label}</span>
@@ -67,9 +76,23 @@ export default function JobsPanel({ jobs, currentId, busy, onOpen, onRemove }: P
                 {cur ? (
                   <span className="jobs__cur">열려 있음</span>
                 ) : (
-                  <button className="btn btn--sm" disabled={busy || j.noFile} onClick={() => onOpen(j)} title={j.noFile ? 'PSD 원본이 저장되지 않아 같은 PSD를 다시 올려야 합니다' : undefined}>
-                    열기
-                  </button>
+                  j.noFile ? (
+                    <button
+                      className="btn btn--sm"
+                      disabled={busy}
+                      title="이 PC 브라우저에 PSD 원본이 없습니다. 같은 PSD 파일을 고르면 이어서 열립니다."
+                      onClick={() => {
+                        setPickFor(j);
+                        picker.current?.click();
+                      }}
+                    >
+                      PSD 골라 열기
+                    </button>
+                  ) : (
+                    <button className="btn btn--sm" disabled={busy} onClick={() => onOpen(j)}>
+                      열기
+                    </button>
+                  )
                 )}
                 <button
                   className={`btn btn--sm btn--ghost ${armed === j.id ? 'is-danger' : ''}`}
@@ -84,6 +107,25 @@ export default function JobsPanel({ jobs, currentId, busy, onOpen, onRemove }: P
           );
         })}
       </ul>
+      {more && (
+        <div className="jobs__more">
+          <button className="btn btn--sm btn--ghost" onClick={onMore}>
+            더 보기
+          </button>
+        </div>
+      )}
+      <input
+        ref={picker}
+        type="file"
+        accept=".psd"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f && pickFor) onOpen(pickFor, f);
+          setPickFor(null);
+        }}
+      />
     </section>
   );
 }
