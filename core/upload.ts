@@ -43,6 +43,8 @@ export const UPLOAD_FILE_RE = /^s\d{2}_(bg\d+|(img|ico|gif)\d+-[a-z0-9]+(-[a-z0-
 
 const trimSlash = (s: string) => s.replace(/\/+$/, '');
 const markerOf = (t: UploadTarget) => `.pagefy-${t.token}`;
+/** 올리는 중인 임시 파일 접두사 (숨김 파일이라 목록·충돌 판정에 안 잡힌다) */
+const PART = '.part-';
 
 /** 설정이 다 있으면 config, 아니면 null (화면에 업로드 버튼을 숨김) */
 export function ftpConfigFrom(get: (k: string) => string | undefined): FtpConfig | null {
@@ -142,6 +144,8 @@ export async function putFiles(cfg: FtpConfig, dial: Dial, t: UploadTarget, file
     const marker = `${dir}/${markerOf(t)}`;
     if (created) await c.put(marker, new Uint8Array(0));
     else if ((await c.size(marker)) == null) throw new Error(`서버의 ${t.rev} 폴더는 다른 작업이 쓰는 폴더라 올리지 않았습니다. 새 번호 rev 로 다시 만드세요.`);
+    // 지난번에 끊겨 남은 임시 파일(.part-*)은 이 작업 폴더에서만 지운다 (정식 이름 파일은 건드리지 않음)
+    for (const n of await c.list(dir, true)) if (n.startsWith(PART)) await c.remove(`${dir}/${n}`).catch(() => {});
     const listed = new Set(await c.list(dir));
     const done: { file: string; url: string; size: number }[] = [];
     const refused: { file: string; error: string }[] = [];
@@ -156,7 +160,10 @@ export async function putFiles(cfg: FtpConfig, dial: Dial, t: UploadTarget, file
         refused.push({ file: it.file, error: '서버에 같은 이름 파일이 이미 있어 덮어쓰지 않았습니다.' });
         continue;
       }
-      await c.put(path, it.bytes);
+      // 임시 이름으로 다 올린 뒤 정식 이름으로 바꾼다 — 끊겨도 반쯤 올라간 파일이 정식 이름으로 남아 이어 올리기를 막지 않게
+      const tmp = `${dir}/${PART}${it.file}`;
+      await c.put(tmp, it.bytes);
+      await c.rename(tmp, path);
       listed.add(it.file);
       done.push({ file: it.file, url: publicUrlOf(cfg, t, it.file), size: it.bytes.length });
     }
@@ -182,7 +189,9 @@ export async function removeUpload(cfg: FtpConfig, dial: Dial, t: UploadTarget, 
     if ((await c.size(`${dir}/${marker}`)) == null) throw new Error(`서버의 ${t.rev} 폴더는 이 작업이 올린 폴더가 아니라 지우지 않았습니다.`);
     // 서버가 점 파일도 보여 주면 이 작업의 표시 파일이 "다른 파일"로 잡혀 되돌리기가 늘 거절된다 → 자기 표시는 뺀다
     const visible = (await c.list(dir)).filter((n) => n !== marker);
-    const hidden = (await c.list(dir, true)).filter((n) => n.startsWith('.') && n !== marker);
+    const hiddenAll = (await c.list(dir, true)).filter((n) => n.startsWith('.') && n !== marker);
+    const parts = hiddenAll.filter((n) => n.startsWith(PART)); // 이 작업이 남긴 임시 파일 — 함께 지운다
+    const hidden = hiddenAll.filter((n) => !n.startsWith(PART));
     const other = [...visible.filter((n) => !mine.has(n)), ...hidden];
     if (other.length) throw new Error(`폴더에 이 결과가 아닌 파일이 있어 아무것도 지우지 않았습니다 (${other.slice(0, 3).join(', ')}${other.length > 3 ? ' …' : ''}).`);
     const removed: string[] = [];
@@ -196,6 +205,7 @@ export async function removeUpload(cfg: FtpConfig, dial: Dial, t: UploadTarget, 
       removed.push(n);
     }
     if (left.length) return { removed, left, folderRemoved: false };
+    for (const n of parts) await c.remove(`${dir}/${n}`).catch(() => {});
     await c.remove(`${dir}/${marker}`);
     await c.rmdir(dir);
     return { removed, left, folderRemoved: true };

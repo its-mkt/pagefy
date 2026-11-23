@@ -36,9 +36,19 @@ async function stream(path: 'plan' | 'section', body: PlanRequest | SectionReque
     const line = chunk.split('\n').find((l) => l.startsWith('data: '));
     if (line) onEvent(JSON.parse(line.slice(6)) as StreamEvent);
   };
+  // 노트북 절전·와이파이 전환 등으로 연결이 조용히 멈추면 끝없이 기다린다 → 120초 동안 아무것도 안 오면 멈춘 것으로 본다
+  // (생각하는 동안에도 thinking·status 이벤트가 계속 오므로 정상 생성은 걸리지 않는다)
+  const IDLE_MS = 120_000;
+  const readOrStall = () => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const stall = new Promise<never>((_, rej) => {
+      t = setTimeout(() => rej(new Error('서버 연결이 2분 동안 멈춰 있어 중단했습니다 (절전·네트워크 전환 등). 다시 시도하세요.')), IDLE_MS);
+    });
+    return Promise.race([reader.read(), stall]).finally(() => clearTimeout(t));
+  };
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readOrStall();
       if (done) break;
       buf += value.replace(/\r\n/g, '\n');
       let i: number;

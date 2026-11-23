@@ -185,6 +185,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
   /** 되돌리기 확인 단계 (지우기 전에 한 번 더 묻는다) */
   const [undoAsk, setUndoAsk] = useState(false);
   const [undoSure, setUndoSure] = useState(false);
+  /** 복사하려던 HTML 이 쓰는데 결과에 없는 이미지 (자르기 실패) — 있으면 복사를 막는다 */
+  const [missing, setMissing] = useState<string[]>([]);
   /** 직접 올릴 때 쓰는 것: zip 내려받기 + 이미지 주소 */
   const manualTools = result && (
     <span className="getit__tools">
@@ -301,6 +303,13 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 disabled={!result.parsed.html || upBusy}
                 onClick={() => {
                   const html = copySection(result.parsed.html);
+                  // HTML 이 가리키는 이미지가 결과에 다 있는지 (자르기에 실패한 이미지가 있으면 붙여넣은 페이지에 빈칸이 생긴다)
+                  const have = new Set(result.images.map((im) => im.file));
+                  // 이미지 주소 = baseUrl/파일명 — 주소 뒤 따옴표·괄호·공백 앞까지가 파일명
+                  const refs = html.split(`${result.baseUrl}/`).slice(1).map((s) => s.split(/['")\s]/)[0]);
+                  const lost = [...new Set(refs.filter((f) => !have.has(f)))];
+                  setMissing(lost);
+                  if (lost.length) return;
                   if (autoUpload && (upload!.phase !== 'done' || upload!.restored)) copyLater('html', onUpload!().then((ok) => (ok ? html : null)));
                   else copy('html', html);
                 }}
@@ -329,10 +338,20 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 )}
               </p>
             </div>
+            {missing.length > 0 && (
+              <p className="msg msg--error">
+                복사하지 않았습니다 — 이 HTML 이 쓰는 이미지 {missing.length}장이 만들어지지 않았습니다 ({missing.slice(0, 3).join(', ')}{missing.length > 3 ? ' …' : ''}). 그대로 붙여넣으면 그림이 빈칸으로 나옵니다. 아래 점검의 「이미지 자르기 실패」를 확인하고 다시 만들어 주세요.
+              </p>
+            )}
             {copied?.startsWith('fail:') && <p className="msg msg--error">복사하지 못했습니다. 버튼을 한 번 더 누르고, 그래도 안 되면 아래 「HTML」 탭에서 직접 선택해 복사하세요.</p>}
             {autoUpload && onUndoUpload && undoAsk && upload!.phase === 'done' && (
               <div className="getit__undo" role="group" aria-label="올린 이미지 되돌리기">
-                <b>이미지 서버에서 방금 올린 {result.meta.rev} 폴더(이미지 {upload!.total}장)를 지웁니다.</b>
+                <b>
+                  이미지 서버에서 {upload!.restored ? '전에 올려 둔' : '방금 올린'} {result.meta.rev} 폴더(이미지 {upload!.total}장)를 지웁니다.
+                </b>
+                {upload!.restored && (
+                  <span className="getit__undo-warn">다시 연 작업입니다. 이 이미지는 이미 판매 중인 상품 페이지에서 쓰고 있을 수 있습니다 — 고도몰 상품 상세에 이 HTML 이 없는지 먼저 확인하세요.</span>
+                )}
                 <span>이 HTML 을 이미 쇼핑몰에 붙여넣었다면, 지우는 순간 그 상품 페이지 그림이 빈칸이 됩니다. 지운 이미지는 되살릴 수 없습니다.</span>
                 <label className="getit__undo-check">
                   <input type="checkbox" checked={undoSure} onChange={(e) => setUndoSure(e.target.checked)} /> 이 HTML 은 아직 쇼핑몰에 붙여넣지 않았습니다
