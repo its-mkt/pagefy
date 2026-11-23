@@ -226,6 +226,8 @@ export interface HealthInfo {
   model: string;
   effort: string;
   rules: { source: string; updatedAt: string | null; fallback: boolean };
+  /** 이미지 호스팅 업로드를 쓸 수 있음 (서버에 FTP 접속 정보가 있음) */
+  upload?: boolean;
 }
 
 /** 서버 → 화면 SSE 이벤트 */

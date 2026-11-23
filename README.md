@@ -41,7 +41,10 @@ yarn dev                  # 화면 http://localhost:1100  (로컬 API 서버 110
 | 생성 서버 | `yarn build:function` → `supabase/functions/pagefy` 를 Supabase 프로젝트 `ad-insight DB` 에 함수 `pagefy` 로 배포 (JWT 검사 끔 — 함수가 직접 권한 확인) | 즉시 |
 | Claude API 키 | Supabase 대시보드 → Edge Functions → Secrets → `ANTHROPIC_API_KEY` (저장소·채팅에 적지 않음) | 즉시 |
 
-함수 비밀값(선택): `PAGEFY_MODEL`(기본 `claude-opus-5-5`), `PAGEFY_EFFORT`(기본 `medium`)
+함수 비밀값(선택): `PAGEFY_MODEL`(기본 `claude-opus-5-5`), `PAGEFY_EFFORT`(기본 `medium`), `PAGEFY_PLAN_EFFORT`(기본 `medium`)
+
+이미지 서버 업로드(선택, 넣으면 결과 화면에 「이미지 서버에 올리기」 버튼이 생긴다): `PAGEFY_FTP_HOST` · `PAGEFY_FTP_USER` · `PAGEFY_FTP_PASS` · `PAGEFY_FTP_ROOT`(예: `/data/detail`) · `PAGEFY_FTP_PUBLIC_BASE`(예: `https://itketweb.hgodo.com/data/detail`) · `PAGEFY_FTP_PORT`(기본 21).
+로컬(`yarn dev`)은 규칙 6절의 `~/.claude/secrets/nhn-image-ftp.env` 를 그대로 읽는다. 이미지 서버가 암호화 없는 FTP 만 받으므로(FTPS·SFTP 없음, 2026-11-23 확인) 가능하면 `/data/detail` 만 쓸 수 있는 전용 FTP 계정을 쓴다.
 
 ## 쓰는 법
 
@@ -54,8 +57,11 @@ yarn dev                  # 화면 http://localhost:1100  (로컬 API 서버 110
    - **대조 결과로 고치기**: 어긋난 텍스트가 있는 섹션만 골라 다시 만든다
    - **수정 요청**: 섹션을 고르고 고칠 점을 적으면 그 섹션만 다시 만든다
    - **zip 내려받기** = 제품 폴더 모양 그대로 (`<제품명>/<제품명>.html`, `img/<rev>/…`)
-6. 이미지 업로드는 기존 도구로: `node C:\Users\user\.claude\tools\psd2html\upload.js <제품폴더> <채널> <슬러그> <rev>`
-   업로드 후 이미지 주소가 열리는지, 실제 채널에 붙여넣어 깨지지 않는지 확인 (규칙 9절)
+6. **이미지 서버에 올리기** (결과 화면 「받아 가기」의 등록 순서 1번, 서버에 FTP 접속 정보가 있을 때) — 서버가 `/data/detail/<채널>/<슬러그>/<rev>/` 에 올리고 공개 주소를 열어 200·용량·내용(SHA-256)을 확인한다 (`core/upload.ts`)
+   - 정해진 폴더·6-1 파일명·실제 이미지 형식만, 같은 이름 파일은 덮어쓰지 않는다
+   - rev 폴더는 처음 만든 작업만 쓴다(숨김 표시 파일 `.pagefy-<표시>`) → 다른 작업이 쓴 날짜 폴더면 「새 번호 rev 로 다시 만들기」(계획 재사용, 비용 없음). 끊긴 업로드는 같은 작업이면 남은 것만 이어 올린다
+   - 버튼이 없을 때는 zip 을 받아 기존 도구로: `node C:\Users\user\.claude\tools\psd2html\upload.js <제품폴더> <채널> <슬러그> <rev>`
+   - 실제 채널에 붙여넣어 깨지지 않는지는 사람이 확인 (규칙 9절)
 
 ## 구조
 

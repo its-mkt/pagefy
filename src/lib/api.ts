@@ -81,3 +81,32 @@ export async function collect(
   if (out.stopReason && out.stopReason !== 'end_turn' && out.stopReason !== 'stop_sequence') throw new Error(`응답이 정상적으로 끝나지 않았습니다 (${out.stopReason}). 다시 시도하세요.`);
   return out;
 }
+
+// ───── 이미지 호스팅 업로드 (서버가 FTP 로 올린다, core/upload.ts) ─────
+
+export interface UploadTarget {
+  channel: string;
+  slug: string;
+  rev: string;
+  publicRoot: string;
+  /** 이 작업의 표시 — 이 표시가 있는 rev 폴더에만 올린다 */
+  token: string;
+}
+
+async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  const r = await fetch(`${BASE}/${path}`, { method: 'POST', headers: await headers(true), body: JSON.stringify(body), signal });
+  if (!r.ok) throw new Error(await errorOf(r));
+  return r.json();
+}
+
+/** 서버에 이 rev 폴더가 있는지, 있으면 어떤 파일이 있는지 */
+export const uploadCheck = (target: UploadTarget, signal?: AbortSignal) =>
+  postJson<{ exists: boolean; owned: boolean; files: { file: string; size: number }[]; base: string }>('upload/check', { target }, signal);
+
+/** 파일 몇 장씩 올리기 (data = base64). 같은 이름이 서버에 있으면 refused 로 돌아온다 */
+export const uploadFiles = (target: UploadTarget, files: { file: string; data: string }[], signal?: AbortSignal) =>
+  postJson<{ done: { file: string; url: string; size: number }[]; refused: { file: string; error: string }[]; left?: string[] }>('upload/files', { target, files }, signal);
+
+/** 공개 주소를 열어 200·용량 확인 */
+export const uploadVerify = (target: UploadTarget, files: { file: string; size: number; sha256?: string }[], signal?: AbortSignal) =>
+  postJson<{ results: { file: string; url: string; status: number; size: number; ok: boolean; checked: boolean }[] }>('upload/verify', { target, files }, signal);

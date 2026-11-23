@@ -11,6 +11,8 @@ import { validatePlan, validateSection } from '../core/validate.ts';
 import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude.ts';
 import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
 import { loadRules } from './rules.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, putFiles, verifyFiles } from '../core/upload.ts';
+import { localFtpConfig, nodeDial } from './ftpNode.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.API_PORT || 1101);
@@ -30,7 +32,7 @@ api.get('/health', (_req, res) => {
   } catch {
     // 규칙 파일이 없으면 화면에 표시
   }
-  const body: HealthInfo = { ok: true, mock: MOCK, hasKey: hasKey(), model: MODEL, effort: EFFORT, rules };
+  const body: HealthInfo = { ok: true, mock: MOCK, hasKey: hasKey(), model: MODEL, effort: EFFORT, rules, upload: !!localFtpConfig() };
   res.json(body);
 });
 
@@ -99,6 +101,56 @@ api.post('/section', express.json({ limit: '40mb' }), async (req, res) => {
     if (MOCK) return mockStream(mockSectionOutput(body), send, signal);
     await runClaude(getClient(), RUN, buildSystem(loadRules().text), buildSectionMessages(body), timed(`section ${body.sectionId}`, RUN.effort, send), signal);
   });
+});
+
+// ───── 이미지 호스팅 업로드 (규칙 6절, core/upload.ts) ─────
+// 접속 정보가 없으면 503. 같은 이름 파일은 덮어쓰지 않는다. 이 서버는 127.0.0.1 에서만 받는다
+function uploadGuard(req: express.Request, res: express.Response) {
+  // 다른 사이트가 DNS 를 바꿔 이 PC 의 서버를 부르는 것 막기: 주소가 localhost·127.0.0.1 일 때만
+  if (!['localhost', '127.0.0.1'].includes(req.hostname)) {
+    res.status(403).json({ error: '이 PC 에서 연 화면에서만 올릴 수 있습니다.' });
+    return null;
+  }
+  const cfg = localFtpConfig();
+  if (!cfg) {
+    res.status(503).json({ error: '이미지 서버 접속 정보가 없습니다 (~/.claude/secrets/nhn-image-ftp.env 또는 PAGEFY_FTP_* 환경변수).' });
+    return null;
+  }
+  const t = (req.body?.target ?? null) as UploadTarget;
+  const problem = checkTarget(cfg, t);
+  if (problem) {
+    res.status(400).json({ error: problem });
+    return null;
+  }
+  return { cfg, t };
+}
+
+api.post('/upload/check', express.json(), async (req, res) => {
+  const g = uploadGuard(req, res);
+  if (!g) return;
+  try {
+    res.json(await checkFolder(g.cfg, nodeDial, g.t));
+  } catch (err) {
+    res.status(502).json({ error: describeError(err) });
+  }
+});
+
+api.post('/upload/files', express.json({ limit: '12mb' }), async (req, res) => {
+  const g = uploadGuard(req, res);
+  if (!g) return;
+  try {
+    const out = await putFiles(g.cfg, nodeDial, g.t, req.body.files as UploadFile[]);
+    console.log(`[upload] ${g.t.channel}/${g.t.slug}/${g.t.rev} 올림 ${out.done.length}개${out.refused.length ? ` · 거절 ${out.refused.length}개` : ''}`);
+    res.json(out);
+  } catch (err) {
+    res.status(502).json({ error: describeError(err) });
+  }
+});
+
+api.post('/upload/verify', express.json(), async (req, res) => {
+  const g = uploadGuard(req, res);
+  if (!g) return;
+  res.json({ results: await verifyFiles(g.cfg, g.t, req.body.files || []) });
 });
 
 app.use('/api', api);
