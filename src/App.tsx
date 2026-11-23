@@ -709,7 +709,16 @@ export default function App() {
 
   return (
     <div className="app">
-      <Header health={health} error={healthError} email={CLOUD ? session?.user.email : undefined} onLogout={CLOUD && session ? () => supabase.auth.signOut() : undefined} />
+      <Header
+        health={health}
+        error={healthError}
+        user={
+          CLOUD && session
+            ? { email: session.user.email ?? '', name: session.user.user_metadata?.name, avatarUrl: session.user.user_metadata?.avatar_url || undefined }
+            : undefined
+        }
+        onLogout={CLOUD && session ? () => supabase.auth.signOut() : undefined}
+      />
       <main className="app__main">
         {showLogin ? (
           <LoginPanel session={session} role={role} />
