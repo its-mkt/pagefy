@@ -110,3 +110,7 @@ export const uploadFiles = (target: UploadTarget, files: { file: string; data: s
 /** 공개 주소를 열어 200·용량 확인 */
 export const uploadVerify = (target: UploadTarget, files: { file: string; size: number; sha256?: string }[], signal?: AbortSignal) =>
   postJson<{ results: { file: string; url: string; status: number; size: number; ok: boolean; checked: boolean }[] }>('upload/verify', { target, files }, signal);
+
+/** 잘못 올린 것 되돌리기 — 이 작업이 올린 폴더의 이미지(files)를 지운다. left 가 있으면 다시 부른다 */
+export const uploadRemove = (target: UploadTarget, files: string[], signal?: AbortSignal) =>
+  postJson<{ removed: string[]; left: string[]; folderRemoved: boolean }>('upload/remove', { target, files }, signal);

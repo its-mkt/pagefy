@@ -11,7 +11,7 @@ import { validatePlan, validateSection } from '../core/validate.ts';
 import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude.ts';
 import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
 import { loadRules } from './rules.ts';
-import { type UploadFile, type UploadTarget, checkFolder, checkTarget, putFiles, verifyFiles } from '../core/upload.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, putFiles, removeUpload, verifyFiles } from '../core/upload.ts';
 import { localFtpConfig, nodeDial } from './ftpNode.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -151,6 +151,19 @@ api.post('/upload/verify', express.json(), async (req, res) => {
   const g = uploadGuard(req, res);
   if (!g) return;
   res.json({ results: await verifyFiles(g.cfg, g.t, req.body.files || []) });
+});
+
+// 잘못 올린 것 되돌리기 — 이 작업이 올린 폴더만, 폴더 안 파일이 모두 이 결과의 이미지일 때만 (core/upload.ts removeUpload)
+api.post('/upload/remove', express.json(), async (req, res) => {
+  const g = uploadGuard(req, res);
+  if (!g) return;
+  try {
+    const out = await removeUpload(g.cfg, nodeDial, g.t, req.body.files as string[]);
+    console.log(`[upload] ${g.t.channel}/${g.t.slug}/${g.t.rev} 되돌림 ${out.removed.length}개${out.folderRemoved ? " · 폴더 삭제" : ""}`);
+    res.json(out);
+  } catch (err) {
+    res.status(502).json({ error: describeError(err) });
+  }
 });
 
 app.use('/api', api);

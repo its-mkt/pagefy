@@ -1,4 +1,3 @@
-import JSZip from 'jszip';
 import type { CutImage } from './images';
 
 /** 규칙 6-1 제품슬러그: 영문 소문자, 공백·특수문자는 '-' 하나로, 앞뒤 '-' 제거 */
@@ -29,6 +28,8 @@ export function fmtBytes(n: number) {
 
 /** 제품 폴더 모양(규칙 2절) 그대로: <제품명>.html + img/<rev>/… */
 export async function buildZip(productName: string, rev: string, html: string, images: CutImage[]) {
+  // zip 은 받을 때만 쓰므로 그때 불러온다 (첫 화면 파일을 가볍게)
+  const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
   const root = zip.folder(productName)!;
   root.file(`${productName}.html`, html);

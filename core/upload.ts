@@ -164,6 +164,43 @@ export async function putFiles(cfg: FtpConfig, dial: Dial, t: UploadTarget, file
   });
 }
 
+/**
+ * 잘못 올린 것 되돌리기 — 이 작업이 올린 rev 폴더를 통째로 지운다.
+ * 판매 중인 페이지 그림을 지우지 않게 아래가 모두 맞을 때만:
+ *  - 폴더에 이 작업의 표시 파일(.pagefy-<token>)이 있다 (이 작업이 처음 만든 폴더)
+ *  - 폴더 안 파일이 모두 화면이 보낸 목록(이 결과의 이미지)에 있다 — 하나라도 다른 파일·숨김 파일이 있으면 아무것도 지우지 않는다
+ * 마감이 가까우면 남은 파일은 left 로 돌려준다 (화면이 다시 요청). 다 지우면 표시 파일과 폴더도 지운다
+ */
+export async function removeUpload(cfg: FtpConfig, dial: Dial, t: UploadTarget, files: string[], deadline = Infinity) {
+  if (!Array.isArray(files) || !files.length || files.length > 300) throw new Error('지울 파일 목록이 올바르지 않습니다.');
+  for (const f of files) if (!UPLOAD_FILE_RE.test(f || '')) throw new Error(`파일명 규칙(6-1) 위반: ${String(f).slice(0, 60)}`);
+  const mine = new Set(files);
+  const dir = folderOf(cfg, t);
+  const marker = markerOf(t);
+  return session(cfg, dial, async (c) => {
+    if (!(await c.isDir(dir))) return { removed: [] as string[], left: [] as string[], folderRemoved: true };
+    if ((await c.size(`${dir}/${marker}`)) == null) throw new Error(`서버의 ${t.rev} 폴더는 이 작업이 올린 폴더가 아니라 지우지 않았습니다.`);
+    const visible = await c.list(dir);
+    const hidden = (await c.list(dir, true)).filter((n) => n.startsWith('.') && n !== marker);
+    const other = [...visible.filter((n) => !mine.has(n)), ...hidden];
+    if (other.length) throw new Error(`폴더에 이 결과가 아닌 파일이 있어 아무것도 지우지 않았습니다 (${other.slice(0, 3).join(', ')}${other.length > 3 ? ' …' : ''}).`);
+    const removed: string[] = [];
+    const left: string[] = [];
+    for (const n of visible) {
+      if (Date.now() > deadline - 20_000) {
+        left.push(n);
+        continue;
+      }
+      await c.remove(`${dir}/${n}`);
+      removed.push(n);
+    }
+    if (left.length) return { removed, left, folderRemoved: false };
+    await c.remove(`${dir}/${marker}`);
+    await c.rmdir(dir);
+    return { removed, left, folderRemoved: true };
+  });
+}
+
 /** 공개 주소를 실제로 열어 확인 (200 + 용량 + SHA-256). 동시에 4개씩, 마감이 가까우면 남은 것은 checked=false */
 export async function verifyFiles(cfg: FtpConfig, t: UploadTarget, files: { file: string; size: number; sha256?: string }[], deadline = Infinity) {
   const list = (Array.isArray(files) ? files : []).filter((f) => UPLOAD_FILE_RE.test(f?.file || '')).slice(0, 60);

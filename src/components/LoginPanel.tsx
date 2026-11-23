@@ -31,50 +31,76 @@ export default function LoginPanel({ session, role }: { session: Session | null;
   }
 
   if (session) {
+    if (role === null) {
+      return (
+        <GateShell icon={<LockIcon />} title="권한 확인 중" desc="잠시만 기다려 주세요.">
+          <p className="gate__wait"><span className="spinner" /> 권한 확인 중…</p>
+        </GateShell>
+      );
+    }
+    const m = ROLE_MSG[role] ?? { msg: '승인된 회사 계정만 쓸 수 있습니다.', next: '계정 상태는 계정 관리 화면에서 확인할 수 있습니다.', go: '계정 관리로 가기' };
     return (
-      <section className="panel login">
-        <h2 className="panel__title">사용 권한 확인</h2>
-        {role === null ? (
-          <p className="drop__msg"><span className="spinner" /> 권한 확인 중…</p>
-        ) : (
-          (() => {
-            const m = ROLE_MSG[role] ?? { msg: '승인된 회사 계정만 쓸 수 있습니다.', next: '계정 상태는 계정 관리 화면에서 확인할 수 있습니다.', go: '계정 관리로 가기' };
-            return (
-              <>
-                <p className="msg msg--error">{m.msg}</p>
-                <p className="hint">{m.next}</p>
-                <p className="hint">로그인한 계정: {session.user.email}</p>
-                <div className="actions">
-                  {m.go && <a className="btn" href={ACCOUNT_URL}>{m.go}</a>}
-                  <button className="btn btn--ghost" onClick={() => supabase.auth.signOut()}>다른 계정으로 로그인</button>
-                </div>
-              </>
-            );
-          })()
-        )}
-      </section>
+      <GateShell icon={<LockIcon />} title={m.msg} desc={m.next}>
+        <div className="gate__actions">
+          <span className="gate__account">{session.user.email}</span>
+          {m.go && <a className="btn btn--primary" href={ACCOUNT_URL}>{m.go}</a>}
+          <button className="btn" onClick={() => supabase.auth.signOut()}>로그아웃</button>
+        </div>
+      </GateShell>
     );
   }
 
   return (
-    <section className="panel login">
-      <h2 className="panel__title">로그인</h2>
-      <p className="hint">회사 계정으로 로그인하세요. 광고 인사이트와 같은 계정이라 따로 가입하지 않아도 됩니다.</p>
-      <p className="hint">처음 쓰거나 비밀번호를 잊었으면 <a href={ACCOUNT_URL}>계정 관리 화면(광고 인사이트)</a>에서 가입·비밀번호 찾기를 한 뒤 승인을 받으세요.</p>
-      <form className="form login__form" onSubmit={login}>
-        <label>
-          <span>아이디 또는 이메일</span>
-          <input value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" required />
-        </label>
-        <label>
-          <span>비밀번호</span>
-          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required />
-        </label>
-        <div className="actions">
-          <button className="btn btn--primary" disabled={busy}>{busy ? '로그인 중…' : '로그인'}</button>
-        </div>
+    <GateShell icon={<LockIcon />} title="로그인하면 사용할 수 있습니다" desc="광고 인사이트와 같은 계정으로 로그인합니다.">
+      <form className="gate__form" onSubmit={login}>
+        <input className={`gate__input${err ? ' is-err' : ''}`} name="username" placeholder="이메일" value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" autoFocus required />
+        <input className={`gate__input${err ? ' is-err' : ''}`} type="password" name="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required />
+        {err && <p className="gate__error" role="alert">{err}</p>}
+        <button className="btn btn--primary gate__submit" disabled={busy}>{busy ? '확인 중...' : '로그인'}</button>
       </form>
-      {err && <p className="msg msg--error">{err}</p>}
-    </section>
+      {/* 비밀번호 찾기·가입은 광고 인사이트 접속 화면에서 (?reset=1 = 비밀번호 찾기로 바로 열림) */}
+      <p className="gate__method">
+        <a className="link-btn" href={`${ACCOUNT_URL}?reset=1`}>비밀번호를 잊으셨나요?</a>
+      </p>
+      <p className="gate__switch">
+        계정이 없으신가요? <a className="link-btn" href={ACCOUNT_URL}>회원가입</a>
+      </p>
+    </GateShell>
+  );
+}
+
+/** 자물쇠 아이콘 (광고 인사이트 접속 화면의 lucide Lock 과 같은 모양) */
+function LockIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  );
+}
+
+/** 접속 화면 한 장 — 광고 인사이트 AccessGate 와 같은 틀: 왼쪽 서비스 소개(강조색) + 오른쪽 카드 */
+function GateShell({ icon, title, desc, children }: { icon: React.ReactNode; title: string; desc: string; children?: React.ReactNode }) {
+  return (
+    <div className="gate">
+      <div className="gate__shell">
+        <aside className="gate__brand">
+          <p className="gate__brand-name">Pagefy</p>
+          <p className="gate__brand-lead">상세페이지 PSD 를 쇼핑몰에 붙여넣을 HTML 마크업으로 바꿉니다.</p>
+          <ul className="gate__brand-points">
+            <li>관리자가 승인한 계정만 사용</li>
+            <li>광고 인사이트와 같은 계정</li>
+            <li>PSD 는 이 PC 브라우저 안에서만 읽음</li>
+          </ul>
+          <p className="gate__brand-foot">계정·권한 문의는 마케팅팀으로 연락해 주세요.</p>
+        </aside>
+        <section className="gate__card" aria-labelledby="gate-title">
+          <div className="gate__icon">{icon}</div>
+          <h2 id="gate-title">{title}</h2>
+          <p className="gate__desc">{desc}</p>
+          {children}
+        </section>
+      </div>
+    </div>
   );
 }
