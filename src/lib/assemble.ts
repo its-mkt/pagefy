@@ -1,6 +1,7 @@
 // 계획 + 섹션별 결과 → 규칙 7-1 모양의 완전한 HTML 문서 (복사 구간 주석 포함)
 import type { GenerateMeta, PlanBundle, PsdSummary } from '../../shared/types';
 import { applyFontLock, lockFamily } from './fontLock';
+import { selectCss } from './selectable';
 
 export interface SectionOut {
   id: string;
@@ -21,7 +22,9 @@ export function assembleHtml(meta: GenerateMeta, bundle: PlanBundle, sections: S
   const rawCss = [bundle.style, ...sections.map((s) => s.css).filter(Boolean)].filter(Boolean).join('\n\n');
   // 고도몰: 폰트 고정 블록(규칙 5절 9항)을 코드가 만들어 <style> 앞에 둔다. 오픈마켓은 <style> 을 못 써서 해당 없음
   const lock = goodomall && summary ? applyFontLock(plan.prefix, summary, rawCss) : null;
-  const css = lock ? [...lock.imports, lock.css, lock.rest.trim()].filter(Boolean).join('\n\n') : rawCss;
+  // 고도몰: 글자 선택 막기(규칙 7-6) — 상세 영역 안 모든 요소, 예외 없음
+  const fixedCss = goodomall ? [lock?.css, `/* 글자 선택 막기 (규칙 7-6) — 상세 영역 안 전부, 예외 없음. 보안 기능 아님 */\n${selectCss(plan.prefix)}`].filter(Boolean).join('\n\n') : '';
+  const css = goodomall ? [...(lock?.imports ?? []), fixedCss, (lock ? lock.rest : rawCss).trim()].filter(Boolean).join('\n\n') : rawCss;
   const body = sections.map((s) => indent(s.html ? (lock ? lockFamily(s.html) : s.html) : `<!-- ${s.id} ${s.name}: 생성 실패 -->`)).join('\n\n');
   const wrapperOpen = goodomall ? `<div class="${plan.prefix}">` : `<div class="${plan.prefix}"${plan.wrapperStyle ? ` style="${plan.wrapperStyle.replace(/"/g, '&quot;')}"` : ''}>`;
   return `<!doctype html>

@@ -151,6 +151,17 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
             const src = im.source === 'composite' ? compositeCanvas : notextCanvas;
             if (!src) throw new Error('PSD 가 열려 있지 않습니다.');
             ctx.drawImage(src, im.x0, im.y0, w, h, 0, 0, w, h);
+            // 이미지에 남기는 글자(keepInImage) 영역은 글자 포함 원본 합성으로 덧그린다 (자르기 영역 밖은 잘라 냄)
+            if (im.source === 'notext' && im.patches?.length && compositeCanvas) {
+              for (const [px0, py0, px1, py1] of im.patches) {
+                const x0 = Math.max(Math.round(px0), Math.round(im.x0));
+                const y0 = Math.max(Math.round(py0), Math.round(im.y0));
+                const x1 = Math.min(Math.round(px1), Math.round(im.x0) + w, compositeCanvas.width);
+                const y1 = Math.min(Math.round(py1), Math.round(im.y0) + h, compositeCanvas.height);
+                if (x1 <= x0 || y1 <= y0) continue;
+                ctx.drawImage(compositeCanvas, x0, y0, x1 - x0, y1 - y0, x0 - Math.round(im.x0), y0 - Math.round(im.y0), x1 - x0, y1 - y0);
+              }
+            }
           }
           const blob = await c.convertToBlob(isJpg ? { type: 'image/jpeg', quality: 0.82 } : { type: 'image/png' });
           results.push({ file: im.file, blob, width: w, height: h });

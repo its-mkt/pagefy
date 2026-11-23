@@ -4,6 +4,7 @@
 // 화면 밖 iframe 에서 재므로 미리보기에는 영향 없음
 import type { PsdSummary, TextInfo } from '../../shared/types';
 import type { Check } from './output';
+import { GODO_MAX_W } from '../../shared/width';
 
 export const TOL_Y = 3;
 export const TOL_X = 6;
@@ -27,6 +28,9 @@ export interface LayoutResult {
 }
 
 const nonSpace = (s: string) => s.replace(/\s+/g, '');
+
+/** 복사 구간에 <style> 이 있으면 고도몰 (오픈마켓은 인라인 스타일만) */
+const isGoodomall = (html: string) => /<style[\s>]/i.test(html);
 
 function waitLoad(f: HTMLIFrameElement) {
   return new Promise<void>((res) => {
@@ -79,9 +83,12 @@ function cmpDesc(a: CharPos, b: CharPos) {
 
 export async function checkLayout(html: string, summary: PsdSummary): Promise<LayoutResult> {
   const W = summary.width;
+  // 고도몰 상세 영역은 최대 860px (규칙 7-2) → PSD 가 더 넓으면 860px 로 렌더하고 잰 값을 PSD px 로 되돌린다 (k 배)
+  const VW = isGoodomall(html) ? Math.min(W, GODO_MAX_W) : W;
+  const k = W / VW;
   const f = document.createElement('iframe');
   f.setAttribute('sandbox', 'allow-same-origin');
-  f.style.cssText = `position:fixed;left:-20000px;top:0;width:${W}px;height:1000px;border:0;visibility:hidden`;
+  f.style.cssText = `position:fixed;left:-20000px;top:0;width:${VW}px;height:1000px;border:0;visibility:hidden`;
   f.srcdoc = html;
   document.body.appendChild(f);
   try {
@@ -132,7 +139,7 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
     const sy = doc.scrollingElement?.scrollTop ?? 0;
     const rectOf = (el: HTMLElement) => {
       const r = el.getBoundingClientRect();
-      return { x: r.left, y: r.top + sy };
+      return { x: r.left * k, y: (r.top + sy) * k };
     };
 
     const meas = doc.createElement('canvas').getContext('2d')!;
@@ -141,7 +148,7 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
       const cs = getComputedStyle(el.parentElement);
       meas.font = cs.font;
       (meas as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = cs.letterSpacing === 'normal' ? '0px' : cs.letterSpacing;
-      return meas.measureText(' '.repeat(n)).width;
+      return meas.measureText(' '.repeat(n)).width * k;
     };
 
     const items: LayoutItem[] = [];
@@ -164,12 +171,12 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
         if (!best || score < best.score) best = { dy, dx, score, start: c.start };
       }
       // 짧은 문구가 PSD 위치 근처에 없으면 다른 곳의 같은 글자다 → 못 찾음(이미지로 구웠을 수 있음)
-      if (!best || (tg.key.length <= SHORT && best.score > 60)) {
+      if (!best || (tg.key.length <= SHORT && best.score > 60 * k)) {
         items.push({ id: t.id, text: tg.key.slice(0, 20), dy: null, dx: null, ok: false });
         continue;
       }
       chosen.add(best.start);
-      const ok = Math.abs(best.dy) <= TOL_Y && best.dx != null && Math.abs(best.dx) <= TOL_X;
+      const ok = Math.abs(best.dy) <= TOL_Y * k && best.dx != null && Math.abs(best.dx) <= TOL_X * k; // 허용치는 화면 px 기준 (860 상한으로 줄면 PSD px 로 k 배)
       items.push({ id: t.id, text: tg.key.slice(0, 20), dy: Math.round(best.dy * 10) / 10, dx: best.dx == null ? null : Math.round(best.dx * 10) / 10, ok });
     }
 
@@ -186,7 +193,7 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
     for (const w of [360, 323]) {
       f.style.width = `${w}px`;
       await new Promise((r) => setTimeout(r, 200));
-      scaleGap.push({ width: w, gap: Math.round((pageHeight() - (hPc * w) / W) * 10) / 10 });
+      scaleGap.push({ width: w, gap: Math.round((pageHeight() - (hPc * w) / VW) * 10) / 10 });
     }
 
     const found = items.filter((i) => i.dy != null);
@@ -197,12 +204,12 @@ export async function checkLayout(html: string, summary: PsdSummary): Promise<La
     if (found.length) {
       checks.push({
         level: pass === found.length ? 'ok' : pass / found.length >= 0.8 ? 'warn' : 'error',
-        message: `PSD 위치 대조: ${pass}/${found.length} 통과 (기준선 세로 ±${TOL_Y}px·가로 ±${TOL_X}px)${bad.length ? ` — 어긋남 큰 순: ${bad.slice(0, 4).map((i) => `"${i.text}" ${fmt(i)}`).join(', ')}` : ''}`,
+        message: `PSD 위치 대조: ${pass}/${found.length} 통과 (기준선 세로 ±${TOL_Y}px·가로 ±${TOL_X}px${k !== 1 ? `, PSD ${W}px → ${VW}px 로 렌더해 PSD px 로 환산` : ""})${bad.length ? ` — 어긋남 큰 순: ${bad.slice(0, 4).map((i) => `"${i.text}" ${fmt(i)}`).join(', ')}` : ''}`,
       });
     }
     if (notFound) checks.push({ level: 'warn', message: `위치 대조 못 한 텍스트 ${notFound}개 (HTML 글자에서 첫 줄을 못 찾음 — 이미지로 구웠거나 빠짐)` });
     // 반올림·이미지 높이 차이로 0.5% 또는 3px 까지는 같은 것으로 본다
-    const offScale = scaleGap.filter((g) => Math.abs(g.gap) > Math.max(3, ((hPc * g.width) / W) * 0.005));
+    const offScale = scaleGap.filter((g) => Math.abs(g.gap) > Math.max(3, ((hPc * g.width) / VW) * 0.005));
     if (hPc > 0)
       checks.push(
         offScale.length
