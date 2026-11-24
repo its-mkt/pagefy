@@ -12,11 +12,10 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, fileKeyOf, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
+import { busyJobIds, deleteJob, filterOn, fileKeyOf, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameGroup, sameMeta, saveFile, savesToAccount, touchRunning, type Job, type JobFilter } from './lib/jobs';
 import Header, { type View } from './components/Header';
 import HelpPanel from './components/HelpPanel';
 import AdminPanel from './components/AdminPanel';
-import FeedbackBar from './components/FeedbackBar';
 import { BUDGET_WARN_RATIO } from '../shared/ops';
 import { CHANNEL_LABEL } from '../shared/types';
 import { MARKETS } from '../shared/markets';
@@ -31,11 +30,15 @@ import ResultPanel, { type UploadState } from './components/ResultPanel';
 import Stepper from './components/Stepper';
 import { DEFAULT_MARKET, marketWidth, normMarket } from '../shared/markets';
 
+/** 로컬 개발 화면(yarn dev)의 자리 표시 프로필 — 배포는 로그인한 광고 인사이트 계정. 머리 프로필 메뉴 모양을 로컬에서도 보려고 */
+const LOCAL_USER = { email: 'local-dev@pagefy', name: '로컬 확인용' };
+
 export interface Loaded {
   file: File;
   summary: PsdSummary;
   composite: ImageBitmap;
-  notext: ImageBitmap;
+  /** 글자 뺀 배경 — PSD 를 먼저 보여 주는 동안(합성 중)에는 null · '' */
+  notext: ImageBitmap | null;
   compositeUrl: string;
   notextUrl: string;
 }
@@ -99,8 +102,9 @@ function readRoute(): Route {
   const q = new URLSearchParams(window.location.search);
   return { markup: q.get('markup') || undefined, rev: q.get('rev') || undefined, job: q.get('job') || undefined, html: q.get('view') === 'html', trash: q.has('trash') };
 }
-/** 메뉴 화면 (#help · #admin) — 작업 주소(?markup=…)와 따로 움직인다 */
-const viewOfHash = (): View => (window.location.hash === '#help' ? 'help' : window.location.hash === '#admin' ? 'admin' : 'work');
+/** 메뉴 화면 (#jobs · #help · #admin) — 작업 주소(?markup=…)와 따로 움직인다 */
+const VIEW_OF_HASH: Record<string, View> = { '#jobs': 'jobs', '#help': 'help', '#admin': 'admin' };
+const viewOfHash = (): View => VIEW_OF_HASH[window.location.hash] ?? 'work';
 function routeUrl(r: Route) {
   const view = r.html ? '&view=html' : '';
   const q = r.markup
@@ -208,6 +212,9 @@ export default function App() {
   const [viewJob, setViewJob] = useState<Job | null>(null);
   /** 메뉴 화면. 만들기 화면은 숨기기만 하고 그대로 둔다 (도움말을 보고 와도 작업·결과가 그대로) */
   const [view, setViewState] = useState<View>(viewOfHash);
+  /** 목록 읽기(refreshJobs)가 지금 화면을 알도록 — 거르기는 변환 내역 화면에서만 건다 */
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const setView = (v: View) => {
     if (v === view) return;
     window.history.pushState(null, '', window.location.pathname + window.location.search + (v === 'work' ? '' : `#${v}`));
@@ -307,7 +314,8 @@ export default function App() {
       setJobs(p.jobs);
       setMoreJobs(p.more);
     };
-    return listJobsPage(jobLimitRef.current, quick, show)
+    // 만들기 화면의 「최근 작업」은 거르기 없이 최근 것부터 (변환 내역 화면에서 걸어 둔 조건이 5건 목록에 걸리지 않게)
+    return listJobsPage(jobLimitRef.current, quick, show, viewRef.current === 'jobs' ? jobFilterRef.current : {})
       .then(show, (e) => console.warn('[jobs]', e))
       .finally(() => full && full === fullSeq.current && setJobsLoading(false));
   };
@@ -315,6 +323,25 @@ export default function App() {
     jobLimitRef.current += 20;
     refreshJobs();
   };
+  // 변환 내역 거르기 (채널·플랫폼·상태·기간·검색) — 바꾸면 처음 20개부터 다시 읽는다
+  const [jobFilter, setJobFilterState] = useState<JobFilter>({});
+  const jobFilterRef = useRef<JobFilter>({});
+  const setJobFilter = (f: JobFilter) => {
+    jobFilterRef.current = f;
+    setJobFilterState(f);
+    jobLimitRef.current = 20;
+    refreshJobs();
+  };
+  const showJobs = jobs.length > 0 || jobsLoading || trashN > 0 || !!trash || filterOn(jobFilter);
+  // 변환 내역 화면에 들어가고 나올 때 목록을 다시 읽는다 (거르기 조건을 걸고/빼고, 처음 20개부터)
+  const prevView = useRef(view);
+  useEffect(() => {
+    const was = prevView.current;
+    prevView.current = view;
+    if ((was === 'jobs') === (view === 'jobs') || !allowed) return;
+    jobLimitRef.current = 20;
+    refreshJobs();
+  }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
   /** 지금 작업을 고쳐 저장 (섹션이 동시에 끝나도 ref 에서 이어 붙여 잃지 않는다) */
   function updateJob(patch: Partial<Job> | ((j: Job) => Partial<Job>)) {
     const cur = jobRef.current;
@@ -535,10 +562,10 @@ export default function App() {
     const prev = loadedRef.current;
     if (prev) {
       URL.revokeObjectURL(prev.compositeUrl);
-      URL.revokeObjectURL(prev.notextUrl);
+      if (prev.notextUrl) URL.revokeObjectURL(prev.notextUrl);
       // 문서 크기 비트맵(장당 수십~수백 MB)은 GC 를 기다리지 않고 바로 놓는다
       prev.composite.close();
-      prev.notext.close();
+      prev.notext?.close();
     }
     setLoaded(null);
     loadedRef.current = null;
@@ -593,7 +620,10 @@ export default function App() {
     try {
       if (!r.job && !r.markup) {
         if (loadedRef.current || viewJobRef.current) closeCurrent();
-        if (r.trash) await openTrash();
+        if (r.trash) {
+          setViewState('jobs'); // 휴지통은 변환 내역 화면에만 있다
+          await openTrash();
+        }
         else setTrash(null);
         return;
       }
@@ -669,22 +699,49 @@ export default function App() {
     workerRef.current = worker;
     try {
       const t0 = performance.now();
-      const opened = await worker.open(file, (m) => !stale() && setLoading(m));
+      // 이 PSD 의 설정 (제품명·슬러그) — 미리보기를 먼저 띄울 때도 같은 값을 쓴다
+      const name = productNameFromFile(file.name);
+      // 규칙 6-1: 슬러그는 한 번 정하면 바꾸지 않는다 → 이 PC 에서 그 제품에 썼던 슬러그를 다시 쓴다
+      const savedSlug = readLocal<Record<string, string>>('pagefy.slugs', {})[name];
+      const next: Settings = { ...settings, productName: name, slug: savedSlug || toSlug(name), rev: todayRev() };
+      /** 먼저 띄운 화면 (PSD 확인·합성 미리보기) — 글자 뺀 배경은 아직 */
+      let early: { composite: ImageBitmap; url: string } | null = null;
+      const opened = await worker.open(
+        file,
+        (m) => !stale() && setLoading(m),
+        async ({ summary, composite }) => {
+          const url = await bitmapToUrl(composite);
+          if (stale() || loadedRef.current) {
+            URL.revokeObjectURL(url);
+            composite.close();
+            return;
+          }
+          early = { composite, url };
+          const L0: Loaded = { file, summary, composite, notext: null, compositeUrl: url, notextUrl: '' };
+          loadedRef.current = L0;
+          setLoaded(L0);
+          setSettings(job ? { ...job.settings, market: normMarket(job.settings.market) } : next);
+          console.info(`[psd] ${file.name} 미리보기 ${Math.round(performance.now() - t0)}ms`);
+        },
+      );
+      const first = early as { composite: ImageBitmap; url: string } | null;
       if (stale()) {
         opened.composite.close();
-        opened.notext.close();
+        opened.notext?.close();
         return;
       }
       setLoading('미리보기 만드는 중…');
-      const [compositeUrl, notextUrl] = await Promise.all([bitmapToUrl(opened.composite), bitmapToUrl(opened.notext)]);
+      // 먼저 띄운 합성 이미지가 있으면 그대로 쓰고(다시 만들지 않음), 글자 뺀 배경만 만든다
+      if (first) opened.composite.close();
+      const [compositeUrl, notextUrl] = await Promise.all([first ? Promise.resolve(first.url) : bitmapToUrl(opened.composite), bitmapToUrl(opened.notext!)]);
       if (stale()) {
         URL.revokeObjectURL(compositeUrl);
         URL.revokeObjectURL(notextUrl);
-        opened.composite.close();
-        opened.notext.close();
+        (first ? first.composite : opened.composite).close();
+        opened.notext?.close();
         return;
       }
-      const L: Loaded = { file, ...opened, compositeUrl, notextUrl };
+      const L: Loaded = { file, ...opened, composite: first ? first.composite : opened.composite, compositeUrl, notextUrl };
       loadedRef.current = L;
       setLoaded(L);
       if (import.meta.env.DEV) (window as unknown as { __pagefy: unknown }).__pagefy = { ...opened, compositeUrl, notextUrl }; // 개발 점검용
@@ -697,10 +754,6 @@ export default function App() {
         await restoreJob(job);
         return;
       }
-      const name = productNameFromFile(file.name);
-      // 규칙 6-1: 슬러그는 한 번 정하면 바꾸지 않는다 → 이 PC 에서 그 제품에 썼던 슬러그를 다시 쓴다
-      const savedSlug = readLocal<Record<string, string>>('pagefy.slugs', {})[name];
-      const next: Settings = { ...settings, productName: name, slug: savedSlug || toSlug(name), rev: todayRev() };
       setSettings(next);
       newJob(file, next);
     } catch (e) {
@@ -861,8 +914,18 @@ export default function App() {
       if (saved?.plan) {
         // 0) 저장된 계획에서 이어서
         ({ bundle, report: planReport, raw: planRaw } = saved.plan);
-        setRun({ ...emptyRun(), phase: 'running', startedAt: t0, usage: saved.usage, model: saved.model, status: [`저장된 계획으로 이어서 (섹션 ${Object.keys(saved.sections).length}/${bundle.plan.sections.length}개 완료)`] });
-        updateJob({ state: 'running', error: undefined, failed: {} });
+        const code = bundle.plan.engine === 'code';
+        const recalc = code && !!saved.meta && !sameMeta(saved.meta, m);
+        setRun({
+          ...emptyRun(),
+          phase: 'running',
+          startedAt: t0,
+          usage: saved.usage,
+          model: saved.model,
+          status: [recalc ? '저장된 구조 계획으로 지금 설정(판매처·이름)에 맞춰 다시 계산 — Claude 를 부르지 않아 비용 없음' : `저장된 계획으로 이어서 (섹션 ${Object.keys(saved.sections).length}/${bundle.plan.sections.length}개 완료)`],
+        });
+        // 코드 생성은 계획 + 지금 설정으로 마크업을 다시 계산하므로 작업의 설정도 지금 것으로 바꾼다
+        updateJob({ state: 'running', error: undefined, failed: {}, ...(code ? { meta: m, baseUrl: base } : {}) });
       } else {
         setRun({ ...emptyRun(), phase: 'running', startedAt: t0, status: ['PSD 렌더 타일 만드는 중…'] });
         // 이전 계획이 있으면 그 설정·계획은 새 계획을 받은 뒤에 바꾼다 (실패하면 이전 것 그대로)
@@ -1275,12 +1338,21 @@ export default function App() {
   // 목록 쪽은 가벼운 사본일 수 있어 지금 연 작업(jobRef)을 먼저 본다
   const cur = jobId ? (jobRef.current?.id === jobId ? jobRef.current : jobs.find((j) => j.id === jobId)) ?? null : null;
   const resumeInfo = (() => {
-    if (!cur?.plan || !cur.meta || cur.state === 'done' || cur.state === 'running') return null;
+    if (!cur?.plan || !cur.meta || cur.state === 'running') return null;
     const total = cur.plan.bundle.plan.sections.length;
+    const extraSame = (cur.extra ?? '') === settings.extra;
+    if (cur.plan.bundle.plan.engine === 'code') {
+      // 코드 생성: Claude 계획은 고도몰/오픈마켓 방식에만 달려 있고 폭·플랫폼 규칙·이미지 주소는 코드가 지금 설정으로 계산한다
+      // → 같은 묶음 안에서 판매처(아이티켓↔온코어, 쿠팡↔스마트스토어)·이름을 바꾸면 계획을 다시 써서 비용 없이 다시 계산
+      const changed = !sameMeta(cur.meta, meta);
+      if (cur.state === 'done' && !changed && extraSame) return null; // 이미 지금 설정으로 만든 결과
+      return { missing: total, total, same: extraSame && sameGroup(cur.meta, meta), code: true, changed };
+    }
+    if (cur.state === 'done') return null;
     const missing = total - Object.keys(cur.sections).length;
     if (!missing) return null;
-    const same = sameMeta(cur.meta, meta) && (cur.extra ?? '') === settings.extra;
-    return { missing, total, same, code: cur.plan.bundle.plan.engine === "code" };
+    const same = sameMeta(cur.meta, meta) && extraSame;
+    return { missing, total, same, code: false, changed: false };
   })();
   const resume = resumeInfo?.same ? resumeInfo : null;
 
@@ -1299,6 +1371,7 @@ export default function App() {
     : [];
   // 만들기 버튼이 왜 안 눌리는지 담당자에게 알려 준다
   const blockers = [
+    loaded && !loaded.notext && '글자 뺀 배경을 합성하는 중입니다 — 몇 초 뒤 만들 수 있습니다.',
     !meta.productName && '제품명을 입력하세요.',
     !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(meta.slug) && '서버 폴더 이름을 영문 소문자·숫자·하이픈으로 입력하세요 (PSD 이름이 한글이면 영문 모델명으로).',
     !/^https:\/\//.test(meta.publicRoot) && '이미지 공개 주소 루트는 https:// 로 시작해야 합니다.',
@@ -1307,7 +1380,8 @@ export default function App() {
     health && !ready && '생성 서버에 Claude API 키가 없습니다. 관리자에게 알려 주세요.',
     budget?.blocked && '이번 달 사용 한도에 도달했습니다. Pagefy 관리자에게 한도 해제를 요청하세요.',
   ].filter((b): b is string => !!b);
-  const canGenerate = !!loaded && !blockers.length && run.phase !== 'running';
+  // PSD 를 먼저 보여 주는 동안(글자 뺀 배경 합성 중)에는 만들 수 없다 — 다 읽으면 notext 가 생긴다
+  const canGenerate = !!loaded?.notext && !blockers.length && run.phase !== 'running';
   const hasResult = run.phase !== 'idle' || !!result;
   const step = !loaded ? 1 : result && !running ? 4 : hasResult ? 3 : 2;
 
@@ -1319,6 +1393,30 @@ export default function App() {
   // 토큰 갱신 중(role 확인 중)이라도 이미 로그인돼 있으면 작업 화면을 유지한다
   const showLogin = CLOUD && authReady && !allowed && !(session && (role === null || role === 'guest'));
 
+  // 변환 내역 — 머리말 메뉴 「변환 내역」(#jobs) 전용 화면 + 만들기 첫 화면의 「최근 작업」(최근 5건, 2026-11-24)
+  const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash };
+  const recentJobs = showJobs && <JobsPanel {...jobsProps} mode="recent" onOpen={openJob} onView={showSaved} onShowAll={() => setView('jobs')} />;
+  // 변환 내역 화면에서 열면 만들기 화면으로 넘어가 연다 (PSD·결과는 만들기 화면에 그려진다)
+  const jobsPage = (
+    <JobsPanel
+      {...jobsProps}
+      mode="page"
+      // 지금 열린 작업은 만들기 화면에 그대로 있다 → 그 화면으로 (결과가 있으면 결과 칸으로)
+      onGoCurrent={() => {
+        setView('work');
+        requestAnimationFrame(() => document.getElementById('result')?.scrollIntoView({ block: 'start' }));
+      }}
+      onOpen={(j, f) => {
+        setView('work');
+        openJob(j, f);
+      }}
+      onView={(j) => {
+        setView('work');
+        showSaved(j);
+      }}
+    />
+  );
+
   return (
     <div className="app">
       <Header
@@ -1327,9 +1425,12 @@ export default function App() {
         user={
           CLOUD && session
             ? { email: session.user.email ?? '', name: session.user.user_metadata?.name, avatarUrl: session.user.user_metadata?.avatar_url || undefined }
-            : undefined
+            : !CLOUD
+              ? LOCAL_USER
+              : undefined
         }
-        onLogout={CLOUD && session ? () => supabase.auth.signOut() : undefined}
+        // 로컬은 로그인이 없어 로그아웃해도 아무 일도 없다 (메뉴 모양 확인용으로 항목만 보인다)
+        onLogout={CLOUD && session ? () => supabase.auth.signOut() : !CLOUD ? () => console.info('[로컬] 로그인이 없어 로그아웃할 것이 없습니다') : undefined}
         // 첫 화면(PSD 올리기 칸이 크게 보임)에선 숨기고, PSD 를 연 뒤·저장된 결과를 볼 때만
         onNewPsd={allowed && (loaded || viewJob) ? (f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f)) : undefined}
         newPsdDisabled={running || !!loading}
@@ -1367,6 +1468,7 @@ export default function App() {
                 )}
               </p>
             )}
+            {view === 'jobs' && allowed && jobsPage}
             {view === 'help' && <HelpPanel />}
             {view === 'admin' && role === 'admin' && <AdminPanel onChanged={() => fetchHealth().then(setHealth, () => {})} />}
             {view === 'admin' && role !== 'admin' && <p className="msg msg--error">관리 화면은 관리자만 볼 수 있습니다.</p>}
@@ -1380,7 +1482,7 @@ export default function App() {
               file={loaded ? { name: loaded.file.name, size: loaded.file.size, width: loaded.summary.width, height: loaded.summary.height, thumbUrl: loaded.compositeUrl } : null}
             />
             {viewJob && <SavedView job={viewJob} onClose={() => setViewJob(null)} />}
-            {!loaded && allowed && (jobs.length > 0 || jobsLoading || trashN > 0 || !!trash) && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} loading={jobsLoading} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} onView={showSaved} trash={trash} trashN={trashN} trashLoading={trashLoading} onTrashOpen={openTrash} onTrashClose={() => setTrash(null)} onRestore={restoreFromTrash} onPurge={purgeFromTrash} />}
+            {!loaded && allowed && recentJobs}
             {loaded && !hasResult && <SummaryPanel loaded={loaded} />}
             {loaded && (
               <SettingsPanel
@@ -1402,7 +1504,7 @@ export default function App() {
             {metaDiff.length > 0 && result && (
               <div className="metadiff" role="alert">
                 <b>설정이 결과와 다릅니다 — 아래 결과는 바뀌기 전 설정({CHANNEL_LABEL[result.meta.channel]}{result.meta.market ? ` · ${MARKETS[result.meta.market].label}` : ''})으로 만든 것입니다.</b>
-                <span>바뀐 것: {metaDiff.join(' · ')}. 지금 설정으로 붙여넣으려면 다시 만들어야 합니다.</span>
+                <span>바뀐 것: {metaDiff.join(' · ')}. {resume?.code ? '같은 묶음 안에서 바꿔 저장된 구조 계획으로 비용 없이 다시 계산할 수 있습니다.' : '고도몰과 오픈마켓은 HTML 방식이 달라 구조 계획부터 다시 만들어야 합니다 (Claude 1회).'}</span>
                 <span className="metadiff__actions">
                   <button
                     type="button"
@@ -1411,10 +1513,12 @@ export default function App() {
                   >
                     설정을 결과대로 되돌리기
                   </button>
-                  <button type="button" className="btn btn--sm btn--primary" disabled={!canGenerate} onClick={() => generate()} title={canGenerate ? 'Claude 를 1회 부릅니다 (새로 만들 때와 비슷한 비용)' : blockers[0]}>
-                    지금 설정으로 다시 만들기
+                  <button type="button" className="btn btn--sm btn--primary" disabled={!canGenerate} onClick={() => generate()}>
+                    {resume?.code ? '지금 설정으로 다시 계산 (비용 없음)' : '지금 설정으로 다시 만들기'}
                   </button>
                 </span>
+                {/* 다시 만들기가 막힌 이유 — 설정 칸은 결과가 있으면 접혀 있어 거기 안내가 안 보인다 */}
+                {!canGenerate && blockers[0] && <small className="metadiff__why">다시 만들 수 없는 이유: {blockers[0]}</small>}
               </div>
             )}
             {hasResult && loaded && (
@@ -1430,6 +1534,7 @@ export default function App() {
                 onCancel={() => abortRef.current?.abort()}
                 onResume={resume && canGenerate ? () => generate() : undefined}
                 upload={health?.upload && result?.bundle.plan.engine === 'code' ? upload : undefined}
+                godo={!!health?.godo && result?.meta.channel === 'itket'}
                 onUpload={uploadImages}
                 onUploadReset={() => {
                   ++uploadRunRef.current;
@@ -1437,12 +1542,10 @@ export default function App() {
                   setUpload({ phase: 'idle', done: 0, total: 0 });
                 }}
                 onUndoUpload={undoUpload}
-                resumeLabel={resume ? (resume.code ? "저장된 계획으로 마무리 (비용 없음)" : `이어서 만들기 (남은 섹션 ${resume.missing}개)`) : undefined}
-                rating={result && !running && jobId ? <FeedbackBar jobId={jobId} product={result.meta.productName} /> : undefined}
+                resumeLabel={resume ? (resume.code ? (resume.changed ? '지금 설정으로 다시 계산 (비용 없음)' : '저장된 계획으로 마무리 (비용 없음)') : `이어서 만들기 (남은 섹션 ${resume.missing}개)`) : undefined}
               />
               </div>
             )}
-            {loaded && (jobs.length > 0 || jobsLoading || trashN > 0 || !!trash) && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} loading={jobsLoading} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} onView={showSaved} trash={trash} trashN={trashN} trashLoading={trashLoading} onTrashOpen={openTrash} onTrashClose={() => setTrash(null)} onRestore={restoreFromTrash} onPurge={purgeFromTrash} />}
             </div>
           </>
         )}

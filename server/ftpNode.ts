@@ -54,8 +54,8 @@ export const nodeDial: Dial = (host, port) =>
     });
   });
 
-function readSecretsFile(): Record<string, string> {
-  const file = path.join(os.homedir(), '.claude', 'secrets', 'nhn-image-ftp.env');
+export function readSecretsFile(name = 'nhn-image-ftp.env'): Record<string, string> {
+  const file = path.join(os.homedir(), '.claude', 'secrets', name);
   const out: Record<string, string> = {};
   try {
     for (const ln of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {

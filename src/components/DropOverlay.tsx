@@ -1,4 +1,5 @@
 import { useEffect, useState, type DragEvent } from 'react';
+import { UploadIcon } from './icons';
 
 interface Props {
   /** 끌어다 놓기를 받을지 (로그인·권한 확인 뒤에만) */
@@ -71,15 +72,13 @@ export default function DropOverlay({ enabled, cover, disabled, onFile }: Props)
       }}
     >
       <div className="dropcover__box">
-        <svg className="dropcover__icon" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="square" />
-        </svg>
+        <UploadIcon className="dropcover__icon" />
         {disabled ? (
           <p className="dropcover__msg">만드는 중에는 다른 PSD 를 열 수 없습니다</p>
         ) : (
           <>
             <p className="dropcover__msg">여기에 놓으면 새 PSD 로 엽니다</p>
-            <p className="dropcover__sub">지금 작업은 「최근 작업」에 저장돼 있습니다</p>
+            <p className="dropcover__sub">지금 작업은 「변환 내역」에 저장돼 있습니다</p>
           </>
         )}
       </div>

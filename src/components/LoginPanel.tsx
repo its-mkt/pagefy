@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, toLoginEmail, type Role } from '../lib/supabase';
+import { LockIcon } from './icons';
 
 /** 계정 관리(가입·승인 요청·비밀번호 찾기)를 하는 곳 */
 const ACCOUNT_URL = '/ad-insight/';
@@ -70,14 +71,6 @@ export default function LoginPanel({ session, role }: { session: Session | null;
 }
 
 /** 자물쇠 아이콘 (광고 인사이트 접속 화면의 lucide Lock 과 같은 모양) */
-function LockIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-    </svg>
-  );
-}
 
 /** 접속 화면 한 장 — 광고 인사이트 AccessGate 와 같은 틀: 왼쪽 서비스 소개(강조색) + 오른쪽 카드 */
 function GateShell({ icon, title, desc, children }: { icon: React.ReactNode; title: string; desc: string; children?: React.ReactNode }) {

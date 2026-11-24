@@ -1,12 +1,12 @@
-// 관리 화면 (주소 #admin, 광고 인사이트 역할 admin 만) — 이번 달 비용·월 상한, 사용·실패 기록, 결과 평가
-// 숫자는 함수가 DB(pagefy_runs·feedback·settings)에서 모은다 (core/ops.ts). 로컬은 MOCK=1 일 때 예시 숫자
+// 관리 화면 (주소 #admin, 광고 인사이트 역할 admin 만) — 이번 달 비용·월 상한, 사용·실패 기록
+// 숫자는 함수가 DB(pagefy_runs·settings)에서 모은다 (core/ops.ts). 로컬은 MOCK=1 일 때 예시 숫자
 import { useCallback, useEffect, useState } from 'react';
-import { type AdminStats, BUDGET_WARN_RATIO, FEEDBACK_AREAS, monthKST, nextMonth } from '../../shared/ops';
+import { type AdminStats, BUDGET_WARN_RATIO, monthKST, nextMonth } from '../../shared/ops';
 import { fetchAdminStats, saveAdminSettings } from '../lib/api';
+import { when } from '../lib/time';
 
 const usd = (n: number) => `$${n.toFixed(2)}`;
 const pct = (a: number, b: number) => (b ? `${Math.round((a / b) * 100)}%` : '—');
-const when = (iso: string) => new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const KIND: Record<string, string> = { timeout: '시간 초과', refusal: '모델 거절', api: 'Claude API', other: '기타' };
 
 /** onChanged: 상한을 바꾸거나 풀면 불린다 — App 이 머리말·경고 띠의 사용액을 다시 읽게 */
@@ -50,6 +50,8 @@ export default function AdminPanel({ onChanged }: { onChanged?: () => void }) {
   };
 
   const thisMonth = month === monthKST();
+  /** 완료 건수 = 성공한 Claude 호출 (지금 방식은 작업 1건에 구조 계획 1회 — 수정 요청도 1건으로 센다) */
+  const done = stats?.runs.ok ?? 0;
   const b = stats?.budget;
   const ratio = b ? Math.min(1, b.spentUsd / b.capUsd) : 0;
   const cap = Number(capInput);
@@ -91,11 +93,13 @@ export default function AdminPanel({ onChanged }: { onChanged?: () => void }) {
               </span>
               <small>{b.blocked ? '상한 도달 — 새 생성이 막혀 있습니다' : b.unblocked ? '이번 달 상한 해제됨' : `${pct(b.spentUsd, b.capUsd)} 사용`}</small>
             </div>
-            <div className="admin__tile">
-              <span>그대로 붙여넣기 비율</span>
-              <b>{pct(stats.feedback.asis, stats.feedback.total)}</b>
+            {/* 도입 성과 기준 (2026-11-24): 완료 건수·실패율·1건 평균 비용·평균 소요 시간 — pagefy_runs 자동 기록 */}
+            <div className={`admin__tile${done + stats.runs.failed && stats.runs.failed / (done + stats.runs.failed) > 0.1 ? ' is-warn' : ''}`}>
+              <span>이번 달 완료 (도입 성과)</span>
+              <b>{done}건</b>
               <small>
-                평가 {stats.feedback.total}건 · 그대로 {stats.feedback.asis} · 고쳐서 {stats.feedback.edited}
+                실패율 {pct(stats.runs.failed, done + stats.runs.failed)} · 1건 평균 {done ? usd(b.spentUsd / done) : '—'}
+                {stats.runs.avgPlanMs ? ` · 평균 ${Math.round(stats.runs.avgPlanMs / 1000)}초` : ''}
               </small>
             </div>
             <div className="admin__tile">
@@ -159,25 +163,6 @@ export default function AdminPanel({ onChanged }: { onChanged?: () => void }) {
               </ul>
             </div>
 
-            {/* 고친 곳 */}
-            <div className="admin__box">
-              <h3 className="admin__h">「고쳐서 썼어요」 고친 곳</h3>
-              {Object.keys(stats.feedback.areas).length ? (
-                <ul className="admin__months">
-                  {FEEDBACK_AREAS.filter((a) => stats.feedback.areas[a.id]).map((a) => (
-                    <li key={a.id}>
-                      <span>{a.label}</span>
-                      <span className="admin__bar" aria-hidden="true">
-                        <i style={{ width: `${(stats.feedback.areas[a.id] / Math.max(...Object.values(stats.feedback.areas))) * 100}%` }} />
-                      </span>
-                      <b>{stats.feedback.areas[a.id]}건</b>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="hint">아직 없습니다.</p>
-              )}
-            </div>
           </div>
 
           {/* 사람별 */}
@@ -231,27 +216,6 @@ export default function AdminPanel({ onChanged }: { onChanged?: () => void }) {
             )}
           </div>
 
-          {/* 최근 평가 */}
-          <div className="admin__box">
-            <h3 className="admin__h">최근 평가</h3>
-            {stats.recentFeedback.length ? (
-              <ul className="admin__list">
-                {stats.recentFeedback.map((f, i) => (
-                  <li key={i}>
-                    <span className="admin__when">{when(f.at)}</span>
-                    <span className={`badge ${f.verdict === 'asis' ? 'badge--ok' : 'badge--warn'}`}>{f.verdict === 'asis' ? '그대로' : '고쳐서'}</span>
-                    <span>
-                      <b>{f.product || '(제품명 없음)'}</b> · {f.email}
-                      {f.areas.length > 0 && ` · ${f.areas.map((a) => FEEDBACK_AREAS.find((x) => x.id === a)?.label ?? a).join(', ')}`}
-                      {f.note && <small>{f.note}</small>}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="hint">아직 평가가 없습니다. 결과 화면 아래 「붙여넣은 뒤 어땠나요?」에서 평가할 수 있습니다.</p>
-            )}
-          </div>
         </>
       )}
     </section>

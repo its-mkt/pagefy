@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
+import { RadioGroup } from 'radix-ui';
 import type { Channel, HealthInfo } from '../../shared/types';
-import { CHANNEL_LABEL } from '../../shared/types';
 import { readLocal, toSlug } from '../lib/util';
 import { MARKETS, normMarket, type Market } from '../../shared/markets';
 
@@ -22,7 +22,7 @@ interface Props {
   canGenerate: boolean;
   running: boolean;
   /** 저장된 계획으로 이어서 만들 수 있음 (남은 섹션 수) */
-  resume: { missing: number; total: number; code?: boolean } | null;
+  resume: { missing: number; total: number; code?: boolean; changed?: boolean } | null;
   /** 저장된 계획이 있지만 설정이 바뀌어 처음부터 만들어야 함 */
   resumeChanged: boolean;
   /** fresh = 저장된 계획을 버리고 처음부터 */
@@ -36,11 +36,11 @@ interface Props {
   blockers: string[];
 }
 
-const CHANNEL_DESC: Record<Channel, string> = {
-  itket: '고도몰 · <style> 사용 · PC 최대 860px',
-  oncore: '고도몰 · <style> 사용 · PC 최대 860px',
-  openmarket: '인라인 스타일만 · 아래에서 플랫폼 선택',
-};
+/** 고도몰 쇼핑몰 (같은 규칙 — <style> 사용, PC 최대 860px) */
+const GODO = ['itket', 'oncore'] as const satisfies readonly Channel[];
+const GODO_LABEL: Record<(typeof GODO)[number], string> = { itket: '아이티켓', oncore: '온코어' };
+/** 접힌 줄에 보일 판매처 — 고도몰 · 아이티켓 / 오픈마켓 · 쿠팡 */
+const placeOf = (c: Channel, m: Market) => (c === 'openmarket' ? `오픈마켓 · ${MARKETS[m].label}` : `고도몰 · ${GODO_LABEL[c]}`);
 
 export default function SettingsPanel({ settings: s, onChange, baseUrl, canGenerate, running, resume, resumeChanged, onGenerate, onCancel, health, collapsed, blockers }: Props) {
   // 예전에 저장된 작업은 market 이 없다 → 기본 플랫폼으로
@@ -65,7 +65,7 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
         <div className="setrow">
           <p className="setrow__text">
             <b>{s.productName.trim() || '제품명 없음'}</b>
-            <span>{CHANNEL_LABEL[s.channel]}{s.channel === 'openmarket' ? ` · ${MARKETS[mk].label}` : ''}</span>
+            <span>{placeOf(s.channel, mk)}</span>
             <span>서버 폴더 {s.slug}</span>
           </p>
           <div className="setrow__acts">
@@ -107,35 +107,57 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
           </label>
         </div>
 
-        <div className="channels" role="radiogroup" aria-label="채널">
-          {(Object.keys(CHANNEL_LABEL) as Channel[]).map((c) => (
-            <label key={c} className={`channel ${s.channel === c ? 'is-on' : ''}`}>
-              <input type="radio" name="pagefy-channel" value={c} checked={s.channel === c} onChange={() => set('channel', c)} />
-              <span className="channel__body">
-                <b>{CHANNEL_LABEL[c]}</b>
-                <small>{CHANNEL_DESC[c]}</small>
-              </span>
-            </label>
-          ))}
-        </div>
+        {/* 판매처: 고도몰(아이티켓·온코어) / 오픈마켓(플랫폼별)을 한 묶음으로 고른다 — 오픈마켓은 플랫폼을 바로 누른다 */}
+        <RadioGroup.Root
+          className="chgroups"
+          aria-label="판매처"
+          value={s.channel === 'openmarket' ? `openmarket:${mk}` : s.channel}
+          onValueChange={(v) => {
+            const [ch, m] = v.split(':');
+            if (ch === 'openmarket') onChange({ ...s, channel: 'openmarket', market: m as Market });
+            else set('channel', ch as Channel);
+          }}
+        >
+          <div className="chgroup">
+            <p className="chgroup__head">
+              <b>고도몰</b>
+              <small>&lt;style&gt; 사용 · PC 최대 860px</small>
+            </p>
+            <div className="chgroup__opts">
+              {GODO.map((c) => (
+                <RadioGroup.Item key={c} value={c} className="chopt">
+                  <span className="chopt__dot" aria-hidden="true"><RadioGroup.Indicator className="chopt__on" /></span>
+                  <b>{GODO_LABEL[c]}</b>
+                </RadioGroup.Item>
+              ))}
+            </div>
+          </div>
+          <div className="chgroup">
+            <p className="chgroup__head">
+              <b>오픈마켓</b>
+              <small>인라인 스타일만 · 플랫폼마다 폭·규칙이 다름</small>
+            </p>
+            <div className="chgroup__opts">
+              {(Object.keys(MARKETS) as Market[]).map((m) => {
+                return (
+                  <RadioGroup.Item key={m} value={`openmarket:${m}`} className="chopt">
+                    <span className="chopt__dot" aria-hidden="true"><RadioGroup.Indicator className="chopt__on" /></span>
+                    <b>{MARKETS[m].label}</b>
+                    {MARKETS[m].width && <small>{MARKETS[m].width}px</small>}
+                  </RadioGroup.Item>
+                );
+              })}
+            </div>
+          </div>
+        </RadioGroup.Root>
         {s.channel === 'openmarket' && (
-          <div className="market">
-            <label className="market__pick">
-              <span>플랫폼</span>
-              <select value={mk} onChange={(e) => set('market', e.target.value as Market)} aria-label="오픈마켓 플랫폼">
-                {(Object.keys(MARKETS) as Market[]).map((m) => (
-                  <option key={m} value={m}>
-                    {MARKETS[m].label}
-                    {MARKETS[m].width ? ` · 폭 ${MARKETS[m].width}px` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <p className="market">
+            <b>{MARKETS[mk].label}</b>
             <small className="market__note">
               {MARKETS[mk].note}
               {!MARKETS[mk].verified && ' (기준 확인 전 — 붙여넣은 뒤 마켓 미리보기로 확인)'}
             </small>
-          </div>
+          </p>
         )}
 
         <div className="form setup__extra">
@@ -190,7 +212,7 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
           <button type="button" className="btn btn--ghost" onClick={onCancel}>취소</button>
         ) : resume ? (
           <>
-            <button type="button" className="btn btn--primary btn--go" disabled={!canGenerate} onClick={() => onGenerate()}>{resume.code ? "저장된 계획으로 마무리 (비용 없음)" : `이어서 만들기 (남은 섹션 ${resume.missing}개)`}</button>
+            <button type="button" className="btn btn--primary btn--go" disabled={!canGenerate} onClick={() => onGenerate()}>{resume.code ? (resume.changed ? "지금 설정으로 다시 계산 (비용 없음)" : "저장된 계획으로 마무리 (비용 없음)") : `이어서 만들기 (남은 섹션 ${resume.missing}개)`}</button>
             <button type="button" className="btn" disabled={!canGenerate} onClick={() => onGenerate(true)}>처음부터 다시</button>
           </>
         ) : (
@@ -207,9 +229,9 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
       )}
       <p className="hint setup__cost">
         {resume
-          ? resume.code ? "구조 계획은 이미 받아 두었습니다. 마크업은 프로그램이 다시 계산하므로 API 비용이 들지 않습니다." : `저장된 계획(섹션 ${resume.total - resume.missing}/${resume.total}개 완료)에서 이어갑니다. 남은 섹션만 요청하므로 비용이 적게 듭니다.`
+          ? resume.code ? (resume.changed ? "같은 묶음(고도몰끼리·오픈마켓끼리) 안에서 바꿔 받아 둔 구조 계획을 그대로 씁니다. 폭·플랫폼 규칙·이미지 주소만 지금 설정으로 다시 계산해 비용이 들지 않습니다 (이미지는 바뀐 폴더에 다시 올려야 함)." : "구조 계획은 이미 받아 두었습니다. 마크업은 프로그램이 다시 계산하므로 API 비용이 들지 않습니다.") : `저장된 계획(섹션 ${resume.total - resume.missing}/${resume.total}개 완료)에서 이어갑니다. 남은 섹션만 요청하므로 비용이 적게 듭니다.`
           : resumeChanged
-            ? '설정이 저장된 계획을 만들 때와 달라 처음부터 다시 만듭니다.'
+            ? '고도몰과 오픈마켓을 바꾸면(또는 추가 지시를 바꾸면) HTML 방식이 달라져 구조 계획부터 다시 만듭니다 (Claude 1회, 약 $0.5~2).'
             : health?.mock ? 'MOCK 모드라 비용이 들지 않습니다.' : 'Claude 가 섹션 구조를 한 번 정하고, 글자 위치·크기·줄바꿈은 프로그램이 PSD 값으로 계산합니다 (1회 약 $0.5~2).'}
       </p>
     </section>

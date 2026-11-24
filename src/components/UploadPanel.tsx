@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react';
+import { useRef, useState, type DragEvent } from 'react';
 import { fmtBytes } from '../lib/util';
+import { UploadIcon } from './icons';
+import { useElapsed } from '../lib/time';
 
 /** PSD 열기 단계 — 워커·App 이 보내는 진행 문구의 앞부분으로 몇 번째 단계인지 안다 (psd.worker.ts · App.openPsd) */
 const STEPS = [
@@ -11,12 +13,8 @@ const STEPS = [
 
 /** 진행 문구 + 단계 표시 + 걸린 시간 (큰 PSD 는 오래 걸려 멈춘 것처럼 보이지 않게) */
 function LoadSteps({ message }: { message: string }) {
-  const [sec, setSec] = useState(0);
-  useEffect(() => {
-    const t0 = Date.now();
-    const id = window.setInterval(() => setSec(Math.floor((Date.now() - t0) / 1000)), 1000);
-    return () => window.clearInterval(id);
-  }, []);
+  const [since] = useState(Date.now);
+  const sec = Math.floor(useElapsed(since) / 1000);
   const at = STEPS.findIndex((s) => message.startsWith(s.key));
   return (
     <div className="upload__busy" role="status" aria-live="polite">
@@ -128,9 +126,7 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
           busy
         ) : (
           <>
-            <svg className="drop__icon" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 16V4m0 0-4.5 4.5M12 4l4.5 4.5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="square" />
-            </svg>
+            <UploadIcon className="drop__icon" />
             <p className="drop__msg">PSD 파일을 여기에 끌어다 놓으세요</p>
             <p className="drop__sub">또는 클릭해서 고르기</p>
             <p className="drop__hint">파일은 이 PC 브라우저 안에서만 읽습니다. 서버로는 레이어 정보와 축소 렌더 이미지만 보냅니다.</p>

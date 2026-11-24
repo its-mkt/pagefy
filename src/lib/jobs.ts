@@ -4,7 +4,8 @@
 // - PSD 원본: 너무 커서(수십~수백 MB) 계정에 올리지 않고 이 브라우저에만 둔다 (최근 MAX_JOBS 개 작업의 PSD 만 보관).
 //   다른 PC 에서 열면 같은 PSD(이름·크기)를 다시 골라야 이미지 자르기·이어서 만들기가 된다.
 // - 생성 중 표시: 같은 브라우저 탭끼리는 Web Lock, 다른 PC·브라우저끼리는 running_until(3분, 생성 중 1분마다 연장).
-import type { GenerateMeta, PlanBundle, UsageInfo } from '../../shared/types';
+import type { Channel, GenerateMeta, PlanBundle, UsageInfo } from '../../shared/types';
+import type { Market } from '../../shared/markets';
 import type { Settings } from '../components/SettingsPanel';
 import type { SectionOut } from './assemble';
 import { CLOUD } from './api';
@@ -257,12 +258,48 @@ async function getLocal(id: string) {
 
 /** 작업 목록 한 쪽 (최근 순). more = 더 있음. 계정과 브라우저를 합치고, 브라우저 쪽이 더 새로우면 계정에 올린다 */
 /** 마지막으로 계정에서 읽은 목록 — 저장할 때마다 다시 읽지 않고 이것과 브라우저 사본을 합친다 (quick) */
-let lastCloud: { rows: Job[]; limit: number } | null = null;
+let lastCloud: { rows: Job[]; limit: number; filter: string } | null = null;
 
-export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jobs: Job[]; more: boolean }) => void): Promise<{ jobs: Job[]; more: boolean }> {
+/** 변환 내역 거르기 — 비어 있으면 전체. 계정 목록은 서버에서 거른 뒤 20개씩 읽으므로 「더 보기」로 빠짐없이 이어진다 */
+export interface JobFilter {
+  /** godo = 고도몰 전체(아이티켓·온코어) */
+  channel?: Channel | 'godo';
+  /** 오픈마켓 플랫폼 (channel 이 openmarket 일 때만) */
+  market?: Market;
+  /** done = 완료만, problem = 오류·중단 */
+  state?: 'done' | 'problem';
+  /** 최근 n일 안에 작업한 것 (마지막 수정 기준) */
+  days?: number;
+  /** 제품명·PSD 파일명 검색 */
+  q?: string;
+}
+export const filterOn = (f: JobFilter) => !!(f.channel || f.state || f.days || f.q?.trim());
+const PROBLEM: JobState[] = ['error', 'stopped'];
+/** 고도몰 채널 */
+const GODO: Channel[] = ['itket', 'oncore'];
+/** 검색어에서 PostgREST 필터 문법을 깨는 글자를 뺀다 */
+const cleanQ = (q?: string) => (q ?? '').replace(/[,()*%\\]/g, ' ').trim();
+const sinceMs = (days: number) => {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0); // 「오늘」= 오늘 0시부터, 「7일」= 6일 전 0시부터
+  return d.getTime() - (days - 1) * 86_400_000;
+};
+function matchFilter(j: Job, f: JobFilter) {
+  if (f.channel === 'godo' ? !GODO.includes(j.settings?.channel as Channel) : f.channel && j.settings?.channel !== f.channel) return false;
+  if (f.channel === 'openmarket' && f.market && j.settings?.market !== f.market) return false;
+  if (f.state === 'done' && j.state !== 'done') return false;
+  if (f.state === 'problem' && !PROBLEM.includes(j.state)) return false;
+  if (f.days && j.updatedAt < sinceMs(f.days)) return false;
+  const q = cleanQ(f.q).toLowerCase();
+  if (q && !`${j.settings?.productName ?? ''} ${j.fileName}`.toLowerCase().includes(q)) return false;
+  return true;
+}
+
+export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jobs: Job[]; more: boolean }) => void, filter: JobFilter = {}): Promise<{ jobs: Job[]; more: boolean }> {
   const cloud = await cloudReady(); // 계정 id 를 먼저 알아야 이 계정의 브라우저 사본만 고른다
   const [all, keyList] = await Promise.all([listLocal(), store('files').then((s) => req(s.getAllKeys()))]);
-  const local = all.filter((j) => !j.deletedAt);
+  const local = all.filter((j) => !j.deletedAt && matchFilter(j, filter));
+  const fkey = JSON.stringify(filter);
   const keys = new Set(keyList as string[]);
   const mark = (j: Job): Job => ({ ...j, noFile: !keys.has(j.fileKey) });
   const localPage = { jobs: local.slice(0, limit).map(mark), more: local.length > limit };
@@ -271,16 +308,25 @@ export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jo
   if (!quick && local.length) onLocal?.(localPage);
 
   let rows: Job[];
-  if (quick && lastCloud && lastCloud.limit === limit) rows = lastCloud.rows;
+  if (quick && lastCloud && lastCloud.limit === limit && lastCloud.filter === fkey) rows = lastCloud.rows;
   else {
-    const { data, error } = await supabase.from(TABLE).select(LIST_COLS).is('deleted_at', null).order('updated_at', { ascending: false }).limit(limit + 1);
+    let query = supabase.from(TABLE).select(LIST_COLS).is('deleted_at', null);
+    if (filter.channel === 'godo') query = query.in('data->settings->>channel', GODO);
+    else if (filter.channel) query = query.eq('data->settings->>channel', filter.channel);
+    if (filter.channel === 'openmarket' && filter.market) query = query.eq('data->settings->>market', filter.market);
+    if (filter.state === 'done') query = query.eq('state', 'done');
+    if (filter.state === 'problem') query = query.in('state', PROBLEM);
+    if (filter.days) query = query.gte('updated_at', new Date(sinceMs(filter.days)).toISOString());
+    const q = cleanQ(filter.q);
+    if (q) query = query.or(`file_name.ilike.%${q}%,data->settings->>productName.ilike.%${q}%`);
+    const { data, error } = await query.order('updated_at', { ascending: false }).limit(limit + 1);
     if (error) {
       cloudFailed(error, '읽기');
       return localPage;
     }
     rows = (data as unknown as LiteRow[]).map(fromLite);
     await fillOldInfo(rows);
-    lastCloud = { rows, limit };
+    lastCloud = { rows, limit, filter: fkey };
   }
   const more = rows.length > limit;
   const byId = new Map(rows.slice(0, limit).map((j) => [j.id, j]));
@@ -601,6 +647,8 @@ export const sameFile = (job: Pick<Job, 'fileName' | 'fileSize'>, f: File) => f.
 
 export const sameMeta = (a: GenerateMeta, b: GenerateMeta) =>
   a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot && (a.market ?? '') === (b.market ?? '');
+/** 같은 묶음(고도몰끼리 · 오픈마켓끼리) — 구조 계획은 고도몰/오픈마켓 방식에만 달려 있어 묶음이 같으면 계획을 다시 쓸 수 있다 */
+export const sameGroup = (a: GenerateMeta, b: GenerateMeta) => (a.channel === 'openmarket') === (b.channel === 'openmarket');
 
 /** 브라우저가 공간이 모자랄 때 임의로 지우지 않게 요청 (거절돼도 동작은 같다) */
 export function requestPersist() {

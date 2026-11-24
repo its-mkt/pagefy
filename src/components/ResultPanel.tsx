@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Tabs } from 'radix-ui';
 import { godoMaxWidth } from '../../shared/width';
 import { marketWidth } from '../../shared/markets';
 import type { Loaded, Result, RunState } from '../App';
@@ -6,8 +7,16 @@ import { copySection, type Check } from '../lib/output';
 import { keepMap } from '../lib/codegen';
 import { isPlanFixable } from '../lib/autofix';
 import { plainCheck } from '../lib/plainCheck';
+import GodoCheckBox from './GodoCheckBox';
+import Select from './Select';
 import { buildZip, download, fmtBytes } from '../lib/util';
-import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
+import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, saveZipToShared, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
+import { CheckField, Fold, Seg, Tip } from './ui';
+import Elapsed from './Elapsed';
+import { CheckIcon } from './icons';
+import { copyText, useCopy } from '../lib/clipboard';
+import { fmtDur, secMs } from '../lib/time';
+import { useFrameHeight } from '../lib/useFrameHeight';
 
 interface Props {
   run: RunState;
@@ -20,8 +29,6 @@ interface Props {
   /** 중단된 작업의 남은 섹션 만들기 */
   onResume?: () => void;
   resumeLabel?: string;
-  /** 결과 평가 막대 (「그대로 썼어요 / 고쳐서 썼어요」, App 이 작업 id 와 함께 넘김) — 받아 가기 블록 바로 아래 */
-  rating?: React.ReactNode;
   /** 이미지 서버 업로드 (서버에 접속 정보가 있을 때만) */
   upload?: UploadState;
   /** 끝까지 올리고 모두 열리는 것까지 확인하면 true. confirmOverwrite = 덮어쓰기 안내에서 확인함 (내용이 다른 같은 이름 파일을 덮어씀) */
@@ -34,6 +41,8 @@ interface Props {
   onAutoFix?: () => void;
   /** 지난 자동 수정 결과 안내 */
   autoFix?: { ok: boolean; text: string } | null;
+  /** 고도몰 등록 확인 상자 (서버에 아이티켓 고도몰 API 키가 있고 채널이 아이티켓일 때) */
+  godo?: boolean;
 }
 
 export interface UploadState {
@@ -82,62 +91,6 @@ function layoutFeedback(result: Result, loaded: Loaded): Record<string, string> 
   );
 }
 
-/** 복사 버튼 — 누르면 1.5초 동안 "복사됨" */
-/** 클립보드에 쓴다. http 주소·권한 거부 등으로 막히면 옛 방식(execCommand)으로 한 번 더, 그래도 안 되면 false */
-async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;left:-9999px;top:0';
-    document.body.appendChild(ta);
-    ta.select();
-    let ok = false;
-    try {
-      ok = document.execCommand('copy');
-    } catch {
-      ok = false;
-    }
-    ta.remove();
-    return ok;
-  }
-}
-
-/**
- * copied: 복사한 버튼 key, 실패하면 'fail:key'
- * copyLater: 글이 나중에 준비될 때 (이미지 업로드 뒤 HTML 복사). 클릭 직후 ClipboardItem 에 약속(Promise)을 넘겨야
- * 업로드가 오래 걸려도 브라우저가 복사를 막지 않는다. 글이 null(업로드 실패)이면 아무것도 복사하지 않는다
- */
-function useCopy(): [string | null, (key: string, text: string) => Promise<void>, (key: string, text: Promise<string | null>) => Promise<void>] {
-  const [copied, setCopied] = useState<string | null>(null);
-  const timer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-  const mark = (v: string, ms = 1500) => {
-    setCopied(v);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setCopied(null), ms);
-  };
-  const copy = async (key: string, text: string) => mark((await copyText(text)) ? key : `fail:${key}`);
-  const copyLater = async (key: string, text: Promise<string | null>) => {
-    try {
-      if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) throw new Error('no ClipboardItem');
-      const blob = text.then((t) => {
-        if (t == null) throw new Error('skip');
-        return new Blob([t], { type: 'text/plain' });
-      });
-      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
-      mark(key, 4000);
-    } catch {
-      const t = await text.catch(() => null);
-      if (t == null) return; // 업로드 실패 — 안내는 업로드 상태 줄에
-      mark((await copyText(t)) ? key : `fail:${key}`, 4000);
-    }
-  };
-  return [copied, copy, copyLater];
-}
-
 type Step = 'plan' | 'sections' | 'check';
 const STEPS: [Step, string][] = [
   ['plan', '계획'],
@@ -156,25 +109,6 @@ function runProgress(run: RunState): { step: Step; pct: number; label: string } 
 }
 
 const LEVEL_ORDER = { error: 0, warn: 1, ok: 2 } as const;
-
-/** 3초 → "3초", 83초 → "1분 23초" */
-function fmtDur(ms: number) {
-  const s = Math.max(0, Math.round(ms / 1000));
-  return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분${s % 60 ? ` ${s % 60}초` : ''}`;
-}
-
-/** 초 단위로 반올림한 ms — 나눠 보여 줄 때 합이 전체와 맞게 */
-const secMs = (ms: number) => Math.round(ms / 1000) * 1000;
-
-/** 만드는 중 흐르는 시간 (1초마다 다시 그림) */
-function Elapsed({ since }: { since: number }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(t);
-  }, []);
-  return <span className="progress__time">{fmtDur(now - since)} 지남</span>;
-}
 
 /** 자동으로 못 고치는 문제를 관리자에게 넘길 때 붙여넣을 진단 정보 (PSD·계획·점검·위치 어긋남) */
 function diagnostics(result: Result, loaded: Loaded, run: RunState) {
@@ -196,7 +130,7 @@ function diagnostics(result: Result, loaded: Loaded, run: RunState) {
   ].join('\n');
 }
 
-export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, rating, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, autoFix }: Props) {
+export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, autoFix, godo }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
   const [feedback, setFeedback] = useState('');
   const [target, setTarget] = useState('all');
@@ -255,24 +189,37 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
     if (autoUpload && (upload!.phase !== 'done' || upload!.restored)) copyLater('html', onUpload!(confirmOverwrite).then((ok) => (ok ? html : null)));
     else copy('html', html);
   };
-  /** 직접 올릴 때 쓰는 것: zip 내려받기 + 이미지 주소 */
+  /** 수동 업로드 단계 카드: zip 을 받았는지 (1단계 완료 표시) */
+  /** zip 을 어디로 받았는지: saved = 저장 창으로 (공유 폴더에서 열림) · download = 보통 내려받기 */
+  const [zipDone, setZipDone] = useState<null | 'saved' | 'download'>(null);
+  /** 1단계를 공유 폴더 저장으로 끝냈을 때 그 경로 */
+  const [sharedPath, setSharedPath] = useState<string | null>(null);
+  useEffect(() => {
+    setZipDone(null);
+    setSharedPath(null);
+  }, [result?.baseUrl, result?.parsed.html]);
+  const downloadZip = async () => {
+    if (!result) return;
+    setZipping(true);
+    setZipError(null);
+    try {
+      const blob = await buildZip(result.meta.productName, result.parsed.html, result.images);
+      const name = `${safeFolderName(result.meta.productName) || 'pagefy'}.zip`;
+      // 크롬·엣지: 저장 창이 공유 폴더(채널 폴더)에서 열린다. 창을 닫으면 아무것도 안 바뀜
+      const how = await saveZipToShared(blob, name, result.meta.channel);
+      if (how === 'cancel') return;
+      if (how === 'download') download(blob, name);
+      setZipDone(how === 'saved' ? 'saved' : 'download');
+    } catch (e) {
+      setZipError(`zip을 만들지 못했습니다: ${(e as Error).message}`);
+    } finally {
+      setZipping(false);
+    }
+  };
+  /** 직접 올릴 때 쓰는 것: zip 내려받기 + 이미지 주소 (자동 업로드일 때 「직접 올리기」 접기 안) */
   const manualTools = result && (
     <span className="getit__tools">
-      <button
-        className="btn btn--sm"
-        disabled={!result.parsed.html || zipping}
-        onClick={async () => {
-          setZipping(true);
-          setZipError(null);
-          try {
-            download(await buildZip(result.meta.productName, result.parsed.html, result.images), `${safeFolderName(result.meta.productName) || 'pagefy'}.zip`);
-          } catch (e) {
-            setZipError(`zip을 만들지 못했습니다: ${(e as Error).message}`);
-          } finally {
-            setZipping(false);
-          }
-        }}
-      >
+      <button className="btn btn--sm" disabled={!result.parsed.html || zipping} onClick={downloadZip}>
         {zipping ? 'zip 만드는 중…' : 'zip 내려받기 (HTML + 이미지)'}
       </button>
       <span className="getit__url">
@@ -292,7 +239,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             <span className="spinner" />
             <span className="progress__label">{prog.label}</span>
             <span className="progress__pct">{pct}%</span>
-            {run.startedAt && <Elapsed since={run.startedAt} />}
+            {run.startedAt && <Elapsed since={run.startedAt} className="progress__time" suffix=" 지남" />}
             <button className="btn btn--ghost btn--sm" onClick={onCancel}>취소</button>
           </p>
           <div className="progress__bar" role="progressbar" aria-label="만드는 중" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
@@ -325,20 +272,21 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
           {run.sections.length > 0 && (
             <ul className="secs">
               {run.sections.map((s) => (
-                <li key={s.id} className={`sec sec--${s.state}`} title={s.error}>
+                <Tip key={s.id} content={s.error}>
+                <li className={`sec sec--${s.state}`}>
                   <b>{s.id}</b> {s.name} <small>{STATE_LABEL[s.state]}{s.state === 'run' && s.chars ? ` · ${s.chars.toLocaleString()}자` : ''}</small>
                 </li>
+                </Tip>
               ))}
             </ul>
           )}
           {(run.status.length > 0 || (running && run.thinking)) && (
-            <details className="fold">
-              <summary>진행 기록 보기</summary>
+            <Fold className="fold" summary="진행 기록 보기">
               <ul className="progress__log">
                 {run.status.map((s, i) => <li key={i}>{s}</li>)}
               </ul>
               {running && !run.sections.length && run.thinking && <pre className="progress__thinking">{run.thinking.slice(-600)}</pre>}
-            </details>
+            </Fold>
           )}
         </>
       )}
@@ -357,13 +305,12 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               <span className="badge badge--ok">통과 {passed.length}</span>
               {/* 이번 변환(또는 수정 요청)에 걸린 시간 — 대부분은 Claude 구조 계획, 나머지는 이 PC 의 코드 생성·점검 */}
               {run.startedAt && run.endedAt && (
-                <span
-                  className="getit__time"
-                  title={run.planMs !== undefined ? `구조 계획(Claude) ${fmtDur(run.planMs)} · 마크업 생성·점검(이 PC) ${fmtDur(secMs(run.endedAt - run.startedAt) - secMs(run.planMs))}` : '저장된 구조 계획으로 만들어 Claude 호출 없음'}
-                >
+                <Tip content={run.planMs !== undefined ? `구조 계획(Claude) ${fmtDur(run.planMs)} · 마크업 생성·점검(이 PC) ${fmtDur(secMs(run.endedAt - run.startedAt) - secMs(run.planMs))}` : '저장된 구조 계획으로 만들어 Claude 호출 없음'}>
+                <span className="getit__time" tabIndex={0}>
                   {fmtDur(run.endedAt - run.startedAt)} 걸림
                   {run.planMs !== undefined && <small> · 구조 계획 {fmtDur(run.planMs)}</small>}
                 </span>
+                </Tip>
               )}
             </div>
             </div>
@@ -372,7 +319,6 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               <button
                 className={`btn ${autoUpload || imgReady ? 'btn--primary' : ''} getit__copy`}
                 disabled={!result.parsed.html || upBusy || (!autoUpload && !imgReady)}
-                title={!autoUpload && !imgReady ? '아래 안내대로 이미지를 먼저 올리고 「이미지를 올렸습니다」를 체크하세요' : undefined}
                 onClick={() => copyHtml()}
               >
                 {upBusy ? (
@@ -389,8 +335,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               <p className="getit__paste">
                 <span className="getit__where">
                   <b>{openmarket ? '오픈마켓 상세 편집기의 HTML 입력' : '고도몰 상품 상세설명 (HTML 모드)'}</b>
-                  {autoUpload ? '에 붙여넣으면 끝입니다.' : '에 붙여넣습니다 — 그 전에 아래 노란 안내대로 이미지를 먼저 올려 주세요.'}
+                  {autoUpload ? '에 붙여넣으면 끝입니다.' : '에 붙여넣습니다 — 그 전에 아래 3단계로 이미지를 먼저 올려 주세요.'}
                 </span>
+                {!autoUpload && !imgReady && <span className="getit__note">아래 3단계를 마치고 「올렸습니다」를 체크하면 「HTML 복사」가 눌립니다.</span>}
                 {autoUpload && upload!.phase !== 'done' && <span className="getit__note">이미지 {result.images.length}장은 복사할 때 이미지 서버에 자동으로 올라갑니다.</span>}
                 {autoUpload && upload!.phase === 'done' && (
                   <span className="getit__note">
@@ -450,9 +397,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   방금 올린 이미지 {rec.length}장을 되돌립니다{over ? ` — 덮어쓴 ${over}장은 예전 이미지로, 새로 올린 ${rec.length - over}장은 지웁니다` : ' — 서버에서 지웁니다'}.
                 </b>
                 <span>이 HTML 을 이미 쇼핑몰에 붙여넣었다면, 되돌리는 순간 그 상품 페이지 그림이 빈칸이 되거나 예전 그림으로 바뀝니다.</span>
-                <label className="getit__undo-check">
-                  <input type="checkbox" checked={undoSure} onChange={(e) => setUndoSure(e.target.checked)} /> 이 HTML 은 아직 쇼핑몰에 붙여넣지 않았습니다
-                </label>
+                <CheckField className="getit__undo-check" checked={undoSure} onChange={setUndoSure}>
+                  이 HTML 은 아직 쇼핑몰에 붙여넣지 않았습니다
+                </CheckField>
                 <span className="getit__undo-actions">
                   <button className="btn btn--sm is-danger" disabled={!undoSure} onClick={() => { setUndoAsk(false); onUndoUpload(); }}>되돌리기</button>
                   <button className="btn btn--sm btn--ghost" onClick={() => setUndoAsk(false)}>취소</button>
@@ -465,38 +412,39 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             )}
             {upload?.phase === 'error' && <UploadStatus upload={upload} />}
             {!autoUpload && (
-              <div className="getit__manual">
-                <b>붙여넣기 전에 이미지 {result.images.length}장을 먼저 올려 주세요.</b>
-                <span className="getit__why">이미지를 올리지 않고 붙여넣으면 상품 페이지에 그림이 빈칸으로 나옵니다.</span>
-                <ol className="getit__todo">
-                  <li>아래 「zip 내려받기」 → 압축 풀기</li>
-                  <li>
-                    <code className="getit__code">img</code> 폴더 안 이미지를 FTP 프로그램으로 아래 주소 폴더에 올리기 (같은 이름은 덮어씀)
-                  </li>
-                  <li>아래 「이미지를 올렸습니다」 체크 → 위 「HTML 복사」 → 붙여넣기</li>
-                </ol>
-                {manualTools}
-                <label className="getit__ready">
-                  <input type="checkbox" checked={imgReady} onChange={(e) => setImgReady(e.target.checked)} /> 이미지 {result.images.length}장을 위 주소 폴더에 올렸습니다 (체크하면 「HTML 복사」가 켜집니다)
-                </label>
-                <small className="getit__later">이미지 자동 업로드가 켜지면 이 안내는 사라지고 「HTML 복사」 한 번으로 끝납니다.</small>
-              </div>
+              <ManualSteps
+                count={result.images.length}
+                url={`${result.baseUrl}/`}
+                zipping={zipping}
+                zipDone={zipDone}
+                onZip={downloadZip}
+                folder={`${SHARED_ROOT}\\${CHANNEL_DIR[result.meta.channel]}`}
+                saver={canSaveToFolder() ? <SharedSave result={result} loaded={loaded} onSaved={setSharedPath} primary={!sharedPath && !zipDone && !imgReady} label="공유 폴더에 바로 저장" /> : undefined}
+                savedPath={sharedPath}
+                folderCopied={copied === 'folder'}
+                onCopyFolder={() => copy('folder', `${SHARED_ROOT}\\${CHANNEL_DIR[result.meta.channel]}`)}
+                urlCopied={copied === 'url'}
+                onCopyUrl={() => copy('url', `${result.baseUrl}/`)}
+                ready={imgReady}
+                onReady={setImgReady}
+                htmlCopied={copied === 'html'}
+                onCopyHtml={() => copyHtml()}
+              />
             )}
+            {godo && <GodoCheckBox html={copySection(result.parsed.html)} folder={`/${result.meta.channel}/${result.meta.slug}/`} />}
             {/* 그 밖의 일(보관·직접 올리기)은 주 버튼과 선으로 나눠 아래에 모은다 */}
-            {(autoUpload || canSaveToFolder() || zipError) && (
+            {(autoUpload || zipError) && (
               <div className="getit__extra">
-                {canSaveToFolder() && <SharedSave result={result} loaded={loaded} />}
+                {canSaveToFolder() && autoUpload && <SharedSave result={result} loaded={loaded} />}
                 {autoUpload && (
-                  <details className="fold getit__more">
-                    <summary>직접 올리기 · zip 내려받기</summary>
+                  <Fold className="fold getit__more" summary="직접 올리기 · zip 내려받기">
                     {manualTools}
-                  </details>
+                  </Fold>
                 )}
                 {zipError && <p className="msg msg--error" role="alert">{zipError}</p>}
               </div>
             )}
           </div>
-          {rating}
 
           {issues.length > 0 && (
             <ul className="checks">
@@ -534,8 +482,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             </div>
           )}
           {passed.length > 0 && (
-            <details className="fold">
-              <summary>통과한 점검 {passed.length}개</summary>
+            <Fold className="fold" summary={<>통과한 점검 {passed.length}개</>}>
               <ul className="checks">
                 {passed.map((c, i) => (
                   <li key={i} className="check check--ok">
@@ -543,10 +490,11 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   </li>
                 ))}
               </ul>
-            </details>
+            </Fold>
           )}
 
-          <div className="tabs" role="tablist" aria-label="결과 보기">
+          <Tabs.Root value={tab} onValueChange={(v) => setTab(v as Tab)}>
+          <Tabs.List className="tabs" aria-label="결과 보기">
             {(
               [
                 ['preview', '미리보기'],
@@ -555,14 +503,13 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 ['report', '완료 보고'],
               ] as [Tab, string][]
             ).map(([k, label]) => (
-              <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'is-on' : ''} onClick={() => setTab(k)}>{label}</button>
+              <Tabs.Trigger key={k} value={k} className="tabs__tab">{label}</Tabs.Trigger>
             ))}
-          </div>
+          </Tabs.List>
 
-          {tab === 'preview' && <Preview result={result} loaded={loaded} />}
-          {tab === 'code' && <Code html={result.parsed.html} />}
-          {tab === 'report' && (
-            <>
+          <Tabs.Content value="preview"><Preview result={result} loaded={loaded} /></Tabs.Content>
+          <Tabs.Content value="code"><Code html={result.parsed.html} /></Tabs.Content>
+          <Tabs.Content value="report">
               {run.usage && (
                 <p className="usage">
                   {run.model} · 입력 {run.usage.input.toLocaleString()} / 캐시 {run.usage.cacheRead.toLocaleString()} / 출력 {run.usage.output.toLocaleString()} 토큰 · 약 ${run.usage.costUsd.toFixed(2)}
@@ -570,13 +517,11 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               )}
               <p className="hint">규칙 9절 완료 보고 — 이미지로 구운 텍스트·오탈자·검색 최적화 제안은 디자이너·기획 담당에게 넘깁니다.</p>
               <pre className="pre">{result.parsed.report || '(보고 없음)'}</pre>
-              <details className="raw">
-                <summary>Claude 응답 원문 (결과가 이상할 때 원인 확인용)</summary>
+              <Fold className="raw" summary="Claude 응답 원문 (결과가 이상할 때 원인 확인용)">
                 <pre className="pre">{[`===== 계획 =====\n${result.planRaw}`, ...result.sections.map((s) => `===== ${s.id} ${s.name} =====\n${s.raw}`)].join('\n\n')}</pre>
-              </details>
-            </>
-          )}
-          {tab === 'images' && (
+              </Fold>
+          </Tabs.Content>
+          <Tabs.Content value="images">
             <div className="images">
               {result.images.map((im) => (
                 <figure key={im.file} className={im.blob.size > 1024 * 1024 ? 'is-big' : ''}>
@@ -588,21 +533,24 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 </figure>
               ))}
             </div>
-          )}
+          </Tabs.Content>
+          </Tabs.Root>
 
           <h3 className="revise__title">고칠 곳이 있으면</h3>
           <div className="revise">
             {autoCount > 0 && (
-              <button className="btn btn--sm" onClick={() => onRevise(auto)} title="PSD 위치 대조에서 어긋난 텍스트가 있는 섹션만 골라 고치게 합니다">
+              <Tip content="PSD 위치 대조에서 어긋난 텍스트가 있는 섹션만 골라 고치게 합니다">
+              <button className="btn btn--sm" onClick={() => onRevise(auto)}>
                 대조 결과로 고치기 (섹션 {autoCount}개)
               </button>
+              </Tip>
             )}
-            <select value={target} onChange={(e) => setTarget(e.target.value)} aria-label="고칠 섹션">
-              <option value="all">모든 섹션</option>
-              {result.sections.map((s) => (
-                <option key={s.id} value={s.id}>{s.id} {s.name}</option>
-              ))}
-            </select>
+            <Select
+              aria-label="고칠 섹션"
+              value={target}
+              onChange={setTarget}
+              options={[{ value: 'all', label: '모든 섹션' }, ...result.sections.map((s) => ({ value: s.id, label: `${s.id} ${s.name}` }))]}
+            />
             <textarea rows={3} value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder={codeEngine ? "구조를 고칠 내용을 적어 주세요. 위치·크기·자간은 PSD 값으로 자동 계산됩니다. 예) 메인 제목은 이미지로 남겨 줘 / 두 번째 제품 사진을 사진 영역(img)으로 빼 줘 / \"주요 사양\"을 대제목으로" : "고칠 내용을 적고 섹션을 고르면 그 섹션만 다시 만듭니다. 예) 제목 줄바꿈이 PSD와 달라요 / 스펙 영역을 <table>로 바꿔 줘"} />
             <button
               className={`btn ${feedback.trim() ? "btn--primary" : ""}`}
@@ -655,60 +603,42 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
   const fit = W / width;
   const [zoom, setZoom] = useState(0.5);
   const frame = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState(1000);
   /** 이미지에 남긴 글자 위치를 PSD 이미지 위에 표시 */
   const [showKept, setShowKept] = useState(false);
   const { real, kept } = textSplit(result, loaded);
   const showHtml = view !== 'psd';
   const showPsd = view !== 'html';
 
-  useEffect(() => {
-    const f = frame.current;
-    if (!f) return;
-    // srcdoc 은 load 가 effect 보다 먼저 끝날 수 있고, 이미지가 늦게 뜨면 높이가 바뀐다 → 잠시 동안 주기적으로 잰다
-    const measure = () => {
-      // documentElement.scrollHeight 는 iframe 높이보다 작아지지 않아 내용 높이인 body 로 잰다
-      const d = f.contentDocument;
-      const h = d?.body ? Math.max(Math.ceil(d.documentElement.getBoundingClientRect().height), d.body.scrollHeight) : undefined;
-      if (h) setHeight(h);
-    };
-    let n = 0;
-    const timer = window.setInterval(() => {
-      measure();
-      if (++n > 30) window.clearInterval(timer);
-    }, 300);
-    f.addEventListener('load', measure);
-    return () => {
-      f.removeEventListener('load', measure);
-      window.clearInterval(timer);
-    };
-  }, [result.previewHtml, width, showHtml]);
+  const height = useFrameHeight(frame, 1000, [result.previewHtml, width, showHtml]);
 
   return (
     <div className="preview">
       <div className="preview__bar">
-        <div className="seg" aria-label="미리보기 보기 방식">
-          <button type="button" aria-pressed={view === 'compare'} className={view === 'compare' ? 'is-on' : ''} onClick={() => setView('compare')}>나란히 비교</button>
-          <button type="button" aria-pressed={view === 'psd'} className={view === 'psd' ? 'is-on' : ''} onClick={() => setView('psd')}>PSD 이미지</button>
-          <button type="button" aria-pressed={view === 'html'} className={view === 'html' ? 'is-on' : ''} onClick={() => setView('html')}>HTML 마크업</button>
+        <Seg
+          aria-label="미리보기 보기 방식"
+          value={view}
+          onChange={setView}
+          items={[
+            { value: 'compare', label: '나란히 비교' },
+            { value: 'psd', label: 'PSD 이미지' },
+            { value: 'html', label: 'HTML 마크업' },
+          ]}
+        />
+        <div className="zoom">
+          <span aria-hidden="true">배율</span>
+          <Select size="sm" aria-label="배율" className="zoom__sel" value={zoom} onChange={setZoom} options={[0.25, 0.4, 0.5, 0.75, 1].map((z) => ({ value: z, label: `${Math.round(z * 100)}%` }))} />
         </div>
-        <label className="zoom">
-          배율
-          <select value={zoom} onChange={(e) => setZoom(Number(e.target.value))}>
-            {[0.25, 0.4, 0.5, 0.75, 1].map((z) => <option key={z} value={z}>{Math.round(z * 100)}%</option>)}
-          </select>
-        </label>
       </div>
       <div className="preview__bar preview__texts">
         <span>
           실제 글자 <b>{real.toLocaleString()}개</b> ·{' '}
           {kept.length > 0 ? (
             // 숫자를 누르면 PSD 위 위치 표시(주황 테두리)·목록을 켜고 끈다 (따로 버튼을 두지 않음)
+            <Tip content={showKept ? '위치 표시 끄기' : 'PSD 이미지 위에 위치 표시'}>
             <button
               type="button"
               className={`preview__keptToggle${showKept ? ' is-on' : ''}`}
               aria-pressed={showKept}
-              title={showKept ? '위치 표시 끄기' : 'PSD 이미지 위에 위치 표시'}
               onClick={() => {
                 setShowKept((v) => !v);
                 if (view === 'html') setView('compare');
@@ -716,6 +646,7 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
             >
               이미지에 남긴 글자 <b>{kept.length.toLocaleString()}개</b>
             </button>
+            </Tip>
           ) : (
             <>이미지에 남긴 글자 <b>0개</b></>
           )}
@@ -775,24 +706,25 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
 
 function Code({ html }: { html: string }) {
   const [which, setWhich] = useState<'copy' | 'full'>('copy');
-  const [copied, setCopied] = useState<boolean | null>(false);
+  const [copied, copy] = useCopy();
   const text = which === 'copy' ? copySection(html) : html;
   return (
     <div className="code">
       <div className="preview__bar">
-        <div className="seg">
-          <button className={which === 'copy' ? 'is-on' : ''} onClick={() => setWhich('copy')}>복사 구간만 (채널 등록용)</button>
-          <button className={which === 'full' ? 'is-on' : ''} onClick={() => setWhich('full')}>전체 문서</button>
-        </div>
+        <Seg
+          aria-label="HTML 보기 범위"
+          value={which}
+          onChange={setWhich}
+          items={[
+            { value: 'copy', label: '복사 구간만 (채널 등록용)' },
+            { value: 'full', label: '전체 문서' },
+          ]}
+        />
         <button
           className="btn btn--sm"
-          onClick={async () => {
-            const ok = await copyText(text);
-            setCopied(ok ? true : null);
-            if (ok) setTimeout(() => setCopied(false), 1500);
-          }}
+          onClick={() => copy('code', text)}
         >
-          {copied ? '복사됨' : copied === null ? '복사 실패 — 아래 글을 직접 선택하세요' : '복사'}
+          {copied === 'code' ? '복사됨' : copied === 'fail:code' ? '복사 실패 — 아래 글을 직접 선택하세요' : '복사'}
         </button>
         <span className="hint">{text.length.toLocaleString()}자 · 이미지 주소는 업로드 후 실제로 열리는지 확인하세요 (9절 6항)</span>
       </div>
@@ -824,16 +756,15 @@ function CheckLine({ c }: { c: Check }) {
       <b className="check__what">{p.what}</b>
       {p.todo && <span className="check__todo"> {p.todo}</span>}
       {p.what !== c.message && (
-        <details className="check__more">
-          <summary>자세히</summary>
+        <Fold className="check__more" summary="자세히">
           <span>{c.message}</span>
-        </details>
+        </Fold>
       )}
     </>
   );
 }
 
-function SharedSave({ result, loaded }: { result: Result; loaded: Loaded }) {
+function SharedSave({ result, loaded, onSaved, primary, label = '공유 폴더에 저장' }: { result: Result; loaded: Loaded; onSaved?: (path: string) => void; primary?: boolean; label?: string }) {
   type St =
     | { s: 'idle' }
     | { s: 'busy'; msg: string }
@@ -842,6 +773,7 @@ function SharedSave({ result, loaded }: { result: Result; loaded: Loaded }) {
     | { s: 'error'; msg: string };
   const [st, setSt] = useState<St>({ s: 'idle' });
   const [rootName, setRootName] = useState<string | null>(null);
+  const [pathCopied, setPathCopied] = useState(false);
   useEffect(() => {
     rememberedRootName().then(setRootName);
   }, []);
@@ -856,6 +788,7 @@ function SharedSave({ result, loaded }: { result: Result; loaded: Loaded }) {
     try {
       const r = await saveToShared(root, input, replaceHtml, (msg) => setSt({ s: 'busy', msg }));
       setSt({ s: 'done', r });
+      onSaved?.(r.path);
     } catch (e) {
       setSt({ s: 'error', msg: `저장하지 못했습니다: ${(e as Error).message}` });
     }
@@ -879,14 +812,14 @@ function SharedSave({ result, loaded }: { result: Result; loaded: Loaded }) {
   return (
     <div className="shared">
       <div className="shared__row">
-        <button className="btn btn--sm" disabled={busy || !result.parsed.html} onClick={() => start(false)}>
+        <button className={`btn btn--sm${primary ? ' btn--primary' : ''}`} disabled={busy || !result.parsed.html} onClick={() => start(false)}>
           {busy ? (
             <>
               <span className="spinner" />
               {st.msg}
             </>
           ) : (
-            '공유 폴더에 저장'
+            label
           )}
         </button>
         {/* 버튼 오른쪽: 무엇을 · 어디에(경로) · 처음 안내를 한 덩어리로 */}
@@ -900,7 +833,14 @@ function SharedSave({ result, loaded }: { result: Result; loaded: Loaded }) {
             )}
           </span>
           <code className="shared__where" title={where}>{where}</code>
-          {!rootName && st.s === 'idle' && <small className="hint">처음 한 번 폴더 고르기 창이 열립니다 — {SHARED_ROOT} 폴더를 고르세요.</small>}
+          {!rootName && st.s === 'idle' && (
+            <small className="hint">
+              처음 한 번 폴더 고르기 창이 열립니다 — {SHARED_ROOT} 폴더를 고르세요 (창 아래 「폴더」 칸에 이 경로를 붙여넣으면 바로 갑니다).
+              <button className="link-btn" onClick={() => void copyText(SHARED_ROOT).then((ok) => ok && setPathCopied(true))}>
+                {pathCopied ? '경로 복사됨' : '경로 복사'}
+              </button>
+            </small>
+          )}
           {changed && st.s === 'idle' && <small className="hint">폴더 이름에 쓸 수 없는 글자를 빼고 「{folder}」로 저장합니다.</small>}
         </span>
       </div>
@@ -929,5 +869,132 @@ function SharedSave({ result, loaded }: { result: Result; loaded: Loaded }) {
       )}
       {st.s === 'error' && <p className="msg msg--error" role="alert">{st.msg}</p>}
     </div>
+  );
+}
+
+/**
+ * 이미지 자동 업로드가 없을 때 — 붙여넣기 전에 이미지를 직접 올리는 3단계 (예전 노란 경고 상자를 단계 카드로).
+ * ① zip 받기 → ② img 폴더 안 이미지를 FTP 로 주소 폴더에 → ③ 올렸다고 체크하면 그 자리에서 HTML 복사.
+ * 지금 할 단계만 강조하고, 끝난 단계는 초록 체크로 바꾼다 (② 는 화면 밖 일이라 ③ 체크로 함께 끝난다)
+ */
+function ManualSteps(p: {
+  count: number;
+  url: string;
+  zipping: boolean;
+  zipDone: null | 'saved' | 'download';
+  onZip: () => void;
+  /** 공유 폴더에 바로 저장 (크롬·엣지 — 없으면 zip 만) */
+  saver?: React.ReactNode;
+  savedPath: string | null;
+  /** 공유 폴더 채널 폴더 경로 (\\192.168.1.254\…\아이티켓) */
+  folder: string;
+  folderCopied: boolean;
+  onCopyFolder: () => void;
+  urlCopied: boolean;
+  onCopyUrl: () => void;
+  ready: boolean;
+  onReady: (v: boolean) => void;
+  htmlCopied: boolean;
+  onCopyHtml: () => void;
+}) {
+  const got = !!p.zipDone || !!p.savedPath; // 1단계 끝 (공유 폴더에 저장했거나 zip 을 받음)
+  const now = p.ready ? 4 : got ? 2 : 1; // 지금 할 단계 (4 = 다 끝남)
+  const state = (n: number) => (n < now || (n === 2 && p.ready) ? 'done' : n === now || (n === 3 && now === 2) ? 'now' : 'todo');
+  const Num = ({ n }: { n: number }) => (
+    <span className="msteps__num" aria-hidden="true">
+      {state(n) === 'done' ? (
+        <CheckIcon />
+      ) : (
+        n
+      )}
+    </span>
+  );
+  return (
+    <section className={`msteps${p.ready ? ' is-ready' : ''}`} aria-label="이미지 직접 올리기">
+      <header className="msteps__head">
+        <span className={`badge ${p.ready ? 'badge--ok' : 'badge--warn'}`}>{p.ready ? '이미지 준비됨' : '붙여넣기 전에'}</span>
+        {p.ready ? (
+          <p>
+            <b>이미지 {p.count}장을 올렸습니다.</b> 이제 HTML 을 복사해 붙여넣으세요.
+          </p>
+        ) : (
+          <p>
+            <b>이미지 {p.count}장을 먼저 서버에 올려 주세요.</b> 올리지 않고 붙여넣으면 상품 페이지에 그림이 빈칸으로 나옵니다.
+          </p>
+        )}
+      </header>
+      <ol className="msteps__list">
+        <li className={`msteps__step is-${state(1)}`}>
+          <Num n={1} />
+          <div className="msteps__body">
+            <b>{p.saver ? '공유 폴더에 HTML·이미지 저장' : 'HTML·이미지 zip 받기'}</b>
+            {p.saver ? (
+              <>
+                <span className="msteps__desc">
+                  zip·압축 풀기 없이 공유 폴더 <code>{p.folder.split('\\').slice(-1)[0]}</code> 안 제품 폴더에 HTML 과 <code>img</code> 폴더(이미지 {p.count}장)를 바로 만듭니다.
+                </span>
+                {p.saver}
+                {/* 공유 폴더 주소 복사는 zip 방식(아래)에만 — 여기서는 앱이 그 폴더에 바로 쓰고, 처음 폴더 고를 때는 위 「경로 복사」를 쓴다 */}
+                <div className="msteps__act msteps__alt">
+                  <span>또는</span>
+                  <button type="button" className="btn btn--sm btn--ghost" disabled={p.zipping} onClick={p.onZip}>
+                    {p.zipping ? 'zip 만드는 중…' : p.zipDone ? 'zip 다시 받기' : 'zip 으로 받기'}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="msteps__desc">
+                  저장 창이 열리면 공유 폴더(<code>{p.folder.split('\\').slice(-2).join('\\')}</code>)에 저장하고 풉니다. <code>img</code> 폴더에 이미지 {p.count}장이 있습니다.
+                </span>
+                <div className="msteps__act">
+                  <button type="button" className={`btn btn--sm${now === 1 ? ' btn--primary' : ''}`} disabled={p.zipping} onClick={p.onZip}>
+                    {p.zipping ? 'zip 만드는 중…' : p.zipDone ? 'zip 다시 받기' : 'zip 저장하기'}
+                  </button>
+                  <button type="button" className="btn btn--sm btn--ghost" onClick={p.onCopyFolder}>
+                    {p.folderCopied ? '복사됨 — 탐색기 주소창에 붙여넣으세요' : '공유 폴더 주소 복사'}
+                  </button>
+                </div>
+              </>
+            )}
+            {p.zipDone === 'download' && (
+              <span className="msteps__note">
+                이 브라우저는 저장 위치를 고를 수 없어 「다운로드」 폴더에 받았습니다. 위 「공유 폴더 주소 복사」 → 탐색기 주소창(또는 Win+R)에 붙여넣으면 공유 폴더가 열립니다.
+              </span>
+            )}
+          </div>
+        </li>
+        <li className={`msteps__step is-${state(2)}`}>
+          <Num n={2} />
+          <div className="msteps__body">
+            <b>이미지를 서버 폴더에 올리기</b>
+            <span className="msteps__desc">
+              FTP 프로그램으로 {p.savedPath ? <><code>{p.savedPath}\img</code> 폴더</> : <><code>img</code> 폴더</>} <em>안의</em> 이미지를 아래 주소 폴더에 올립니다. 같은 이름은 덮어씁니다.
+            </span>
+            <div className="msteps__act msteps__url">
+              <code title={p.url}>{p.url}</code>
+              <button type="button" className="btn btn--sm" onClick={p.onCopyUrl}>{p.urlCopied ? '복사됨' : '주소 복사'}</button>
+            </div>
+          </div>
+        </li>
+        <li className={`msteps__step is-${state(3)}`}>
+          <Num n={3} />
+          <div className="msteps__body">
+            <b>올렸다고 표시하고 HTML 복사</b>
+            <div className="msteps__act">
+              <CheckField className="msteps__check" checked={p.ready} onChange={p.onReady}>
+                이미지 {p.count}장을 올렸습니다
+              </CheckField>
+              {p.ready && (
+                <button type="button" className="btn btn--sm btn--primary" onClick={p.onCopyHtml}>
+                  {p.htmlCopied ? '복사됨 ✓ 이제 붙여넣으세요' : 'HTML 복사'}
+                </button>
+              )}
+            </div>
+          </div>
+        </li>
+      </ol>
+      <small className="msteps__later">이미지 자동 업로드가 켜지면 이 단계 없이 「HTML 복사」 한 번으로 끝납니다.</small>
+    </section>
   );
 }

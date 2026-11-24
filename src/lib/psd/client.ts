@@ -14,12 +14,16 @@ export class PsdWorker {
   private worker = new Worker(new URL('./psd.worker.ts', import.meta.url), { type: 'module' });
   private reqId = 0;
   private pending = new Map<number, Pending>();
-  private openCb: { resolve: (v: OpenedPsd) => void; reject: (e: Error) => void; progress: (m: string) => void } | null = null;
+  private openCb: { resolve: (v: OpenedPsd) => void; reject: (e: Error) => void; progress: (m: string) => void; preview?: (p: { summary: PsdSummary; composite: ImageBitmap }) => void } | null = null;
 
   constructor() {
     this.worker.onmessage = (e: MessageEvent<WorkerOut>) => {
       const m = e.data;
       if (m.type === 'progress') this.openCb?.progress(m.message);
+      else if (m.type === 'preview') {
+        if (this.openCb?.preview) this.openCb.preview({ summary: m.summary, composite: m.composite });
+        else m.composite.close();
+      }
       else if (m.type === 'opened') {
         this.openCb?.resolve({ summary: m.summary, composite: m.composite, notext: m.notext });
         this.openCb = null;
@@ -45,9 +49,10 @@ export class PsdWorker {
     };
   }
 
-  open(file: File, progress: (m: string) => void): Promise<OpenedPsd> {
+  /** preview: 레이어 정보·PSD 합성 이미지가 먼저 준비되면 불린다 (글자 뺀 배경은 아직) — 받은 비트맵은 받는 쪽이 닫는다 */
+  open(file: File, progress: (m: string) => void, preview?: (p: { summary: PsdSummary; composite: ImageBitmap }) => void): Promise<OpenedPsd> {
     return new Promise((resolve, reject) => {
-      this.openCb = { resolve, reject, progress };
+      this.openCb = { resolve, reject, progress, preview };
       this.send({ type: 'open', file });
     });
   }

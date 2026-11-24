@@ -118,13 +118,14 @@ function renderLayer(psd: Psd, layer: Layer, opt: RenderOptions): Rendered | nul
   const fx = hasRenderableEffects(layer);
 
   if (layer.children) {
-    const off = new OffscreenCanvas(psd.width, psd.height);
-    renderChildren(psd, layer.children, off.getContext('2d')!, opt);
-    applyMask(off, layer, 0, 0);
+    const gb = groupBounds(layer, psd);
     if (fx) {
-      // 그룹 효과: 그룹 영역만 잘라서 효과를 입힌다 (문서 전체 크기로 하면 느림)
-      // ag-psd 는 그룹 영역을 0 으로 주므로 하위 레이어 영역을 합쳐 쓴다 (하위 효과가 번진 만큼 여유)
-      const gb = groupBounds(layer, psd), pad = 200;
+      // 효과가 있는 그룹: 예전 그대로 문서 크기에 그린 뒤 그룹 영역(+200)만 잘라 효과를 입힌다
+      // (효과 일부는 캔버스 크기에 따라 결과가 달라져, 크기를 바꾸면 합성 결과가 바뀐다)
+      const off = new OffscreenCanvas(psd.width, psd.height);
+      renderChildren(psd, layer.children, off.getContext('2d')!, opt);
+      applyMask(off, layer, 0, 0);
+      const pad = 200;
       const gl = Math.max(0, gb[0] - pad), gt = Math.max(0, gb[1] - pad);
       const gw = Math.min(psd.width, gb[2] + pad) - gl, gh = Math.min(psd.height, gb[3] + pad) - gt;
       if (gw > 0 && gh > 0) {
@@ -133,8 +134,24 @@ function renderLayer(psd: Psd, layer: Layer, opt: RenderOptions): Rendered | nul
         const r = renderEffects(part, gl, gt, layer, globalAngleOf(psd), layer.fillOpacity ?? 1);
         return { img: r.canvas, x: r.x, y: r.y, alpha: r.body, ax: r.x, ay: r.y, opacity: layer.opacity ?? 1, baseOpacity: layer.opacity ?? 1, blend };
       }
+      return { img: off, x: 0, y: 0, alpha: off, ax: 0, ay: 0, opacity: layer.opacity ?? 1, baseOpacity: layer.opacity ?? 1, blend };
     }
-    return { img: off, x: 0, y: 0, alpha: off, ax: 0, ay: 0, opacity: layer.opacity ?? 1, baseOpacity: layer.opacity ?? 1, blend };
+    // 효과 없는 그룹: 하위 레이어가 있는 영역(+ 하위 효과가 번질 여유)만 한 캔버스에 그린다.
+    // 예전엔 그룹마다 문서 전체 크기(860×17455 ≈ 60MB) 캔버스를 만들어 긴 상세페이지에서 합성이 수 초씩 걸렸다.
+    // ag-psd 는 그룹 영역을 0 으로 주므로 하위 레이어 영역을 합쳐 쓴다
+    if (gb[2] <= gb[0] || gb[3] <= gb[1]) return null; // 그릴 하위 레이어가 없음
+    const pad = 512;
+    const gl = Math.max(0, gb[0] - pad), gt = Math.max(0, gb[1] - pad);
+    const gw = Math.min(psd.width, gb[2] + pad) - gl, gh = Math.min(psd.height, gb[3] + pad) - gt;
+    if (gw <= 0 || gh <= 0) return null;
+    const off = new OffscreenCanvas(gw, gh);
+    const octx = off.getContext('2d')!;
+    octx.translate(-gl, -gt); // 하위 레이어는 문서 좌표 그대로 그린다
+    renderChildren(psd, layer.children, octx, opt);
+    // applyMask 는 같은 컨텍스트를 다시 쓰므로 옮긴 좌표를 되돌린 뒤에 (안 그러면 마스크가 어긋나 그룹이 잘린다)
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    applyMask(off, layer, gl, gt);
+    return { img: off, x: gl, y: gt, alpha: off, ax: gl, ay: gt, opacity: layer.opacity ?? 1, baseOpacity: layer.opacity ?? 1, blend };
   }
 
   if (layer.adjustment) return null; // 조정 레이어는 반영하지 않는다 (경고로 안내)

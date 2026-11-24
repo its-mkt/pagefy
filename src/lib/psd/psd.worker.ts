@@ -81,12 +81,17 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
       scan(psd.children);
       if (missing.length) summary.warnings.unshift(`픽셀을 읽지 못한 레이어 ${missing.length}개가 "글자 뺀 배경"에서 빠졌습니다: ${missing.slice(0, 6).join(', ')}${missing.length > 6 ? ' …' : ''}. 그 영역은 원본 합성(composite)으로 쓰게 지시하세요.`);
 
+      // PSD 안 합성 이미지(최대 호환성)는 바로 쓸 수 있다 → 먼저 보내 화면(PSD 확인·미리보기)을 띄운다
+      if (!isBlank(psd.imageData)) {
+        compositeCanvas = pixelsToCanvas(psd.imageData!)!;
+        const early = await createImageBitmap(compositeCanvas);
+        post({ type: 'preview', summary, composite: early }, [early]);
+      }
+
       post({ type: 'progress', message: '글자 뺀 배경 합성 중…' });
       notextCanvas = renderDocument(psd, { skipText: true });
 
-      if (!isBlank(psd.imageData)) {
-        compositeCanvas = pixelsToCanvas(psd.imageData!)!;
-      } else {
+      if (!compositeCanvas) {
         summary.warnings.unshift('PSD 안에 합성 이미지가 없어(최대 호환성 꺼짐) 레이어를 직접 합성했습니다. 효과·조정 레이어가 빠질 수 있으니, 가능하면 Photoshop에서 "최대 호환성"을 켜고 다시 저장한 PSD를 쓰세요.');
         compositeCanvas = renderDocument(psd, { skipText: false });
       }

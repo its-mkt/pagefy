@@ -7,11 +7,13 @@
   "description": "Pagefy — 통이미지 디자인(PSD)을 팀 규칙대로 HTML 마크업으로 변환 (React + TS + SCSS + Vite, Claude API)",
   "dependencies": {
     "@anthropic-ai/sdk": "^1.11.0",
+    "@radix-ui/colors": "^3.0.0",
     "@supabase/supabase-js": "^2.119.2",
     "ag-psd": "^34.2.2",
     "express": "^5.3.0",
     "jszip": "^3.10.2",
     "modern-screenshot": "4",
+    "radix-ui": "^1.8.1",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -39,6 +41,7 @@
     "check:psd": "tsx scripts/check-psd.ts",
     "sync:rules": "tsx scripts/sync-rules.ts",
     "build:function": "tsx scripts/build-function.ts",
-    "gen:fonts": "tsx scripts/gen-font-subsets.ts"
+    "gen:fonts": "tsx scripts/gen-font-subsets.ts",
+    "gen:colors": "node scripts/gen-radix-colors.mjs"
   }
 }

@@ -86,6 +86,43 @@ export async function getSharedRoot(repick = false): Promise<FileSystemDirectory
   return h;
 }
 
+type SavePicker = (o: {
+  suggestedName?: string;
+  id?: string;
+  startIn?: FileSystemHandle | 'downloads';
+  types?: { description: string; accept: Record<string, string[]> }[];
+}) => Promise<FileSystemFileHandle>;
+
+/**
+ * zip 을 저장 창으로 저장 — 창이 공유 폴더(기억한 A_상세페이지 → 채널 폴더)에서 열린다.
+ * 웹 페이지는 \\192.168.1.254\… 같은 네트워크 경로를 직접 열 수 없어서(브라우저 보안), 저장 창의 시작 위치로 대신한다.
+ * 기억한 폴더가 없으면 지난번에 zip 을 저장한 폴더(id 'pagefy-zip')에서 열리므로, 처음 한 번만 공유 폴더로 옮겨 가면 된다.
+ * 저장 창을 쓸 수 없는 브라우저면 'download' (보통 내려받기), 사용자가 창을 닫으면 'cancel'
+ */
+export async function saveZipToShared(blob: Blob, fileName: string, channel: Channel): Promise<'saved' | 'download' | 'cancel'> {
+  const pick = (window as unknown as { showSaveFilePicker?: SavePicker }).showSaveFilePicker;
+  if (!pick) return 'download';
+  let startIn: FileSystemHandle | undefined;
+  const root = await loadRoot();
+  if (root) {
+    try {
+      startIn = await root.getDirectoryHandle(CHANNEL_DIR[channel]);
+    } catch {
+      startIn = root; // 채널 폴더가 없거나 권한이 아직 없으면 A_상세페이지 에서
+    }
+  }
+  try {
+    const fh = await pick({ suggestedName: fileName, id: 'pagefy-zip', startIn, types: [{ description: 'zip 파일', accept: { 'application/zip': ['.zip'] } }] });
+    const w = await fh.createWritable();
+    await w.write(blob);
+    await w.close();
+    return 'saved';
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') return 'cancel';
+    throw e;
+  }
+}
+
 /** 윈도우 폴더·파일 이름에 못 쓰는 글자 빼기 (\ / : * ? " < > |, 끝의 점·공백) */
 export function safeFolderName(name: string) {
   const v = name
