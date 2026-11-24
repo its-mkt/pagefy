@@ -12,7 +12,8 @@ import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude
 import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
 import { loadRules } from './rules.ts';
 import { type UploadFile, type UploadTarget, checkFolder, checkTarget, putFiles, undoUpload, verifyFiles, type UploadedItem } from '../core/upload.ts';
-import { localFtpConfig, nodeDial } from './ftpNode.ts';
+import { localFtpConfig, nodeDial, readSecretsFile } from './ftpNode.ts';
+import { checkGoodsNo, fetchGoods, godoConfigFrom } from '../core/godo.ts';
 import { localBudget, opsRouter } from './opsLocal.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -38,7 +39,7 @@ api.get('/health', (_req, res) => {
   } catch {
     // 규칙 파일이 없으면 화면에 표시
   }
-  const body: HealthInfo = { ok: true, mock: MOCK, hasKey: hasKey(), model: MODEL, effort: EFFORT, planEffort: PLAN_RUN.effort, rules, upload: !!localFtpConfig(), budget: localBudget() };
+  const body: HealthInfo = { ok: true, mock: MOCK, hasKey: hasKey(), model: MODEL, effort: EFFORT, planEffort: PLAN_RUN.effort, rules, upload: !!localFtpConfig(), budget: localBudget(), godo: !!godoConfig() };
   res.json(body);
 });
 
@@ -168,6 +169,27 @@ api.post('/upload/remove', express.json(), async (req, res) => {
     const out = await undoUpload(g.cfg, nodeDial, g.t, req.body.items as UploadedItem[]);
     console.log(`[upload] ${g.t.channel}/${g.t.slug} 되돌림 — 복원 ${out.restored.length}개 · 지움 ${out.removed.length}개${out.failed.length ? ` · 실패 ${out.failed.length}개` : ''}`);
     res.json(out);
+  } catch (err) {
+    res.status(502).json({ error: describeError(err) });
+  }
+});
+
+// ───── 고도몰 등록 확인 (core/godo.ts — 오픈 API 상품 조회, 읽기 전용) ─────
+// 키: ~/.claude/secrets/godo-openapi.env (GODO_PARTNER_KEY·GODO_USER_KEY) 또는 PAGEFY_GODO_* 환경변수. 없으면 화면에 확인 상자가 없다
+const godoConfig = () => {
+  const file = readSecretsFile('godo-openapi.env');
+  return godoConfigFrom((k) => process.env[`PAGEFY_GODO_${k}`] || file[`GODO_${k}`]);
+};
+api.post('/godo/goods', express.json(), async (req, res) => {
+  const cfg = godoConfig();
+  if (!cfg) return void res.status(503).json({ error: '고도몰 API 키가 없습니다 (~/.claude/secrets/godo-openapi.env 또는 PAGEFY_GODO_* 환경변수).' });
+  const no = req.body?.goodsNo;
+  const bad = checkGoodsNo(no);
+  if (bad) return void res.status(400).json({ error: bad });
+  try {
+    const goods = await fetchGoods(cfg, no);
+    if (!goods) return void res.status(404).json({ error: `고도몰에 상품번호 ${no} 상품이 없습니다.` });
+    res.json(goods);
   } catch (err) {
     res.status(502).json({ error: describeError(err) });
   }

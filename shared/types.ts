@@ -252,6 +252,27 @@ export interface HealthInfo {
   upload?: boolean;
   /** 이번 달 사용액·월 상한 (배포 함수만 — 로컬 서버는 MOCK 일 때 예시 값) */
   budget?: import('./ops.ts').BudgetInfo;
+  /** 고도몰 등록 확인을 쓸 수 있음 (서버에 아이티켓 고도몰 오픈 API 키가 있음 — core/godo.ts) */
+  godo?: boolean;
+}
+
+/** 고도몰 상품 조회 결과 (core/godo.ts — 오픈 API Goods_Search, 읽기 전용) */
+export interface GodoGoods {
+  goodsNo: string;
+  name: string;
+  /** 상품 등록일 YYYY-MM-DD HH:mm:ss (KST) */
+  regDt: string | null;
+  /** 상품 마지막 수정일 — 상세설명이 아니어도(가격·재고 등) 상품이 바뀌면 갱신된다 */
+  modDt: string | null;
+  /** PC 상세설명 HTML */
+  description: string;
+  descriptionMobile: string;
+  /** 모바일 상세설명을 PC 와 같게 씀 */
+  mobileSameAsPc: boolean;
+  /** 쇼핑몰에 진열 중 */
+  displayed: boolean;
+  /** 쇼핑몰 상품 페이지 */
+  url: string;
 }
 
 /** 서버 → 화면 SSE 이벤트 */

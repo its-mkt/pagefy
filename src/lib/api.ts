@@ -1,6 +1,6 @@
 // 생성 API 호출. 배포(its.itket.com/pagefy)는 Supabase 함수, 개발(yarn dev)은 로컬 서버(/api)
-import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from '../../shared/types';
-import type { AdminSettingsRequest, AdminStats, BudgetInfo, FeedbackRequest } from '../../shared/ops';
+import type { GodoGoods, HealthInfo, PlanRequest, SectionRequest, StreamEvent } from '../../shared/types';
+import type { AdminSettingsRequest, AdminStats, BudgetInfo } from '../../shared/ops';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, currentToken } from './supabase';
 
 /** true 면 Supabase 함수 + 로그인 필요. 개발 중에도 VITE_PAGEFY_CLOUD=1 이면 함수를 쓴다 */
@@ -146,10 +146,10 @@ export const uploadVerify = (target: UploadTarget, files: { file: string; size: 
 export const uploadRemove = (target: UploadTarget, items: UploadedItem[], signal?: AbortSignal) =>
   postJson<{ restored: string[]; removed: string[]; failed: { file: string; error: string }[]; left: UploadedItem[]; folderRemoved: boolean }>('upload/remove', { target, items }, signal);
 
-// ───── 운영: 결과 평가·관리 화면 (core/ops.ts · server/opsLocal.ts) ─────
+/** 고도몰 상품 조회 (상세설명·수정일, 읽기 전용) — 등록 확인용 */
+export const fetchGodoGoods = (goodsNo: string, signal?: AbortSignal) => postJson<GodoGoods>('godo/goods', { goodsNo }, signal);
 
-/** 「그대로 썼어요 / 고쳐서 썼어요」 저장 (같은 작업을 다시 누르면 바꾼다) */
-export const sendFeedback = (b: FeedbackRequest) => postJson<{ ok: true }>('feedback', b);
+// ───── 운영: 관리 화면 (core/ops.ts · server/opsLocal.ts) ─────
 
 /** 관리 화면 숫자 (광고 인사이트 역할 admin 만) — month: YYYY-MM, 없으면 이번 달 */
 export async function fetchAdminStats(month?: string): Promise<AdminStats> {

@@ -12,6 +12,7 @@ import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from './sha
 import type { Dial } from './core/ftp.ts';
 import { adminStats, budgetBlock, checkFeedback, getBudget, opsConfigFrom, saveFeedback, saveSettings, trackRun } from './core/ops.ts';
 import type { AdminSettingsRequest, FeedbackRequest } from './shared/ops.ts';
+import { checkGoodsNo, fetchGoods, godoConfigFrom } from './core/godo.ts';
 import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfigFrom, putFiles, undoUpload, verifyFiles, type UploadedItem } from './core/upload.ts';
 
 // 이미지 호스팅 업로드 (규칙 6절): 접속 정보는 함수 비밀값 PAGEFY_FTP_HOST·USER·PASS·ROOT·PUBLIC_BASE(·PORT) 에만 둔다.
@@ -20,6 +21,8 @@ import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfig
 // 알림은 함수 비밀값 PAGEFY_NOTIFY_URL·PAGEFY_NOTIFY_SECRET·PAGEFY_NOTIFY_TO(쉼표로 여러 명) 가 있을 때만
 const OPS = opsConfigFrom((k) => Deno.env.get(k));
 const ftpCfg = () => ftpConfigFrom((k) => Deno.env.get(`PAGEFY_FTP_${k}`));
+// 고도몰 등록 확인 (오픈 API 상품 조회, 읽기 전용): 함수 비밀값 PAGEFY_GODO_PARTNER_KEY · PAGEFY_GODO_USER_KEY (아이티켓 고도몰). 없으면 화면에 확인 상자가 없다
+const godoCfg = () => godoConfigFrom((k) => Deno.env.get(`PAGEFY_GODO_${k}`));
 const denoDial: Dial = async (hostname, port) => {
   const c = await Deno.connect({ hostname, port });
   return {
@@ -186,6 +189,8 @@ Deno.serve(async (req) => {
               ? 'upload-verify'
               : path.endsWith('/upload/remove')
                 ? 'upload-remove'
+                : path.endsWith('/godo/goods')
+                ? 'godo-goods'
                 : path.endsWith('/feedback')
                   ? 'feedback'
                   : path.endsWith('/admin/stats')
@@ -221,6 +226,7 @@ Deno.serve(async (req) => {
       rules: await loadRules().then((r) => ({ source: 'GitHub its-mkt/pagefy rules/detail_to_markup.md', updatedAt: r.updatedAt, fallback: false })).catch(() => ({ source: '(규칙 읽기 실패)', updatedAt: null, fallback: true })),
       role,
       upload: !!ftpCfg(),
+      godo: !!godoCfg(),
       // 이번 달 사용액·상한 (80% 넘으면 화면에 경고, 다 쓰면 막힘). 운영 기록 DB 를 못 읽으면 빼고 보낸다
       budget: OPS ? await getBudget(OPS).catch(() => undefined) : undefined,
     };
@@ -256,6 +262,26 @@ Deno.serve(async (req) => {
     try {
       await saveFeedback(OPS, emailOf(token), fb!);
       return json(req, 200, { ok: true });
+    } catch (err) {
+      return json(req, 502, { error: describeError(err) });
+    }
+  }
+
+  // 고도몰 등록 확인 — 상품 상세설명·수정일을 읽어 화면이 Pagefy 결과와 비교한다 (읽기 전용)
+  if (action === 'godo-goods') {
+    const cfg = godoCfg();
+    if (!cfg) return json(req, 503, { error: '고도몰 API 키(함수 비밀값 PAGEFY_GODO_*)가 없습니다. 관리자에게 등록을 요청하세요.' });
+    let no: unknown;
+    try {
+      no = ((await req.json()) as { goodsNo?: unknown }).goodsNo;
+    } catch {
+      return json(req, 400, { error: '요청 본문을 읽지 못했습니다.' });
+    }
+    const bad = checkGoodsNo(no);
+    if (bad) return json(req, 400, { error: bad });
+    try {
+      const goods = await fetchGoods(cfg, no as string);
+      return goods ? json(req, 200, goods) : json(req, 404, { error: `고도몰에 상품번호 ${no} 상품이 없습니다.` });
     } catch (err) {
       return json(req, 502, { error: describeError(err) });
     }
