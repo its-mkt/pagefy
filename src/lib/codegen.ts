@@ -5,7 +5,7 @@
 //  - 글자 상자: 규칙 4-1 (줄 상자 위쪽 = 기준선 − (행간/2 + 0.35×크기), 줄마다 다른 행간, 문단 간격, 끝 공백 보존)
 //  - 세로가 겹치는 상자끼리 한 줄(고도몰 flex / 오픈마켓 table)로 묶는다
 //  - 고도몰: 모든 크기 calc(N * var(--u)) (7-5), 스타일은 <style> 클래스 + 인라인 / 오픈마켓: 인라인·px 고정 (7-3)
-import type { GenerateMeta, Plan, PlanBundle, PlanImage, PsdSummary, TextInfo, TextRun } from '../../shared/types';
+import { type GenerateMeta, type Plan, type PlanBundle, type PlanImage, type PsdSummary, type TextInfo, type TextRun, imageBaseUrl } from '../../shared/types';
 import { godoRootCss } from '../../shared/width';
 import { MARKETS, marketWidth, normMarket, type MarketSpec } from '../../shared/markets';
 import { FONT_MAP } from './psd/extract';
@@ -488,7 +488,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
   const prefix = /^dp-[a-z0-9-]+$/.test(plan0.prefix || '') ? plan0.prefix : `dp-${(meta.slug || 'page').replace(/[^a-z0-9-]/g, '').slice(0, 24) || 'page'}`;
   if (prefix !== plan0.prefix) warnings.push(warn(`계획의 접두사 "${plan0.prefix}"가 형식(dp-영문소문자)에 맞지 않아 "${prefix}"로 바꿨습니다.`, 'plan'));
   plan.prefix = prefix;
-  const base = `${meta.publicRoot.replace(/\/+$/, '')}/${meta.channel}/${meta.slug}/${meta.rev}`;
+  const base = imageBaseUrl(meta);
   // 오픈마켓은 px 고정이라 플랫폼 상세 폭보다 넓으면 잘린다 → 플랫폼 폭에 맞춰 모든 값을 비율대로 줄인다 (shared/markets.ts)
   const OW = goodomall ? W : marketWidth(meta.market, W);
   const omScale = OW / W;

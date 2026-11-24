@@ -27,8 +27,8 @@ export function fmtBytes(n: number) {
   return `${(n / 1024 / 1024).toFixed(2)}MB`;
 }
 
-/** 제품 폴더 모양(규칙 2절) 그대로: <제품명>.html + img/<rev>/… */
-export async function buildZip(productName: string, rev: string, html: string, images: CutImage[]) {
+/** 제품 폴더 모양(규칙 2절) 그대로: <제품명>.html + img/… */
+export async function buildZip(productName: string, html: string, images: CutImage[]) {
   // zip 은 받을 때만 쓰므로 그때 불러온다 (첫 화면 파일을 가볍게)
   const { default: JSZip } = await import('jszip');
   const zip = new JSZip();
@@ -36,7 +36,7 @@ export async function buildZip(productName: string, rev: string, html: string, i
   const name = safeFolderName(productName) || 'pagefy';
   const root = zip.folder(name)!;
   root.file(`${name}.html`, html);
-  const img = root.folder('img')!.folder(rev)!;
+  const img = root.folder('img')!;
   for (const im of images) img.file(im.file, im.blob);
   return zip.generateAsync({ type: 'blob' });
 }

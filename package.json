@@ -25,7 +25,8 @@
     "sass": "^1.108.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vite": "^8.3.8"
+    "vite": "^8.3.8",
+    "vitest": "^3"
   },
   "scripts": {
     "dev": "concurrently -n web,api -c cyan,magenta \"vite\" \"tsx watch --env-file-if-exists=.env server/index.ts\"",
@@ -34,6 +35,7 @@
     "build": "tsc -b && vite build",
     "start": "tsx --env-file-if-exists=.env server/index.ts",
     "typecheck": "tsc -b",
+    "test": "vitest run",
     "check:psd": "tsx scripts/check-psd.ts",
     "sync:rules": "tsx scripts/sync-rules.ts",
     "build:function": "tsx scripts/build-function.ts",

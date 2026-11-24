@@ -74,9 +74,9 @@ export default function SummaryPanel({ loaded }: { loaded: Loaded }) {
             </details>
           </div>
           <div className="summary__preview">
-            <div className="seg">
-              <button type="button" className={view === 'composite' ? 'is-on' : ''} onClick={() => setView('composite')}>PSD 합성</button>
-              <button type="button" className={view === 'notext' ? 'is-on' : ''} onClick={() => setView('notext')}>글자 뺀 배경</button>
+            <div className="seg" role="group" aria-label="미리보기 이미지">
+              <button type="button" className={view === 'composite' ? 'is-on' : ''} aria-pressed={view === 'composite'} onClick={() => setView('composite')}>PSD 합성</button>
+              <button type="button" className={view === 'notext' ? 'is-on' : ''} aria-pressed={view === 'notext'} onClick={() => setView('notext')}>글자 뺀 배경</button>
             </div>
             <div className="scrollimg">
               <img src={view === 'composite' ? loaded.compositeUrl : loaded.notextUrl} alt={view === 'composite' ? 'PSD 합성 렌더' : '글자 뺀 배경 합성'} />

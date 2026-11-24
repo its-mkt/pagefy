@@ -1,5 +1,6 @@
 // 생성 API 호출. 배포(its.itket.com/pagefy)는 Supabase 함수, 개발(yarn dev)은 로컬 서버(/api)
 import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from '../../shared/types';
+import type { AdminSettingsRequest, AdminStats, BudgetInfo, FeedbackRequest } from '../../shared/ops';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, currentToken } from './supabase';
 
 /** true 면 Supabase 함수 + 로그인 필요. 개발 중에도 VITE_PAGEFY_CLOUD=1 이면 함수를 쓴다 */
@@ -107,13 +108,17 @@ export async function collect(
 
 // ───── 이미지 호스팅 업로드 (서버가 FTP 로 올린다, core/upload.ts) ─────
 
+/** 이미지는 <공개 주소 루트>/<채널>/<슬러그>/<파일명> 에 올린다 (규칙 6-1, 날짜 폴더 없음) */
 export interface UploadTarget {
   channel: string;
   slug: string;
-  rev: string;
   publicRoot: string;
-  /** 이 작업의 표시 — 이 표시가 있는 rev 폴더에만 올린다 */
-  token: string;
+}
+
+/** 올린 파일 하나 — backup 이 있으면 같은 이름 파일을 덮어쓴 것 (서버에 옛 파일을 그 숨김 이름으로 보관) */
+export interface UploadedItem {
+  file: string;
+  backup?: string;
 }
 
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
@@ -122,18 +127,36 @@ async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): P
   return r.json();
 }
 
-/** 서버에 이 rev 폴더가 있는지, 있으면 어떤 파일이 있는지 */
+/** 서버에 제품 폴더가 있는지, 있으면 어떤 파일이 있는지 */
 export const uploadCheck = (target: UploadTarget, signal?: AbortSignal) =>
-  postJson<{ exists: boolean; owned: boolean; files: { file: string; size: number }[]; base: string }>('upload/check', { target }, signal);
+  postJson<{ exists: boolean; files: { file: string; size: number }[]; base: string }>('upload/check', { target }, signal);
 
-/** 파일 몇 장씩 올리기 (data = base64). 같은 이름이 서버에 있으면 refused 로 돌아온다 */
-export const uploadFiles = (target: UploadTarget, files: { file: string; data: string }[], signal?: AbortSignal) =>
-  postJson<{ done: { file: string; url: string; size: number }[]; refused: { file: string; error: string }[]; left?: string[] }>('upload/files', { target, files }, signal);
+/**
+ * 파일 몇 장씩 올리기 (data = base64). 같은 이름이 서버에 있으면 overwrite 에 있을 때만 덮어쓰고(done[].backup = 옛 파일 보관 이름),
+ * 없으면 refused 로 돌아온다
+ */
+export const uploadFiles = (target: UploadTarget, files: { file: string; data: string }[], overwrite: string[], signal?: AbortSignal) =>
+  postJson<{ done: (UploadedItem & { url: string; size: number })[]; refused: { file: string; error: string }[]; left?: string[] }>('upload/files', { target, files, overwrite }, signal);
 
 /** 공개 주소를 열어 200·용량 확인 */
 export const uploadVerify = (target: UploadTarget, files: { file: string; size: number; sha256?: string }[], signal?: AbortSignal) =>
   postJson<{ results: { file: string; url: string; status: number; size: number; ok: boolean; checked: boolean }[] }>('upload/verify', { target, files }, signal);
 
-/** 잘못 올린 것 되돌리기 — 이 작업이 올린 폴더의 이미지(files)를 지운다. left 가 있으면 다시 부른다 */
-export const uploadRemove = (target: UploadTarget, files: string[], signal?: AbortSignal) =>
-  postJson<{ removed: string[]; left: string[]; folderRemoved: boolean }>('upload/remove', { target, files }, signal);
+/** 잘못 올린 것 되돌리기 — 이번에 올린 파일(items): 덮어쓴 것은 백업으로 되돌리고 새로 올린 것은 지운다. left 가 있으면 다시 부른다 */
+export const uploadRemove = (target: UploadTarget, items: UploadedItem[], signal?: AbortSignal) =>
+  postJson<{ restored: string[]; removed: string[]; failed: { file: string; error: string }[]; left: UploadedItem[]; folderRemoved: boolean }>('upload/remove', { target, items }, signal);
+
+// ───── 운영: 결과 평가·관리 화면 (core/ops.ts · server/opsLocal.ts) ─────
+
+/** 「그대로 썼어요 / 고쳐서 썼어요」 저장 (같은 작업을 다시 누르면 바꾼다) */
+export const sendFeedback = (b: FeedbackRequest) => postJson<{ ok: true }>('feedback', b);
+
+/** 관리 화면 숫자 (광고 인사이트 역할 admin 만) — month: YYYY-MM, 없으면 이번 달 */
+export async function fetchAdminStats(month?: string): Promise<AdminStats> {
+  const r = await fetch(`${BASE}/admin/stats${month ? `?month=${month}` : ''}`, { headers: await headers() });
+  if (!r.ok) throw new Error(await errorOf(r));
+  return r.json();
+}
+
+/** 월 상한 바꾸기·이번 달 상한 풀기 */
+export const saveAdminSettings = (b: AdminSettingsRequest) => postJson<{ budget: BudgetInfo }>('admin/settings', b);

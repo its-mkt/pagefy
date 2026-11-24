@@ -1,4 +1,4 @@
-// 공유 폴더에 상품 폴더 저장 — \\192.168.1.254\마케팅팀\A_상세페이지\<채널 폴더>\<제품명>\ (PSD · HTML · img\<rev>\)
+// 공유 폴더에 상품 폴더 저장 — \\192.168.1.254\마케팅팀\A_상세페이지\<채널 폴더>\<제품명>\ (PSD · HTML · img\)
 // 브라우저(크롬·엣지)의 폴더 접근 기능(File System Access)으로 담당자가 고른 A_상세페이지 폴더에 바로 쓴다.
 // - 처음 한 번 폴더를 고르면 이 브라우저에 기억 (IndexedDB). 창을 새로 열면 크롬이 "수정 허용?"을 한 번 묻는다
 // - 덮어쓰지 않는다: 이미지·PSD 는 있으면 건너뛰고, HTML 은 내용이 다를 때 화면이 물어본 뒤에만 바꾼다. 아무것도 지우지 않는다
@@ -99,7 +99,6 @@ export function safeFolderName(name: string) {
 export interface SaveInput {
   channel: Channel;
   productName: string;
-  rev: string;
   html: string;
   images: CutImage[];
   /** PSD 원본 (상품 폴더에 PSD 가 없을 때만 복사) */
@@ -208,14 +207,14 @@ export async function saveToShared(root: FileSystemDirectoryHandle, inp: SaveInp
     html = 'kept';
   }
 
-  // 이미지: img\<rev>\ — 같은 내용이면 건너뜀. 이름은 같은데 내용이 다르면(수정 요청 뒤 다시 저장 등)
+  // 이미지: img\ (서버 <채널>/<슬러그>/ 와 같은 파일·이름, 규칙 6-1) — 같은 내용이면 건너뜀. 이름은 같은데 내용이 다르면(수정 요청 뒤 다시 저장 등)
   // 폴더의 HTML 이 이번 것일 때만 바꾼다 (HTML 은 옛 것으로 두기로 했으면 이미지도 옛 것을 지켜 서로 맞게)
   const htmlIsNew = html !== 'kept';
-  const imgDir = await (await prod.getDirectoryHandle('img', { create: true })).getDirectoryHandle(inp.rev, { create: true });
+  const imgDir = await prod.getDirectoryHandle('img', { create: true });
   let n = 0;
   for (const im of inp.images) {
     onProgress?.(`이미지 저장 중 ${++n}/${inp.images.length}`);
-    const rel = `img\\${inp.rev}\\${im.file}`;
+    const rel = `img\\${im.file}`;
     const old = await fileOf(imgDir, im.file);
     if (old && ((await sameContent(old, im.blob)) || !htmlIsNew)) skipped.push(rel);
     else {

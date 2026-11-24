@@ -10,10 +10,15 @@ import { describeError, runClaude, usageOfError, type Effort, type RunConfig } f
 import { validatePlan, validateSection } from './core/validate.ts';
 import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from './shared/types.ts';
 import type { Dial } from './core/ftp.ts';
-import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfigFrom, putFiles, removeUpload, verifyFiles } from './core/upload.ts';
+import { adminStats, budgetBlock, checkFeedback, getBudget, opsConfigFrom, saveFeedback, saveSettings, trackRun } from './core/ops.ts';
+import type { AdminSettingsRequest, FeedbackRequest } from './shared/ops.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfigFrom, putFiles, undoUpload, verifyFiles, type UploadedItem } from './core/upload.ts';
 
 // 이미지 호스팅 업로드 (규칙 6절): 접속 정보는 함수 비밀값 PAGEFY_FTP_HOST·USER·PASS·ROOT·PUBLIC_BASE(·PORT) 에만 둔다.
-// 없으면 업로드 기능을 끈다 (화면에 버튼 없음). 같은 이름 파일은 덮어쓰지 않는다 (core/upload.ts)
+// 없으면 업로드 기능을 끈다 (화면에 버튼 없음). 같은 이름 파일은 화면이 확인받은 것만 덮어쓴다 — 옛 파일은 숨김 백업 (core/upload.ts)
+// 운영 기록·월 상한·실패 알림 (core/ops.ts). SUPABASE_URL·SUPABASE_SERVICE_ROLE_KEY 는 함수에 자동으로 들어 있다.
+// 알림은 함수 비밀값 PAGEFY_NOTIFY_URL·PAGEFY_NOTIFY_SECRET·PAGEFY_NOTIFY_TO(쉼표로 여러 명) 가 있을 때만
+const OPS = opsConfigFrom((k) => Deno.env.get(k));
 const ftpCfg = () => ftpConfigFrom((k) => Deno.env.get(`PAGEFY_FTP_${k}`));
 const denoDial: Dial = async (hostname, port) => {
   const c = await Deno.connect({ hostname, port });
@@ -147,6 +152,19 @@ function sse(req: Request, work: (send: (e: StreamEvent) => void, signal: AbortS
   return new Response(body, { headers: { ...corsHeaders(req), 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform' } });
 }
 
+/** Claude 호출 한 번을 운영 기록에 남긴다 (비용·성공 여부·걸린 시간, 실패면 알림). 기록 실패는 생성에 영향 없음 */
+async function tracked(info: Parameters<typeof trackRun>[1], send: (e: StreamEvent) => void, signal: AbortSignal, work: (send: (e: StreamEvent) => void) => Promise<void>) {
+  const run = trackRun(OPS, info, send);
+  try {
+    await work(run.send);
+    await run.finish(signal.aborted);
+  } catch (err) {
+    const u = usageOfError(err);
+    await run.finish(signal.aborted, { message: describeError(err), costUsd: u.usage?.costUsd, model: u.model });
+    throw err;
+  }
+}
+
 /** 요청이 들어온 뒤 흐른 시간을 빼고 남은 시간만 Claude 에 준다 (권한 확인·규칙 읽기도 150초 안에 들어감) */
 const within = (cfg: RunConfig, t0: number): RunConfig => ({ ...cfg, timeLimitMs: Math.max(20_000, cfg.timeLimitMs - (Date.now() - t0)) });
 
@@ -168,7 +186,13 @@ Deno.serve(async (req) => {
               ? 'upload-verify'
               : path.endsWith('/upload/remove')
                 ? 'upload-remove'
-                : '';
+                : path.endsWith('/feedback')
+                  ? 'feedback'
+                  : path.endsWith('/admin/stats')
+                    ? 'admin-stats'
+                    : path.endsWith('/admin/settings')
+                      ? 'admin-settings'
+                      : '';
   if (!action) return json(req, 404, { error: '없는 주소입니다.' });
 
   const token = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
@@ -193,18 +217,54 @@ Deno.serve(async (req) => {
       hasKey: hasKey(),
       model: MODEL,
       effort: EFFORT,
+      planEffort: PLAN_RUN.effort,
       rules: await loadRules().then((r) => ({ source: 'GitHub its-mkt/pagefy rules/detail_to_markup.md', updatedAt: r.updatedAt, fallback: false })).catch(() => ({ source: '(규칙 읽기 실패)', updatedAt: null, fallback: true })),
       role,
       upload: !!ftpCfg(),
+      // 이번 달 사용액·상한 (80% 넘으면 화면에 경고, 다 쓰면 막힘). 운영 기록 DB 를 못 읽으면 빼고 보낸다
+      budget: OPS ? await getBudget(OPS).catch(() => undefined) : undefined,
     };
     return json(req, 200, body);
   }
+  // 관리 화면 (광고 인사이트 역할 admin 만): 이번 달 비용·사용 기록·평가, 월 상한 바꾸기·풀기
+  if (action === 'admin-stats' || action === 'admin-settings') {
+    if (role !== 'admin') return json(req, 403, { error: '관리자만 볼 수 있습니다.' });
+    if (!OPS) return json(req, 503, { error: '운영 기록 DB 설정이 없습니다.' });
+    try {
+      if (action === 'admin-stats') return json(req, 200, await adminStats(OPS, new URL(req.url).searchParams.get('month') || undefined));
+      if (req.method !== 'POST') return json(req, 405, { error: 'POST 로 요청하세요.' });
+      const budget = await saveSettings(OPS, (await req.json()) as AdminSettingsRequest, emailOf(token));
+      console.log(`[admin] ${emailOf(token)} 설정 변경 — 상한 $${budget.capUsd}${budget.unblocked ? ' (이번 달 해제)' : ''}`);
+      return json(req, 200, { budget });
+    } catch (err) {
+      return json(req, 400, { error: describeError(err) });
+    }
+  }
   if (req.method !== 'POST') return json(req, 405, { error: 'POST 로 요청하세요.' });
+
+  // 결과 평가 (그대로 썼어요 / 고쳐서 썼어요) — 생성 권한이 있는 사람이면 누구나
+  if (action === 'feedback') {
+    if (!OPS) return json(req, 503, { error: '운영 기록 DB 설정이 없습니다.' });
+    let fb: FeedbackRequest | null = null;
+    try {
+      fb = (await req.json()) as FeedbackRequest;
+    } catch {
+      // 아래에서 거절
+    }
+    const bad = checkFeedback(fb);
+    if (bad) return json(req, 400, { error: bad });
+    try {
+      await saveFeedback(OPS, emailOf(token), fb!);
+      return json(req, 200, { ok: true });
+    } catch (err) {
+      return json(req, 502, { error: describeError(err) });
+    }
+  }
 
   if (action.startsWith('upload-')) {
     const cfg = ftpCfg();
     if (!cfg) return json(req, 503, { error: '이미지 서버 접속 정보(함수 비밀값 PAGEFY_FTP_*)가 없습니다. 관리자에게 등록을 요청하세요.' });
-    let ub: { target?: UploadTarget; files?: unknown };
+    let ub: { target?: UploadTarget; files?: unknown; overwrite?: unknown; items?: unknown };
     try {
       ub = await req.json();
     } catch {
@@ -216,14 +276,15 @@ Deno.serve(async (req) => {
     try {
       if (action === 'upload-check') return json(req, 200, await checkFolder(cfg, denoDial, t));
       if (action === 'upload-files') {
-        const out = await putFiles(cfg, denoDial, t, ub.files as UploadFile[], t0 + 130_000);
-        console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug}/${t.rev} 올림 ${out.done.length}개${out.refused.length ? ` · 거절 ${out.refused.length}개` : ''}`);
+        const out = await putFiles(cfg, denoDial, t, ub.files as UploadFile[], (ub.overwrite as string[]) ?? [], t0 + 130_000);
+        const over = out.done.filter((d) => d.backup).length;
+        console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug} 올림 ${out.done.length}개${over ? ` (덮어씀 ${over}개)` : ''}${out.refused.length ? ` · 거절 ${out.refused.length}개` : ''}`);
         return json(req, 200, out);
       }
-      // 잘못 올린 것 되돌리기 — 이 작업이 올린 폴더만, 폴더 안 파일이 모두 이 결과의 이미지일 때만 (core/upload.ts removeUpload)
+      // 잘못 올린 것 되돌리기 — 이번에 올린 파일만: 덮어쓴 것은 백업으로 되돌리고 새로 올린 것은 지운다 (core/upload.ts undoUpload)
       if (action === 'upload-remove') {
-        const out = await removeUpload(cfg, denoDial, t, ub.files as string[], t0 + 130_000);
-        console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug}/${t.rev} 되돌림 ${out.removed.length}개${out.folderRemoved ? ' · 폴더 삭제' : ''}`);
+        const out = await undoUpload(cfg, denoDial, t, ub.items as UploadedItem[], t0 + 130_000);
+        console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug} 되돌림 — 복원 ${out.restored.length}개 · 지움 ${out.removed.length}개${out.failed.length ? ` · 실패 ${out.failed.length}개` : ''}`);
         return json(req, 200, out);
       }
       return json(req, 200, { results: await verifyFiles(cfg, t, (ub.files as { file: string; size: number; sha256?: string }[]) || [], t0 + 130_000) });
@@ -231,6 +292,9 @@ Deno.serve(async (req) => {
       return json(req, 502, { error: describeError(err) });
     }
   }
+  // 월 상한: 이번 달 사용액이 상한에 닿았으면 새 생성을 막는다 (관리자가 관리 화면에서 그 달만 풀 수 있음)
+  const blocked = await budgetBlock(OPS);
+  if (blocked) return json(req, 429, { error: blocked, budgetBlocked: true });
   if (!hasKey()) return json(req, 500, { error: 'Supabase 함수 비밀값 ANTHROPIC_API_KEY 가 없습니다. 관리자에게 등록을 요청하세요.' });
 
   let body: unknown;
@@ -247,7 +311,7 @@ Deno.serve(async (req) => {
     return sse(req, async (send, signal) => {
       send({ type: 'status', message: `계획 요청 중… (타일 ${b.tiles.length}장, 텍스트 ${b.summary.texts.length}개)` });
       const system = buildSystem((await loadRules()).text);
-      await runClaude(getClient(), within(PLAN_RUN, t0), system, buildPlanMessages(b), send, signal);
+      await tracked({ email: emailOf(token), action: 'plan', product: b.meta?.productName, channel: b.meta?.channel }, send, signal, (s) => runClaude(getClient(), within(PLAN_RUN, t0), system, buildPlanMessages(b), s, signal));
     });
   }
 
@@ -256,6 +320,6 @@ Deno.serve(async (req) => {
   if (problem) return json(req, 400, { error: problem });
   return sse(req, async (send, signal) => {
     const system = buildSystem((await loadRules()).text);
-    await runClaude(getClient(), within(RUN, t0), system, buildSectionMessages(b), send, signal);
+    await tracked({ email: emailOf(token), action: 'section', product: b.meta?.productName, channel: b.meta?.channel }, send, signal, (s) => runClaude(getClient(), within(RUN, t0), system, buildSectionMessages(b), s, signal));
   });
 });

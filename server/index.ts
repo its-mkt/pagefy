@@ -11,8 +11,9 @@ import { validatePlan, validateSection } from '../core/validate.ts';
 import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude.ts';
 import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
 import { loadRules } from './rules.ts';
-import { type UploadFile, type UploadTarget, checkFolder, checkTarget, putFiles, removeUpload, verifyFiles } from '../core/upload.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, putFiles, undoUpload, verifyFiles, type UploadedItem } from '../core/upload.ts';
 import { localFtpConfig, nodeDial } from './ftpNode.ts';
+import { localBudget, opsRouter } from './opsLocal.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.API_PORT || 1101);
@@ -37,7 +38,7 @@ api.get('/health', (_req, res) => {
   } catch {
     // 규칙 파일이 없으면 화면에 표시
   }
-  const body: HealthInfo = { ok: true, mock: MOCK, hasKey: hasKey(), model: MODEL, effort: EFFORT, rules, upload: !!localFtpConfig() };
+  const body: HealthInfo = { ok: true, mock: MOCK, hasKey: hasKey(), model: MODEL, effort: EFFORT, planEffort: PLAN_RUN.effort, rules, upload: !!localFtpConfig(), budget: localBudget() };
   res.json(body);
 });
 
@@ -109,7 +110,7 @@ api.post('/section', express.json({ limit: '40mb' }), async (req, res) => {
 });
 
 // ───── 이미지 호스팅 업로드 (규칙 6절, core/upload.ts) ─────
-// 접속 정보가 없으면 503. 같은 이름 파일은 덮어쓰지 않는다. 이 서버는 127.0.0.1 에서만 받는다
+// 접속 정보가 없으면 503. 같은 이름 파일은 화면이 확인받은 것만 덮어쓴다 (옛 파일은 숨김 백업). 이 서버는 127.0.0.1 에서만 받는다
 function uploadGuard(req: express.Request, res: express.Response) {
   // 다른 사이트가 DNS 를 바꿔 이 PC 의 서버를 부르는 것 막기: 주소가 localhost·127.0.0.1 일 때만
   if (!['localhost', '127.0.0.1'].includes(req.hostname)) {
@@ -144,8 +145,9 @@ api.post('/upload/files', express.json({ limit: '12mb' }), async (req, res) => {
   const g = uploadGuard(req, res);
   if (!g) return;
   try {
-    const out = await putFiles(g.cfg, nodeDial, g.t, req.body.files as UploadFile[]);
-    console.log(`[upload] ${g.t.channel}/${g.t.slug}/${g.t.rev} 올림 ${out.done.length}개${out.refused.length ? ` · 거절 ${out.refused.length}개` : ''}`);
+    const out = await putFiles(g.cfg, nodeDial, g.t, req.body.files as UploadFile[], (req.body.overwrite as string[]) ?? []);
+    const over = out.done.filter((d) => d.backup).length;
+    console.log(`[upload] ${g.t.channel}/${g.t.slug} 올림 ${out.done.length}개${over ? ` (덮어씀 ${over}개)` : ''}${out.refused.length ? ` · 거절 ${out.refused.length}개` : ''}`);
     res.json(out);
   } catch (err) {
     res.status(502).json({ error: describeError(err) });
@@ -158,18 +160,21 @@ api.post('/upload/verify', express.json(), async (req, res) => {
   res.json({ results: await verifyFiles(g.cfg, g.t, req.body.files || []) });
 });
 
-// 잘못 올린 것 되돌리기 — 이 작업이 올린 폴더만, 폴더 안 파일이 모두 이 결과의 이미지일 때만 (core/upload.ts removeUpload)
+// 잘못 올린 것 되돌리기 — 이번에 올린 파일만: 덮어쓴 것은 백업으로 되돌리고 새로 올린 것은 지운다 (core/upload.ts undoUpload)
 api.post('/upload/remove', express.json(), async (req, res) => {
   const g = uploadGuard(req, res);
   if (!g) return;
   try {
-    const out = await removeUpload(g.cfg, nodeDial, g.t, req.body.files as string[]);
-    console.log(`[upload] ${g.t.channel}/${g.t.slug}/${g.t.rev} 되돌림 ${out.removed.length}개${out.folderRemoved ? " · 폴더 삭제" : ""}`);
+    const out = await undoUpload(g.cfg, nodeDial, g.t, req.body.items as UploadedItem[]);
+    console.log(`[upload] ${g.t.channel}/${g.t.slug} 되돌림 — 복원 ${out.restored.length}개 · 지움 ${out.removed.length}개${out.failed.length ? ` · 실패 ${out.failed.length}개` : ''}`);
     res.json(out);
   } catch (err) {
     res.status(502).json({ error: describeError(err) });
   }
 });
+
+// 결과 평가·관리 화면 (로컬은 이 PC 메모리 · MOCK 예시 숫자 — server/opsLocal.ts)
+api.use(opsRouter);
 
 app.use('/api', api);
 app.use(`${BASE_PATH}/api`, api);

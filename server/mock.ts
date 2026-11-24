@@ -2,7 +2,7 @@
 // 결과 품질은 실제 Claude 결과와 다르다. 레이아웃 공식만 대략 맞춘 예시다
 import type { Plan, PlanRequest, SectionRequest, StreamEvent, TextInfo } from '../shared/types.ts';
 import { godoRootCss } from '../shared/width.ts';
-import { imageBaseUrl } from '../core/prompt.ts';
+import { imageBaseUrl } from '../shared/types.ts';
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 

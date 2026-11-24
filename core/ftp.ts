@@ -197,7 +197,7 @@ export class FtpClient {
     if (![226, 250].includes(done.code)) this.fail(new Error(`파일 올리기 실패 (${done.code})`));
   }
 
-  /** 지우기 — 서비스에서는 core/upload.ts removeUpload(이 작업이 올린 폴더 되돌리기)에서만 쓴다 */
+  /** 지우기 — 서비스에서는 core/upload.ts undoUpload(이번에 올린 파일 되돌리기)에서만 쓴다 */
   async remove(path: string) {
     await this.cmd(`DELE ${path}`, [250]);
   }

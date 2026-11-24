@@ -1,5 +1,42 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { fmtBytes } from '../lib/util';
+
+/** PSD 열기 단계 — 워커·App 이 보내는 진행 문구의 앞부분으로 몇 번째 단계인지 안다 (psd.worker.ts · App.openPsd) */
+const STEPS = [
+  { key: 'PSD 읽는 중', label: 'PSD 읽기' },
+  { key: '레이어 정보 정리 중', label: '레이어 정리' },
+  { key: '글자 뺀 배경 합성 중', label: '글자 뺀 배경 합성' },
+  { key: '미리보기 만드는 중', label: '미리보기' },
+];
+
+/** 진행 문구 + 단계 표시 + 걸린 시간 (큰 PSD 는 오래 걸려 멈춘 것처럼 보이지 않게) */
+function LoadSteps({ message }: { message: string }) {
+  const [sec, setSec] = useState(0);
+  useEffect(() => {
+    const t0 = Date.now();
+    const id = window.setInterval(() => setSec(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  const at = STEPS.findIndex((s) => message.startsWith(s.key));
+  return (
+    <div className="upload__busy" role="status" aria-live="polite">
+      <p className="upload__now">
+        <span className="spinner" /> {message}
+        {sec >= 3 && <span className="upload__sec">{sec}초</span>}
+      </p>
+      {at >= 0 && (
+        <ol className="upload__steps" aria-label="PSD 여는 단계">
+          {STEPS.map((s, i) => (
+            <li key={s.key} className={i < at ? 'is-done' : i === at ? 'is-cur' : ''} aria-current={i === at ? 'step' : undefined}>
+              {s.label}
+            </li>
+          ))}
+        </ol>
+      )}
+      {sec >= 15 && <p className="upload__slow">PSD 가 크면 1분 넘게 걸릴 수 있습니다. 창을 닫지 말고 기다려 주세요.</p>}
+    </div>
+  );
+}
 
 interface Props {
   onFile: (f: File) => void;
@@ -49,11 +86,7 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
     />
   );
 
-  const busy = loading && (
-    <p className="upload__busy">
-      <span className="spinner" /> {loading}
-    </p>
-  );
+  const busy = loading && <LoadSteps message={loading} />;
 
   if (file) {
     return (
