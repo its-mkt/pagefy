@@ -54,6 +54,8 @@ export interface Job {
 
 /** 휴지통 보관 기간 (일) */
 export const TRASH_DAYS = 30;
+/** 휴지통 작업의 PSD 원본(브라우저 사본)을 남겨 두는 시간 — cleanFiles */
+const TRASH_KEEP_FILE_MS = 86_400_000;
 const TRASH_MS = TRASH_DAYS * 24 * 60 * 60_000;
 
 export interface ListInfo {
@@ -539,7 +541,10 @@ export async function prune(keepId?: string) {
 async function cleanFiles() {
   // 다른 계정의 브라우저 사본 PSD 도 지키도록 계정 구분 없이 전부 본다
   const all = await req((await store('jobs')).getAll() as IDBRequest<Job[]>);
-  const used = new Set(all.filter((j) => !j.deletedAt).map((j) => j.fileKey));
+  // 휴지통으로 옮긴 지 하루가 안 된 작업의 PSD 는 남긴다 — 지운 직후 「되돌리기」·복원하면 PSD 를 다시 고르지 않고 바로 연다
+  // (PSD 는 수백 MB 라 30일 내내 두지는 않는다. 하루 지나 복원하면 「PSD 고르기」로 다시 연다)
+  const keepTrash = Date.now() - TRASH_KEEP_FILE_MS;
+  const used = new Set(all.filter((j) => !j.deletedAt || j.deletedAt > keepTrash).map((j) => j.fileKey));
   const keys = (await req((await store('files')).getAllKeys())) as string[];
   for (const k of keys) if (!used.has(k)) await req((await store('files', 'readwrite')).delete(k));
 }

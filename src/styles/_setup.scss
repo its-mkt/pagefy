@@ -30,12 +30,35 @@
 }
 
 .upload__busy {
+  display: grid;
+  justify-items: center;
+  gap: 0.625rem;
+}
+.upload__now {
   margin: 0;
   display: inline-flex;
   gap: 0.5rem;
   align-items: center;
   font-weight: 600;
 }
+.upload__sec { color: var(--sub); font-weight: 500; font-variant-numeric: tabular-nums; }
+.upload__steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.25rem 1rem;
+  font-size: 0.75rem;
+  color: var(--sub);
+  counter-reset: step;
+  li { counter-increment: step; }
+  li::before { content: counter(step) '. '; }
+  .is-done { color: var(--ink2); &::before { content: '✓ '; color: var(--ok); } }
+  .is-cur { color: var(--accink); font-weight: 700; }
+}
+.upload__slow { margin: 0; font-size: 0.75rem; color: var(--sub); }
 
 
 // 올린 뒤: 한 줄 파일 카드 (다른 PSD 는 화면 전체 끌어다 놓기 .dropcover 로)
@@ -65,7 +88,8 @@
     gap: 0.125rem;
     b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     small { color: var(--sub); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-    .upload__busy { font-size: 0.8125rem; color: var(--ink2); }
+    .upload__busy { font-size: 0.8125rem; color: var(--ink2); justify-items: start; gap: 0.25rem; }
+    .upload__steps { justify-content: flex-start; }
   }
 
   &__hint { flex: none; margin: 0 0.5rem 0 0; color: var(--sub); font-size: 0.75rem; }
@@ -284,32 +308,27 @@
   margin-top: 0.75rem;
   background: var(--bg);
 
-  > summary {
+  &__head {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem 0.75rem;
     align-items: center;
-    padding: 0.625rem 0.75rem;
-    cursor: pointer;
-    list-style: none;
-    &::-webkit-details-marker { display: none; }
-    &::before {
-      content: '';
-      width: 0.4rem;
-      height: 0.4rem;
-      border-right: 1.5px solid var(--sub);
-      border-bottom: 1.5px solid var(--sub);
-      transform: rotate(-45deg);
-      transition: transform 0.15s;
-    }
-    &:hover .adv__title { color: var(--accink); }
+    padding: 0.625rem 0.75rem 0.25rem;
   }
-  &[open] > summary::before { transform: rotate(45deg); }
 
   &__title { font-weight: 600; font-size: 0.8125rem; color: var(--ink2); }
-  &__now { min-width: 0; color: var(--sub); font-size: 0.75rem; word-break: break-all; }
-  &__body { padding: 0.25rem 0.75rem 0.875rem; }
+  &__edit { margin-left: auto; font-size: 0.75rem; }
+  &__body { padding: 0.25rem 0.75rem 0.875rem; display: grid; gap: 0.625rem; }
+  &__url {
+    margin: 0;
+    display: grid;
+    gap: 0.25rem;
+    code { font-size: 0.8125rem; color: var(--ink); word-break: break-all; }
+    small { color: var(--sub); font-size: 0.75rem; }
+  }
 }
+
+.setup__extra { margin-top: 0.75rem; }
 
 // 큰 만들기 버튼
 .btn.btn--go {

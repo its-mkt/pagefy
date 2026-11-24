@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { listInfo, TRASH_DAYS, type Job, type JobState } from '../lib/jobs';
 import { fmtBytes } from '../lib/util';
 import { SHARED_ROOT } from '../lib/sharedFolder';
@@ -57,7 +57,7 @@ function ago(t: number) {
 
 function progress(j: Job) {
   const i = listInfo(j);
-  if (!i.secs) return j.state === 'ready' ? '-' : '계획 전';
+  if (!i.secs) return j.state === 'ready' ? '만들기 전' : '계획 전';
   // 코드 생성 방식은 섹션을 따로 요청하지 않는다 (계획만 있으면 마크업을 다시 만들 수 있음)
   if (i.engine === 'code') return `섹션 ${i.secs}개`;
   return `섹션 ${i.done}/${i.secs}`;
@@ -70,10 +70,21 @@ function daysLeft(deletedAt: number) {
 
 /** 작업 목록 — 계정(또는 이 브라우저)에 저장돼 새로고침·다른 PC 에서도 이어서 볼 수 있다 */
 export default function JobsPanel(props: Props) {
-  const { jobs, currentId, busy, account, more, loading, onMore, onOpen, onRemove, onView, trash, trashN, onTrashOpen } = props;
+  const { jobs, currentId, busy, account, more, loading, onMore, onOpen, onRemove, onView, trash, trashN, onTrashOpen, onRestore } = props;
   // PSD 원본이 이 브라우저에 없는 작업: 파일 고르기 창을 띄워 같은 PSD 를 받는다
   const picker = useRef<HTMLInputElement>(null);
   const [pickFor, setPickFor] = useState<Job | null>(null);
+  // 지운 직후 「되돌리기」 알림 — 휴지통을 찾아가지 않아도 바로 되돌린다 (잘못 누른 경우가 많음)
+  const [removed, setRemoved] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => {
+    if (!removed) return;
+    const t = window.setTimeout(() => setRemoved(null), 10_000);
+    return () => window.clearTimeout(t);
+  }, [removed]);
+  const remove = (j: Job) => {
+    onRemove(j.id);
+    setRemoved({ id: j.id, name: j.settings.productName || j.fileName });
+  };
   if (trash) return <TrashView {...props} trash={trash} />;
   if (!jobs.length && !loading && !trashN) return null;
 
@@ -102,6 +113,27 @@ export default function JobsPanel(props: Props) {
             「PSD 고르기」를 누르고 공유 폴더 <code>{PSD_DIR}</code> 안의 같은 PSD를 고르면 이어서 열립니다.
             만든 PC에서 결과 화면의 「공유 폴더에 저장」을 눌러 두면 PSD가 그 폴더에 들어갑니다.
           </span>
+        </p>
+      )}
+      {removed && (
+        <p className="jobs__undo" role="status">
+          <span>
+            「{removed.name}」을(를) 휴지통으로 옮겼습니다 ({TRASH_DAYS}일 안에 복원 가능).
+          </span>
+          <button
+            type="button"
+            className="btn btn--sm"
+            disabled={busy}
+            onClick={() => {
+              onRestore(removed.id);
+              setRemoved(null);
+            }}
+          >
+            되돌리기
+          </button>
+          <button type="button" className="jobs__undo-x" aria-label="알림 닫기" onClick={() => setRemoved(null)}>
+            ×
+          </button>
         </p>
       )}
       {!jobs.length && !loading && <p className="hint jobs__empty">최근 작업이 없습니다.</p>}
@@ -179,7 +211,7 @@ export default function JobsPanel(props: Props) {
                   )
                 )}
                 {/* 휴지통으로 옮기기만 하므로(기간 안에 복원 가능) 한 번에 누르면 된다 */}
-                <button className="btn btn--sm btn--ghost" disabled={busy && cur} title={`휴지통으로 옮깁니다 (${TRASH_DAYS}일 안에 복원 가능)`} onClick={() => onRemove(j.id)}>
+                <button className="btn btn--sm btn--ghost" disabled={busy && cur} title={`휴지통으로 옮깁니다 (${TRASH_DAYS}일 안에 복원 가능)`} onClick={() => remove(j)}>
                   지우기
                 </button>
               </span>
