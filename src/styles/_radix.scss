@@ -1,0 +1,249 @@
+// Radix 화면 객체 모양 — Radix Themes 디자인을 따르되 모서리는 0 (Theme radius="none" 과 같음)
+// 컴포넌트: components/ui.tsx · Select.tsx · ProfileMenu.tsx 등 (Radix Primitives). 색은 _radix-colors.scss 12단계
+// 상태는 Radix 가 붙이는 data-* 속성으로 그린다 (data-state · data-highlighted · data-disabled · data-side)
+// 커서: Radix Themes 는 기본 화살표지만, 누를 수 있는 것은 손가락(pointer) · 못 누르면 not-allowed 로 둔다
+
+// 떠 있는 상자 공통 (선택 목록 · 메뉴) — Radix Themes 패널 그림자
+%float {
+  background: var(--card);
+  box-shadow: var(--shadow-float);
+  z-index: 50;
+}
+// 입력칸 겉모양 (Radix Themes variant="surface"): 흰 바탕 + 회색 a7 테두리, 초점은 강조 8단계 2px
+%surface {
+  background: var(--card);
+  border: 1px solid var(--slate-a7);
+  color: var(--slate-12);
+}
+%focus { outline: 2px solid var(--indigo-8); outline-offset: -1px; }
+// 목록·메뉴 항목 (Radix Themes: 올린 항목은 강조 9단계 바탕 + 흰 글자)
+%item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 2rem;
+  padding: 0 0.75rem;
+  color: var(--slate-12);
+  font-size: 0.875rem;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  // 목록 안 초점은 바탕색으로 — 전역 :focus-visible 테두리를 이긴다 (한 규칙에 & 와 함께 쓰면 Sass 가 중복으로 보고 지운다)
+  outline: none;
+  &:focus-visible { outline: none; }
+  // 올린 항목은 옅은 회색 — 진한 파랑 채움은 옆의 주 단추와 시선을 다퉈서 쓰지 않는다 (2026-11-24 사용자: 「조용한 강조」)
+  &[data-highlighted] { background: var(--slate-a3); color: var(--slate-12); }
+  &[data-disabled] { color: var(--slate-a8); pointer-events: none; }
+}
+
+// ---- 선택 상자 (Select) — Radix Themes Select.Trigger variant="surface" ----
+.sel {
+  @extend %surface;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 7rem;
+  height: 2rem;
+  padding: 0 0.5rem 0 0.75rem;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+  &:hover:not([data-disabled]) { border-color: var(--slate-a8); }
+  &:focus-visible, &[data-state='open'] { @extend %focus; }
+  &[data-disabled] { background: var(--slate-a2); color: var(--slate-a11); border-color: var(--slate-a6); cursor: not-allowed; }
+  &--sm { height: 2rem; padding-left: 0.625rem; font-size: 0.8125rem; } // 작은 버튼(.btn--sm)·보기 전환(.seg)과 같은 높이
+
+  &__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__chev { flex: none; display: inline-flex; color: var(--slate-a11); svg { width: 0.875rem; height: 0.875rem; } }
+
+  // 목록 (body 아래로 떠서 그려진다 — .sel 안쪽 선택자로 쓰지 않는다)
+  &__list {
+    @extend %float;
+    min-width: var(--radix-select-trigger-width);
+    max-width: min(22rem, calc(100vw - 2rem));
+    max-height: min(320px, var(--radix-select-content-available-height));
+    overflow: hidden;
+    // 얇은 테두리 + 옅은 그림자 (떠 있는 상자 기본 그림자보다 한 단계 조용하게)
+    border: 1px solid var(--slate-a6);
+    box-shadow: 0 8px 24px -8px var(--slate-a6);
+    animation: rx-in 0.12s ease-out;
+    &[data-side='top'] { animation-name: rx-in-up; }
+  }
+  &__viewport { padding: 0.25rem; }
+  &__scroll { display: flex; justify-content: center; height: 1.25rem; color: var(--slate-a11); svg { width: 0.875rem; height: 0.875rem; } &:first-child svg { transform: rotate(180deg); } }
+  &__sep { height: 1px; margin: 0.5rem 0.75rem; background: var(--slate-a6); }
+  &__ghead { display: flex; align-items: center; height: 2rem; padding: 0 0.75rem; font-size: 0.75rem; color: var(--slate-a10); }
+  // 고른 항목: 남색 글자 + 오른쪽 체크 (왼쪽에 체크 자리를 비워 두지 않아 글자가 선택 상자와 같은 줄에서 시작)
+  &__opt {
+    @extend %item;
+    position: relative;
+    min-height: 2.25rem;
+    padding: 0 2.25rem 0 0.75rem;
+    &[data-state='checked'] { color: var(--indigo-11); font-weight: 600; }
+  }
+  &__check { position: absolute; right: 0.75rem; display: inline-flex; color: var(--indigo-11); svg { width: 0.875rem; height: 0.875rem; } }
+}
+
+// ---- 접어 두는 영역 (Collapsible — 예전 <details>) ----
+.sum {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0;
+  border: 0;
+  background: none;
+  color: var(--slate-a11);
+  font: inherit;
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+  &:hover { color: var(--slate-12); }
+  &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: 2px; }
+  &__chev { flex: none; width: 0.875rem; height: 0.875rem; transition: transform 0.15s; }
+  &[data-state='open'] &__chev { transform: rotate(90deg); }
+}
+
+// ---- 체크박스 — Radix Themes Checkbox variant="surface" ----
+.ck {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  &.is-off { color: var(--slate-a8); cursor: not-allowed; }
+  &__box {
+    @extend %surface;
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    padding: 0;
+    display: inline-grid;
+    place-items: center;
+    color: #fff;
+    &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: 2px; }
+    &[data-state='checked'] { background: var(--indigo-9); border-color: var(--indigo-9); }
+    &[data-disabled] { background: var(--slate-a3); border-color: var(--slate-a6); }
+  }
+  &__mark { display: inline-flex; svg { width: 0.75rem; height: 0.75rem; } }
+}
+
+// ---- 하나 고르기 단추 묶음 (ToggleGroup) — 입력칸과 같은 surface 틀 안에, 고른 칸만 옅은 강조(soft) + 강조 테두리
+// 진한 파랑 채움은 옆의 주 단추(HTML 복사 등)와 시선을 다투므로, 고른 것은 분명하되 한 단계 조용하게
+.seg {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 2rem;
+  padding: 2px;
+  margin-bottom: 0.5rem;
+  background: var(--card);
+  border: 1px solid var(--slate-a7);
+}
+.seg__item {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 0.625rem;
+  border: 0;
+  background: none;
+  color: var(--slate-11);
+  font: inherit;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.12s, color 0.12s, box-shadow 0.12s;
+  &:hover:not([data-state='on']):not(:disabled) { background: var(--slate-a3); color: var(--slate-12); }
+  // 고른 칸은 진한 파랑 + 흰 글자 (지금 무엇을 보는지 한눈에 — 세그먼트는 영역마다 하나뿐이라 반복되지 않음, 2026-11-24)
+  &[data-state='on'] { background: var(--indigo-9); color: #fff; font-weight: 600; }
+  &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: 1px; }
+  &:disabled { color: var(--slate-a8); cursor: not-allowed; }
+}
+
+// ---- 결과 탭 (Tabs) — Radix Themes Tabs ----
+.tabs {
+  box-shadow: inset 0 -1px 0 0 var(--slate-a5);
+  border-bottom: 0;
+}
+.tabs__tab {
+  position: relative;
+  height: 2.5rem;
+  border: 0;
+  background: none;
+  padding: 0 0.75rem;
+  color: var(--slate-a11);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  &:hover { color: var(--slate-12); }
+  &[data-state='active'] { color: var(--slate-12); font-weight: 500; }
+  &:disabled { color: var(--slate-a8); cursor: not-allowed; }
+  &[data-state='active']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--indigo-10); }
+  &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: -2px; }
+}
+
+// ---- 판매처 고르기 (RadioGroup) — Radix Themes RadioCards (모양 바탕은 _setup.scss 의 .chopt) ----
+.chopt {
+  @extend %surface;
+  font: inherit;
+  font-size: 0.875rem;
+  &:hover:not(:disabled) { border-color: var(--slate-a8); }
+  &[data-state='checked'] { border-color: var(--indigo-9); box-shadow: inset 0 0 0 1px var(--indigo-9); b { color: var(--slate-12); } }
+  &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: 2px; }
+  &:disabled { color: var(--slate-a8); cursor: not-allowed; }
+  &__dot {
+    flex: none;
+    width: 1rem;
+    height: 1rem;
+    display: inline-grid;
+    place-items: center;
+    border: 1px solid var(--slate-a7);
+    border-radius: 50%; // 라디오는 동그라미 (아바타처럼 원형이 뜻인 곳만 예외)
+    background: var(--card);
+  }
+  &[data-state='checked'] &__dot { background: var(--indigo-9); border-color: var(--indigo-9); }
+  &__on { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: #fff; }
+}
+
+// ---- 메뉴 (DropdownMenu) — 프로필 메뉴 상자는 main.scss 의 .profile__pop ----
+.profile__pop { @extend %float; border: 0; }
+.profile__item {
+  @extend %item;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  text-decoration: none;
+  &--out { color: var(--red-11); &[data-highlighted] { background: var(--red-9); color: #fff; } }
+}
+.profile__sep { height: 1px; margin: 0.375rem 0; background: var(--slate-a6); } // 상자 안쪽 여백 안에서 — 항목에 마우스를 올렸을 때 바탕과 같은 폭 · 위아래 같은 간격
+
+// ---- 툴팁 (Tooltip) — Radix Themes Tooltip ----
+// TipWrap — 비활성 단추 대신 설명 이벤트를 받는 바깥 묶음 (단추 자리·모양은 그대로)
+.tipwrap {
+  display: inline-flex;
+  > :disabled { pointer-events: none; }
+  &:focus-visible { @extend %focus; outline-offset: 2px; }
+}
+
+.tip {
+  z-index: 50;
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 0.25rem 0.5rem;
+  background: var(--slate-12);
+  color: var(--slate-1);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+  white-space: pre-line;
+  animation: rx-in 0.1s ease-out;
+  &[data-side='top'] { animation-name: rx-in-up; }
+}
+
+@keyframes rx-in { from { opacity: 0; transform: translateY(-3px); } }
+@keyframes rx-in-up { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .sel__list, .tip { animation: none; }
+  .sum__chev { transition: none; }
+}

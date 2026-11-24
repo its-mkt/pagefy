@@ -1,62 +1,5 @@
-// 운영 화면: 결과 평가 · 상한 경고 띠 · 도움말 · 관리
+// 운영 화면: 상한 경고 띠 · 도움말 · 관리
 @use 'tokens' as *;
-
-// 고르기 칩 (평가의 「고친 곳」)
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  min-height: 1.75rem;
-  padding: 0 0.625rem;
-  border: 1px solid var(--line2);
-  background: var(--card);
-  font-size: 0.8125rem;
-  cursor: pointer;
-  user-select: none;
-  input { position: absolute; opacity: 0; pointer-events: none; }
-  &:has(input:focus-visible) { outline: 2px solid var(--acc); outline-offset: 2px; }
-  &:hover { border-color: var(--acc); }
-  &.is-on { border-color: var(--acc); background: var(--accbg); color: var(--accink); font-weight: 600; }
-}
-
-// ---- 결과 평가 ----
-.feedback {
-  margin-top: 0.75rem;
-  padding: 0.75rem 1rem;
-  display: grid;
-  gap: 0.625rem;
-  background: var(--card);
-  border: 1px dashed var(--line2);
-  font-size: 0.8125rem;
-  color: var(--ink2);
-
-  &__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; }
-  &__q b { color: var(--ink); margin-right: 0.25rem; }
-  &__actions { display: flex; flex-wrap: wrap; gap: 0.375rem; .btn.is-on { border-color: var(--acc); color: var(--accink); } }
-  &__more { display: grid; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--line); }
-  &__label { font-weight: 600; color: var(--ink); }
-  &__areas { display: flex; flex-wrap: wrap; gap: 0.375rem; }
-  &__note {
-    height: 2rem;
-    padding: 0 0.625rem;
-    border: 1px solid var(--line2);
-    background: var(--card);
-    max-width: 36rem;
-    &:focus-visible { outline: 2px solid var(--acc); outline-offset: 0; border-color: var(--acc); }
-  }
-  .msg { margin: 0; }
-
-  &--done {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem;
-    border-style: solid;
-    border-color: color-mix(in srgb, var(--ok) 35%, transparent);
-    background: color-mix(in srgb, var(--ok) 6%, var(--card));
-    color: var(--ink);
-  }
-}
 
 // ---- 월 상한 경고 띠 (모든 화면 맨 위) ----
 .budget {
@@ -65,15 +8,10 @@
   align-items: center;
   gap: 0.25rem 0.75rem;
   padding: 0.625rem 1rem;
-  background: var(--warnbg);
-  color: var(--warn);
+  @include callout(amber);
   font-size: 0.8125rem;
-  border-left: 3px solid currentColor;
   b { font-weight: 700; }
-  &--blocked {
-    color: var(--err);
-    background: color-mix(in srgb, var(--err) 8%, var(--card));
-  }
+  &--blocked { @include callout(red); }
   .link-btn { color: inherit; text-decoration: underline; }
 }
 
@@ -94,7 +32,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
     gap: 0.5rem;
-    li { display: flex; gap: 0.75rem; padding: 0.875rem; background: var(--bg); }
+    li { display: flex; gap: 0.75rem; padding: 0.875rem; background: var(--tile); }
     b { color: var(--ink); }
     p { margin: 0.25rem 0 0; font-size: 0.8125rem; }
   }
@@ -115,13 +53,13 @@
   &__list { margin: 0; padding-left: 1.125rem; display: grid; gap: 0.375rem; }
   &__faq {
     display: grid;
-    gap: 2px;
-    .fold { margin: 0; padding: 0.375rem 0.875rem; background: var(--bg); }
-    summary { font-size: 0.875rem; color: var(--ink); font-weight: 600; padding: 0.375rem 0; }
+    gap: $sp-row;
+    .fold { margin: 0; padding: 0.375rem 0.875rem; background: var(--tile); }
+    .sum { font-size: 0.875rem; color: var(--ink); font-weight: 600; padding: 0.375rem 0; }
     p { margin: 0.25rem 0 0.5rem; }
   }
   &__contact { margin: 0; }
-  code { font: 0.8125rem/1.5 $mono; background: var(--bg); padding: 0 0.25rem; word-break: break-all; }
+  code { font: 0.8125rem/1.5 $mono; background: var(--tile); padding: 0 0.25rem; word-break: break-all; }
 }
 
 // ---- 관리 ----
@@ -138,7 +76,7 @@
     gap: 0.25rem;
     align-content: start;
     padding: 0.875rem 1rem;
-    background: var(--bg);
+    background: var(--tile);
     border-top: 3px solid var(--line2);
     > span:first-child { color: var(--sub); }
     > b { font-size: 1.375rem; color: var(--ink); font-variant-numeric: tabular-nums; small { font-size: 0.875rem; color: var(--sub); font-weight: 500; } }
@@ -163,7 +101,7 @@
     align-items: center;
     gap: 0.25rem;
     font-weight: 600;
-    input { width: 6rem; height: 1.75rem; padding: 0 0.5rem; border: 1px solid var(--line2); background: var(--card); font-variant-numeric: tabular-nums; }
+    input { width: 6rem; height: 1.75rem; padding: 0 0.5rem; font-variant-numeric: tabular-nums; @include field; }
   }
   &__cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); gap: 0 0.75rem; }
   &__months {
@@ -191,8 +129,8 @@
     padding: 0;
     list-style: none;
     display: grid;
-    gap: 2px;
-    li { display: grid; grid-template-columns: 7.5rem auto 1fr; align-items: start; gap: 0.75rem; padding: 0.5rem 0.625rem; background: var(--bg); }
+    gap: $sp-row;
+    li { display: grid; grid-template-columns: 7.5rem auto 1fr; align-items: start; gap: 0.75rem; padding: 0.5rem 0.625rem; background: var(--tile); }
     b { color: var(--ink); }
     small { display: block; margin-top: 0.125rem; color: var(--sub); word-break: break-all; }
   }
@@ -204,10 +142,11 @@
   display: grid;
   gap: 0.25rem;
   padding: 0.75rem 1rem;
-  background: var(--warnbg);
-  border-left: 3px solid var(--warn);
+  @include callout(amber);
   font-size: 0.8125rem;
-  color: var(--ink2);
-  b { color: var(--warn); }
+  b { color: var(--amber-12); }
   &__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.375rem; }
+  &__why { font-size: 0.75rem; font-weight: 600; }
 }
+
+// 선택 상자(.sel) 모양은 _radix.scss (Radix Select)

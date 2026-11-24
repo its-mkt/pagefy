@@ -46,7 +46,10 @@ yarn dev                  # 화면 http://localhost:1100  (로컬 API 서버 110
 이미지 서버 업로드(선택, 넣으면 결과 화면에 「이미지 서버에 올리기」 버튼이 생긴다): `PAGEFY_FTP_HOST` · `PAGEFY_FTP_USER` · `PAGEFY_FTP_PASS` · `PAGEFY_FTP_ROOT`(예: `/data/detail`) · `PAGEFY_FTP_PUBLIC_BASE`(예: `https://itketweb.hgodo.com/data/detail`) · `PAGEFY_FTP_PORT`(기본 21).
 로컬(`yarn dev`)은 규칙 6절의 `~/.claude/secrets/nhn-image-ftp.env` 를 그대로 읽는다. 이미지 서버가 암호화 없는 FTP 만 받으므로(FTPS·SFTP 없음, 2026-11-23 확인) 가능하면 `/data/detail` 만 쓸 수 있는 전용 FTP 계정을 쓴다.
 
-운영 기록·월 상한·실패 알림(2026-11-24~): 생성마다 `pagefy_runs` 에 비용·결과를 남기고, 월 상한(`pagefy_settings`, 기본 $100)에 닿으면 새 생성을 막는다. 결과 평가는 `pagefy_feedback`.
+고도몰 등록 확인(선택, 넣으면 아이티켓 채널 결과에 「고도몰 등록 확인」 상자가 생긴다): `PAGEFY_GODO_PARTNER_KEY` · `PAGEFY_GODO_USER_KEY` — 아이티켓 고도몰 오픈 API 키(광고 인사이트 Apps Script 의 `GODO_PARTNER_KEY`·`GODO_USER_KEY` 와 같은 값). 로컬은 `~/.claude/secrets/godo-openapi.env`(`GODO_PARTNER_KEY=`·`GODO_USER_KEY=`). 상품 조회만 한다(읽기 전용, `core/godo.ts`).
+
+운영 기록·월 상한·실패 알림(2026-11-24~): 생성마다 `pagefy_runs` 에 비용·결과를 남기고, 월 상한(`pagefy_settings`, 기본 $100)에 닿으면 새 생성을 막는다. (결과 평가 막대는 2026-11-24 화면에서 뺐다 — 팀 내부용이라 필요 없음. `pagefy_feedback` 표와 함수 `/feedback` 은 남아 있지만 쓰지 않는다)
+도입 성과는 「관리」의 월 완료 건수·실패율·1건 평균 비용·평균 소요 시간(`pagefy_runs`)으로 본다.
 admin 계정은 화면 「관리」(`#admin`)에서 보고 상한을 바꾼다. 실패 알림은 `PAGEFY_NOTIFY_URL`·`PAGEFY_NOTIFY_SECRET`·`PAGEFY_NOTIFY_TO` 가 있을 때만.
 표: `supabase/migrations/20261124_pagefy_ops.sql` · 운영·장애 대처: **`docs/operations.md`** · 단위 테스트: `yarn test` (CI 에서도 돈다)
 
@@ -68,6 +71,10 @@ admin 계정은 화면 「관리」(`#admin`)에서 보고 상한을 바꾼다. 
    - 그림 크기가 바뀐 이미지가 있으면 이미 붙여 둔 옛 HTML 과 어긋나므로 안내에서 HTML 다시 붙여넣기를 알린다. 서버에서 이 HTML 이 쓰지 않는 파일은 지우지 않는다
    - 버튼이 없을 때는 zip 을 받아 `img` 폴더 안 이미지를 FTP 로 `<채널>/<슬러그>/` 에 올린다 (예전 `psd2html\upload.js` 는 날짜 폴더 방식이라 쓰지 않음)
    - 실제 채널에 붙여넣어 깨지지 않는지는 사람이 확인 (규칙 9절)
+7. **고도몰 등록 확인** (아이티켓 채널, 서버에 고도몰 API 키가 있을 때) — 상품번호나 상품 주소를 넣으면 고도몰 상세설명을 읽어 지금 결과와 비교한다: 「등록됨 · 지금 결과와 같음」 / 「등록됨 · 옛 버전」(글자·이미지는 같고 코드만 다른지도 알림) / 「이 제품 결과가 아님」 / 「상세설명 비어 있음」
+   - 상품번호는 제품(채널/슬러그)마다 브라우저에 기억해 다음에 결과를 열면 자동으로 다시 확인한다
+   - 표시하는 「고도몰 마지막 수정」 시각은 상품 수정일(`modDt`)이라 가격·재고만 바꿔도 갱신된다 (상세설명을 바꾼 시각과 다를 수 있음)
+   - 온코어 고도몰은 키가 달라 아직 지원하지 않는다
 
 ## 구조
 

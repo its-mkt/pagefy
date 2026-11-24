@@ -53,7 +53,7 @@
     margin: 0.5rem 0 0;
     max-height: 140px;
     overflow: auto;
-    background: var(--bg);
+    background: var(--tile);
     padding: 0.625rem 0.75rem;
     font-size: 0.75rem;
     color: var(--sub);
@@ -77,7 +77,7 @@
     align-items: center;
     min-height: 1.75rem;
     padding: 0 0.75rem;
-    background: var(--bg);
+    background: var(--tile);
     color: var(--sub);
     font-size: 0.75rem;
     font-weight: 500;
@@ -92,8 +92,7 @@
 // 실패 — 오류 글과 이어 만들기 버튼을 눈에 띄게
 .progress-error {
   padding: 0.875rem 1rem;
-  background: color-mix(in srgb, var(--err) 8%, transparent);
-  border-left: 3px solid var(--err);
+  @include callout(red);
 
   & &__msg { margin: 0; font-weight: 600; } // .msg 기본 여백을 이긴다
   .actions { margin-top: 0.75rem; }
@@ -101,15 +100,8 @@
 
 // 접어 두는 영역 (진행 기록 / 통과한 점검)
 .fold {
-  margin-top: 0.75rem;
+  margin-top: $sp-3;
 
-  summary {
-    cursor: pointer;
-    color: var(--sub);
-    font-size: 0.8125rem;
-    padding: 0.25rem 0;
-    &:hover { color: var(--ink); }
-  }
   .checks { margin-top: 0.375rem; }
 }
 
@@ -120,26 +112,26 @@
   list-style: none;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
-  gap: 2px;
+  gap: $sp-row;
 }
 
 .sec {
   margin: 0;
   padding: 0.375rem 0.625rem;
-  border-left: 3px solid var(--line2);
-  background: var(--bg);
+  background: var(--slate-a2);
   font-size: 0.8125rem;
   small { color: var(--sub); margin-left: 0.25rem; }
-  &--run { border-color: var(--acc); background: var(--accbg); }
-  &--done { border-color: var(--ok); }
-  &--error { border-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+  &--run { background: var(--indigo-a3); color: var(--indigo-a11); }
+  &--done small { color: var(--green-a11); }
+  &--error { @include callout(red); }
 }
 
 // ---- 받아 가기 ----
 .getit {
-  background: var(--bg);
-  padding: 1rem 1.125rem 1.125rem;
-  border-left: 3px solid var(--acc);
+  // Radix Card (surface): 옅은 바탕 + a4 테두리 (예전 왼쪽 강조 띠 없음)
+  background: var(--slate-a2);
+  box-shadow: inset 0 0 0 1px var(--slate-a4);
+  padding: 1.25rem $sp-5 $sp-5;
 
   &__title {
     margin: 0;
@@ -175,11 +167,11 @@
     small { font-size: inherit; }
   }
 
-  &__actions.actions { margin-top: 0.875rem; gap: 0.5rem; }
+  &__actions.actions { margin-top: $sp-4; gap: $sp-2; }
 
   // 할 일 하나: HTML 복사 → 붙여넣기
   &__main {
-    margin-top: 0.875rem;
+    margin-top: $sp-4;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -199,39 +191,17 @@
   &__note { color: var(--sub); font-size: 0.75rem; .link-btn { margin-left: 0.375rem; } }
 
   // 그 밖의 일 — 주 버튼 아래 가는 선으로 나눔
+  .godo + &__extra { margin-top: $sp-4; }
   &__extra {
-    margin-top: 1rem;
-    padding-top: 0.75rem;
+    margin-top: $sp-5;
+    padding-top: $sp-4;
     border-top: 1px solid var(--line);
     display: grid;
-    gap: 0.5rem;
+    gap: $sp-3;
     .shared, .getit__more { margin-top: 0; }
   }
 
-  &__manual {
-    margin-top: 0.875rem;
-    padding: 0.625rem 0.875rem;
-    background: var(--warnbg);
-    color: var(--warn);
-    font-size: 0.8125rem;
-    b { font-weight: 700; display: block; }
-    .getit__tools { margin-top: 0.5rem; }
-  }
-  &__why { display: block; margin-top: 0.125rem; }
-  &__todo { margin: 0.5rem 0 0; padding-left: 1.25rem; display: grid; gap: 0.25rem; color: var(--ink2); }
-  &__ready {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.625rem;
-    padding: 0.5rem 0.625rem;
-    background: var(--card);
-    color: var(--ink);
-    font-weight: 600;
-    cursor: pointer;
-    input { width: 1rem; height: 1rem; accent-color: var(--acc); }
-  }
-  &__later { display: block; margin-top: 0.5rem; color: var(--sub); }
+  // 이미지 직접 올리기 단계 카드는 아래 .msteps
   &__more { margin-top: 0.75rem; .getit__tools { margin-top: 0.375rem; } }
 
   // 잘못 올린 것 되돌리기 — 지우기 전 확인 (붙여넣은 페이지 그림이 사라질 수 있음을 알리고 체크해야 지울 수 있음)
@@ -240,20 +210,18 @@
     padding: 0.625rem 0.875rem;
     display: grid;
     gap: 0.375rem;
-    background: color-mix(in srgb, var(--err) 8%, var(--card));
-    border-left: 3px solid var(--err);
+    @include callout(red);
     font-size: 0.8125rem;
-    color: var(--ink2);
-    b { color: var(--ink); }
+    b { color: var(--red-12); }
   }
   &__undo-check { display: flex; gap: 0.5rem; align-items: center; cursor: pointer; color: var(--ink); }
-  &__undo-warn { color: var(--err); font-weight: 600; }
+  &__undo-warn { color: var(--red-11); font-weight: 600; }
   &__undo-actions { display: flex; gap: 0.5rem; }
   // 덮어쓰기 안내 — 되돌리기 상자와 같은 모양, 주의(노랑) 색
   &__over {
-    background: var(--warnbg);
-    border-left-color: var(--warn);
-    .getit__undo-warn { color: var(--warn); }
+    @include callout(amber);
+    b { color: var(--amber-12); }
+    .getit__undo-warn { color: var(--amber-11); }
     .getit__code { justify-self: start; word-break: break-all; }
   }
   &__over-list {
@@ -320,26 +288,26 @@
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 2px;
+  gap: $sp-row;
 }
 
 // 점검 한 줄 — 왼쪽 굵은 선이 상태, 바탕은 옅은 같은 색
 .check {
   padding: 0.375rem 0.75rem;
   font-size: 0.8125rem;
-  border-left: 3px solid;
+  border-left: 2px solid;
 
   &__what { font-weight: 600; color: var(--ink); }
   &__todo { color: var(--ink2); }
   &__more {
     margin-top: 0.125rem;
-    summary { display: inline; cursor: pointer; color: var(--sub); font-size: 0.75rem; &:hover { color: var(--ink); } }
-    span { display: block; margin-top: 0.125rem; color: var(--sub); font-size: 0.75rem; word-break: break-all; }
+    .sum { font-size: 0.75rem; padding: 0; }
+    .sum-body span { display: block; margin-top: 0.125rem; color: var(--sub); font-size: 0.75rem; word-break: break-all; }
   }
 
-  &--ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); }
-  &--warn { border-color: var(--warn); background: var(--warnbg); }
-  &--error { border-color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); }
+  &--ok { border-color: var(--green-a7); background: var(--green-a2); }
+  &--warn { border-color: var(--amber-a8); background: var(--amber-a2); }
+  &--error { border-color: var(--red-a8); background: var(--red-a2); }
 }
 
 // ---- 문제 자동 수정 (점검 목록 바로 아래) ----
@@ -348,7 +316,7 @@
   padding: 0.75rem;
   display: grid;
   gap: 0.625rem;
-  background: var(--bg);
+  background: var(--tile);
   border: 1px solid var(--line);
 
   &__row {
@@ -366,7 +334,7 @@
 
 // ---- 수정 요청 ----
 .revise__title {
-  margin: 1.5rem 0 0.5rem;
+  margin: $sp-5 0 $sp-2;
   font-size: 0.8125rem;
   font-weight: 600;
   color: var(--ink2);
@@ -376,7 +344,7 @@
 .revise {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: $sp-3;
   align-items: flex-start;
 
   > .btn:last-child { align-self: flex-end; }
@@ -385,11 +353,9 @@
     align-self: stretch;
     width: 100%;
     min-height: 5.5rem;
-    border: 1px solid var(--line2);
-    background: var(--card);
     padding: 0.5rem 0.75rem;
     resize: vertical;
-    &:focus { outline: none; border-color: var(--acc); }
+    @include field;
   }
 
   select {
@@ -418,8 +384,7 @@
     gap: 0.375rem 0.625rem;
     align-items: center;
     padding: 0.5rem 0.75rem;
-    background: var(--warnbg);
-    color: var(--warn);
+    @include callout(amber);
   }
 }
 
@@ -438,13 +403,13 @@
     cursor: pointer;
     text-decoration: underline dotted;
     text-underline-offset: 3px;
-    &:hover, &.is-on { color: #c96f00; b { color: #c96f00; } }
+    &:hover, &.is-on { color: var(--orange-11); b { color: var(--orange-11); } }
     &.is-on { text-decoration-style: solid; }
   }
   &__kept {
     margin: 0 0 0.5rem;
     padding: 0.5rem 0.75rem 0.5rem 1.75rem;
-    background: color-mix(in srgb, #f08c00 10%, transparent);
+    background: var(--orange-a3);
     font-size: 0.8125rem;
     li + li { margin-top: 0.125rem; }
     small { color: var(--sub); margin-left: 0.25rem; }
@@ -456,23 +421,23 @@
   &__mark {
     position: absolute;
     box-sizing: border-box;
-    border: 4px solid #f08c00;
-    background: color-mix(in srgb, #f08c00 18%, transparent);
+    border: 4px solid var(--orange-9);
+    background: var(--orange-a4);
     pointer-events: auto;
   }
 }
 
 // 공유 폴더에 저장 (보관용) — A_상세페이지\<채널>\<제품명>\
 .shared {
-  margin-top: 0.75rem;
+  margin-top: $sp-3;
   display: grid;
-  gap: 0.375rem;
+  gap: $sp-3;
   font-size: 0.8125rem;
   color: var(--ink2);
 
   &__row { display: flex; align-items: flex-start; gap: 0.75rem; }
   &__row > .btn { flex: none; }
-  &__desc { min-width: 0; display: grid; gap: 0.125rem; .link-btn { margin-left: 0.5rem; } }
+  &__desc { min-width: 0; display: grid; gap: $sp-1; .link-btn { margin-left: $sp-2; } }
   &__where {
     font: 0.75rem/1.5 $mono;
     color: var(--sub);
@@ -484,11 +449,123 @@
     display: grid;
     gap: 0.5rem;
     padding: 0.625rem 0.875rem;
-    background: var(--warnbg);
-    color: var(--ink);
+    @include callout(amber);
     b { font-weight: 600; word-break: break-all; }
   }
   &__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
   &__done { margin: 0; b { color: var(--ink); font-weight: 600; word-break: break-all; } }
   .hint { margin: 0; }
+}
+
+// 고도몰 등록 확인 (GodoCheckBox) — 받아 가기 블록 안, 보관·직접 올리기 위
+.godo {
+  margin-top: $sp-5;
+  padding: $sp-3 $sp-4;
+  // 받아 가기 상자(옅은 회색 카드) 안의 패널 면 — 어두운 테마에서도 한 단계만 다르게
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--slate-a4);
+  display: grid;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+
+  &__row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+  &__title { font-size: 0.8125rem; color: var(--ink); margin-right: 0.25rem; }
+  &__input {
+    width: 16rem;
+    max-width: 100%;
+    height: 2rem;
+    padding: 0 0.625rem;
+    font: inherit;
+    @include field;
+  }
+  &__msg { margin: 0; }
+  &__info {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    color: var(--ink2);
+    a { color: var(--accink); }
+    .godo__dt { cursor: help; }
+  }
+  &__hint { flex-basis: 100%; color: var(--sub); }
+}
+
+// 이미지 직접 올리기 3단계 (ManualSteps — 자동 업로드가 없을 때). 받아 가기 카드 안의 흰 패널.
+// 색은 중립(회색)으로 두고, 지금 할 단계만 강조색 번호 · 끝난 단계는 초록 체크 · 남은 단계는 흐리게
+.msteps {
+  margin-top: 0.875rem;
+  padding: 0.875rem 1rem 0.75rem;
+  background: var(--card);
+  box-shadow: inset 0 0 0 1px var(--slate-a4);
+  font-size: 0.8125rem;
+  color: var(--ink2);
+
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.375rem 0.625rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--line);
+    p { margin: 0; flex: 1 1 20rem; }
+    b { color: var(--ink); font-weight: 600; }
+  }
+
+  &__list { margin: 0; padding: 0; list-style: none; }
+  &__step {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1.5rem minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.75rem 0 0;
+    // 번호 사이 세로 선
+    &:not(:last-child)::after { content: ''; position: absolute; left: calc(0.75rem - 0.5px); top: 2.375rem; bottom: -0.625rem; width: 1px; background: var(--slate-a5); }
+    &.is-done:not(:last-child)::after { background: var(--green-a7); }
+  }
+  &__num {
+    position: relative;
+    z-index: 1;
+    width: 1.5rem;
+    height: 1.5rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%; // 단계 번호는 원형 (스테퍼와 같음)
+    background: var(--slate-a3);
+    color: var(--slate-a11);
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    svg { width: 0.875rem; height: 0.875rem; }
+  }
+  &__step.is-now &__num { background: var(--indigo-9); color: #fff; }
+  &__step.is-done &__num { background: var(--green-9); color: #fff; }
+
+  &__body { display: grid; gap: 0.25rem; min-width: 0; padding-top: 0.125rem; }
+  &__body > b { color: var(--ink); font-weight: 600; font-size: 0.875rem; }
+  &__step.is-todo &__body > b { color: var(--slate-a11); }
+  &__desc { color: var(--sub); em { font-style: normal; font-weight: 600; color: var(--ink2); } }
+  &__note { margin-top: 0.25rem; padding: 0.375rem 0.625rem; background: var(--tile); color: var(--sub); font-size: 0.75rem; }
+  code { font: 0.75rem/1.5 $mono; background: var(--slate-a3); color: var(--ink); padding: 0 0.25rem; }
+
+  &__act { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.25rem; }
+  &__url {
+    code {
+      flex: 1 1 18rem;
+      min-width: 0;
+      padding: 0.25rem 0.5rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      background: var(--tile);
+      box-shadow: inset 0 0 0 1px var(--slate-a5);
+    }
+  }
+  &__check { padding: 0.25rem 0; color: var(--ink); font-weight: 500; }
+  // 1단계 안의 「공유 폴더에 바로 저장」(SharedSave) — 단계 본문 폭에 맞춰 여백만 줄인다
+  .shared { margin-top: 0.25rem; }
+  &__alt { color: var(--sub); font-size: 0.75rem; margin-top: 0.125rem; }
+
+  &__later { display: block; margin-top: 0.875rem; padding-top: 0.625rem; border-top: 1px solid var(--line); color: var(--sub); font-size: 0.75rem; }
+
+  &.is-ready &__head { border-bottom-color: var(--green-a5); }
 }

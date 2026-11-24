@@ -15,7 +15,7 @@
   gap: 0.25rem;
   padding: 2rem 1.25rem;
   border: 1px dashed var(--line2);
-  background: var(--bg);
+  background: var(--tile);
   text-align: center;
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
@@ -135,17 +135,16 @@
 // ── PSD 확인
 .ready {
   padding: 0.75rem 1rem;
-  border-left: 3px solid;
 
-  &--ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); color: var(--ok); }
-  &--warn { border-color: var(--warn); background: var(--warnbg); color: var(--warn); }
+  &--ok { @include callout(green); }
+  &--warn { @include callout(amber); }
 
   &__title { margin: 0; font-weight: 700; }
   &__list {
     margin: 0.375rem 0 0;
     padding-left: 1.25rem;
     font-size: 0.8125rem;
-    li + li { margin-top: 0.25rem; }
+    li + li { margin-top: $sp-row; }
   }
   &__note { margin: 0.375rem 0 0; }
 }
@@ -153,10 +152,10 @@
 .facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 2px;
-  margin: 0.75rem 0 0;
+  gap: $sp-2;
+  margin: $sp-4 0 0;
 
-  div { background: var(--bg); padding: 0.5rem 0.75rem; }
+  div { background: var(--tile); padding: 0.5rem 0.75rem; }
   dt { font-size: 0.75rem; color: var(--sub); }
   dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 }
@@ -165,15 +164,13 @@
 .more {
   margin-top: 0.75rem;
 
-  > summary {
-    cursor: pointer;
+  > .sum {
     padding: 0.5rem 0;
     color: var(--ink2);
-    font-size: 0.8125rem;
     font-weight: 600;
     &:hover { color: var(--accink); }
   }
-  &[open] > summary { margin-bottom: 0.5rem; }
+  &[data-state='open'] > .sum { margin-bottom: 0.5rem; }
 }
 
 .summary {
@@ -195,15 +192,14 @@
   flex-wrap: wrap;
   gap: 0.25rem;
 
-  li { margin: 0; padding: 0.125rem 0.5rem; background: var(--bg); font-size: 0.8125rem; }
+  li { margin: 0; padding: 0.125rem 0.5rem; background: var(--tile); font-size: 0.8125rem; }
   small { color: var(--sub); }
-  .is-bad { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+  .is-bad { background: var(--red-a3); color: var(--red-a11); }
   em { font-style: normal; font-size: 0.75rem; }
 }
 
 .baked {
   margin-top: 0.75rem;
-  summary { cursor: pointer; color: var(--sub); font-size: 0.8125rem; }
   ul { margin: 0.375rem 0 0; padding-left: 1.25rem; font-size: 0.8125rem; }
 }
 
@@ -216,7 +212,7 @@
   font-size: 0.75rem;
 
   th, td { border-bottom: 1px solid var(--line); padding: 0.375rem 0.5rem; text-align: left; vertical-align: top; }
-  th { color: var(--sub); font-weight: 500; background: var(--bg); white-space: nowrap; }
+  th { color: var(--sub); font-weight: 500; background: var(--tile); white-space: nowrap; }
 }
 
 .swatch {
@@ -227,6 +223,9 @@
   margin-right: 0.25rem;
   vertical-align: -1px;
 }
+
+// 글자 뺀 배경 합성이 끝나기 전 (어두운 판 위 안내)
+.scrollimg__wait { display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 1rem; color: rgb(255 255 255 / 0.8) !important; }
 
 .scrollimg {
   height: 520px;
@@ -258,55 +257,59 @@
   &__actions.actions { margin-top: 1.25rem; } // main.scss .actions 보다 먼저 읽혀서 두 클래스로 이긴다
   // 만들기 버튼은 폼 폭에 맞춰 넓게 (가장 중요한 동작이 눈에 띄게, 칸들과 같은 폭). 옆의 「처음부터 다시」는 제 폭 그대로
   &__actions .btn--go { flex: 1 1 auto; }
-  &__cost { margin: 0.5rem 0 0; }
+  &__cost { margin: $sp-3 0 0; }
 }
 
 // 채널 — 라디오 카드 3개
-.channels {
-  margin-top: 0.75rem;
+// 판매처 — 고도몰(아이티켓·온코어) / 오픈마켓(플랫폼별) 두 묶음, 한 radiogroup
+.chgroups {
+  margin-top: $sp-4;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 2px;
+  gap: $sp-row;
 }
 
-.channel {
-  display: flex;
-  gap: 0.625rem;
-  align-items: flex-start;
-  padding: 0.75rem;
-  background: var(--bg);
-  border-left: 3px solid transparent;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s;
+.chgroup {
+  display: grid;
+  grid-template-columns: 10.5rem minmax(0, 1fr);
+  gap: 0.5rem 1rem;
+  align-items: center;
+  padding: 0.625rem 0.75rem;
+  background: var(--tile);
 
-  &:hover { background: var(--accbg); }
-  &.is-on { background: var(--accbg); border-color: var(--acc); }
-  &:focus-within { outline: 2px solid var(--acc); outline-offset: -2px; }
-
-  input {
-    flex: none;
-    margin: 0.2rem 0 0;
-    accent-color: var(--acc);
-    &:focus-visible { outline: none; }
-  }
-
-  &__body {
+  &__head {
+    margin: 0;
     display: grid;
     gap: 0.125rem;
-    min-width: 0;
-    b { font-weight: 600; color: var(--ink); }
-    small { color: var(--sub); font-size: 0.75rem; }
+    b { font-weight: 700; color: var(--ink); font-size: 0.875rem; }
+    small { color: var(--sub); font-size: 0.6875rem; line-height: 1.4; }
   }
-  &.is-on b { color: var(--accink); }
+  &__opts { display: flex; flex-wrap: wrap; gap: 0.375rem; }
 
-  fieldset:disabled & { cursor: not-allowed; &:hover { background: var(--bg); } }
-  fieldset:disabled &.is-on:hover { background: var(--accbg); }
+  @media (max-width: 640px) { grid-template-columns: minmax(0, 1fr); }
+}
+
+.chopt {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+  height: 2.125rem;
+  padding: 0 0.75rem;
+  background: var(--card);
+  border: 1px solid var(--line2);
+  cursor: pointer;
+  font-size: 0.8125rem;
+  transition: background-color 0.15s, border-color 0.15s;
+
+  &:hover { border-color: var(--acc); }
+  b { font-weight: 600; color: var(--ink); }
+  small { color: var(--sub); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
+
 }
 
 // 고급 설정
 .adv {
   margin-top: 0.75rem;
-  background: var(--bg);
+  background: var(--tile);
 
   &__head {
     display: flex;
@@ -331,11 +334,12 @@
 .setup__extra { margin-top: 0.75rem; }
 
 // 큰 만들기 버튼
+// Radix Themes Button 크기 4 (48px)
 .btn.btn--go {
   height: 3rem;
-  padding: 0 2rem;
-  font-size: 1rem;
-  font-weight: 700;
+  padding: 0 1.5rem;
+  font-size: 1.125rem;
+  font-weight: 500;
 
   @media (max-width: 480px) { flex: 1 1 100%; }
 }
@@ -343,13 +347,12 @@
 .blockers {
   margin-top: 0.625rem;
   padding: 0.625rem 0.875rem;
-  background: var(--warnbg);
-  color: var(--warn);
+  @include callout(amber);
   font-size: 0.8125rem;
 
   &__title { margin: 0; font-weight: 700; }
   ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
-  li + li { margin-top: 0.125rem; }
+  li + li { margin-top: $sp-row; }
 }
 
 // 접힌 설정 한 줄
@@ -377,23 +380,13 @@
 
 // 오픈마켓 플랫폼 고르기 (채널 오픈마켓일 때만)
 .market {
-  margin-top: 0.5rem;
+  margin: 0.5rem 0 0;
   padding: 0.625rem 0.75rem;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 0.375rem 0.75rem;
-  background: var(--accbg);
-  border-left: 3px solid var(--acc);
-
-  &__pick {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.8125rem;
-    font-weight: 600;
-    color: var(--ink);
-    select { height: 2rem; padding: 0 0.5rem; border: 1px solid var(--line2); background: var(--card); color: var(--ink); font: inherit; font-weight: 500; }
-  }
-  &__note { flex: 1 1 18rem; color: var(--ink2); font-size: 0.75rem; }
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  @include callout(indigo);
+  b { font-size: 0.8125rem; font-weight: 700; }
+  &__note { flex: 1 1 18rem; font-size: 0.75rem; }
 }

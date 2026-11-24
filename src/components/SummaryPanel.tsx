@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Loaded } from '../App';
+import { Fold, Seg } from './ui';
 
 export default function SummaryPanel({ loaded }: { loaded: Loaded }) {
   const { summary: s } = loaded;
@@ -33,8 +34,7 @@ export default function SummaryPanel({ loaded }: { loaded: Loaded }) {
         <div><dt>폰트</dt><dd>{s.fonts.length}종</dd></div>
       </dl>
 
-      <details className="more">
-        <summary>PSD 자세히 보기</summary>
+      <Fold className="more" summary="PSD 자세히 보기">
         <div className="summary">
           <div className="summary__info">
             <p className="hint summary__meta">{s.width} × {s.height}px · {s.dpi}ppi · 제외(숨김) 레이어 {s.hiddenCount}개</p>
@@ -48,13 +48,11 @@ export default function SummaryPanel({ loaded }: { loaded: Loaded }) {
               {!s.fonts.length && <li>텍스트 레이어 없음</li>}
             </ul>
             {baked.length > 0 && (
-              <details className="baked">
-                <summary>이미지로 구울 후보 글자 {baked.length}개</summary>
+              <Fold className="baked" summary={<>이미지로 구울 후보 글자 {baked.length}개</>}>
                 <ul>{baked.map((t) => <li key={t.id}>"{t.lines[0]}" — {t.bakeHint}</li>)}</ul>
-              </details>
+              </Fold>
             )}
-            <details className="baked">
-              <summary>텍스트 레이어 값 보기</summary>
+            <Fold className="baked" summary="텍스트 레이어 값 보기">
               <div className="texts__wrap">
                 <table className="texts">
                   <thead><tr><th>y</th><th>글자</th><th>크기/행간</th><th>굵기</th><th>색</th></tr></thead>
@@ -71,20 +69,29 @@ export default function SummaryPanel({ loaded }: { loaded: Loaded }) {
                   </tbody>
                 </table>
               </div>
-            </details>
+            </Fold>
           </div>
           <div className="summary__preview">
-            <div className="seg" role="group" aria-label="미리보기 이미지">
-              <button type="button" className={view === 'composite' ? 'is-on' : ''} aria-pressed={view === 'composite'} onClick={() => setView('composite')}>PSD 합성</button>
-              <button type="button" className={view === 'notext' ? 'is-on' : ''} aria-pressed={view === 'notext'} onClick={() => setView('notext')}>글자 뺀 배경</button>
-            </div>
+            <Seg
+              aria-label="미리보기 이미지"
+              value={view}
+              onChange={setView}
+              items={[
+                { value: 'composite', label: 'PSD 합성' },
+                { value: 'notext', label: '글자 뺀 배경' },
+              ]}
+            />
             <div className="scrollimg">
-              <img src={view === 'composite' ? loaded.compositeUrl : loaded.notextUrl} alt={view === 'composite' ? 'PSD 합성 렌더' : '글자 뺀 배경 합성'} />
+              {view === 'notext' && !loaded.notextUrl ? (
+                <p className="hint scrollimg__wait"><span className="spinner" /> 글자 뺀 배경을 합성하는 중입니다… 몇 초 뒤 나타납니다.</p>
+              ) : (
+                <img src={view === 'composite' ? loaded.compositeUrl : loaded.notextUrl} alt={view === 'composite' ? 'PSD 합성 렌더' : '글자 뺀 배경 합성'} decoding="async" />
+              )}
             </div>
             <p className="hint">"글자 뺀 배경"은 브라우저로 다시 합성한 것입니다. 그림자·광선·오버레이·획은 근사해서 그리고, 내부 그림자·경사 같은 효과와 조정 레이어는 빠집니다. PSD 합성과 비교해 보세요.</p>
           </div>
         </div>
-      </details>
+      </Fold>
     </section>
   );
 }

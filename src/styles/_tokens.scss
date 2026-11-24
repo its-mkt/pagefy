@@ -1,43 +1,83 @@
-// 디자인 토큰 — 광고 인사이트(ad-insight) 와 같은 값. 플랫: 모서리 0, 그림자 없음, 면은 테두리 없이 바탕 대비로 구분
+// 디자인 토큰 — 색은 Radix Colors 12단계(_radix-colors.scss, @radix-ui/colors)를 Radix Themes 쓰임대로 연결한다.
+// 모양 원칙: 모서리 0, 면은 테두리 없이 바탕 대비로 구분, 떠 있는 상자만 그림자. (2026-11-24 전에는 광고 인사이트와 같은 값이었음)
+@use 'radix-colors' as *;
 $font: 'Pretendard Variable', 'Pretendard', 'Malgun Gothic', system-ui, sans-serif;
 $mono: 'D2Coding', Consolas, 'Courier New', monospace;
 
+// 의미 토큰 → Radix 색 단계 (밝은·어두운 테마 공통 — 단계 값이 테마마다 바뀐다)
+@mixin semantic {
+  // 글자 3단계: 제목·강조(12) > 본문(12 와 11 사이) > 보조(11). Radix 는 12/11 두 단계라 본문만 사이 값
+  --ink: var(--slate-12);
+  --ink2: color-mix(in oklab, var(--slate-12) 55%, var(--slate-11));
+  --sub: var(--slate-11);
+  --tile: var(--slate-a2); // 패널 안 칸·목록 줄 바탕 (밝은 테마는 옅은 회색, 어두운 테마는 한 단계 밝게 — 페이지 바탕 --bg 와 따로)
+  --line: var(--slate-a5); // 구분선·표 줄 (Radix Separator 는 a6 — 촘촘한 표가 많아 한 단계 옅게)
+  --line2: var(--slate-a7); // 입력칸 테두리 (Radix surface)
+  --acc: var(--indigo-9);
+  --acchover: var(--indigo-10);
+  --accbg: var(--indigo-a3);
+  --accink: var(--indigo-11);
+  --ok: var(--green-11);
+  --okbg: var(--green-a3);
+  --err: var(--red-11);
+  --errsolid: var(--red-9);
+  --errbg: var(--red-a3);
+  --warn: var(--amber-11);
+  --warnbg: var(--amber-a3);
+}
+
+// 안내 상자 — Radix Themes Callout (soft): 같은 색 계열 a3 바탕 + a11 글자, 테두리·왼쪽 띠 없음
+// $s: indigo(안내) · amber(주의) · red(오류) · green(통과)
+// 여백 단계 (2026-11-24, 「여백이 답답하다」) — 큰 묶음일수록 큰 단계. 새 여백은 이 값으로만 쓴다
+//   콘텐츠↔콘텐츠: 패널 사이·패널 안쪽·패널 안 큰 묶음 사이 = $sp-5, 바탕색 칸 목록의 줄 사이 = $sp-row
+//   콘텐츠↔텍스트: 이름 → 칸 = $sp-2, 칸 → 도움말 = $sp-row, 입력칸 줄 사이 = $sp-4, 단추 → 안내 글 = $sp-3
+//   텍스트↔텍스트: 설명 줄끼리 = $sp-3, 목록 항목끼리 = $sp-row
+// 화면 최대 폭 — 본문과 머리말 내용이 같은 좌우 끝선에 맞는다 (2026-11-24 사용자)
+$page-max: 1280px;
+$page-pad: 2rem;
+
+$sp-1: 0.25rem; //  4px — 글자 바로 옆 (아이콘·배지 안)
+$sp-2: 0.5rem; //   8px — 이름 → 칸, 묶음 안 작은 사이
+$sp-3: 0.75rem; // 12px — 같은 묶음 안 줄 사이, 단추 → 안내 글
+$sp-4: 1rem; //    16px — 입력칸 줄 사이
+$sp-5: 1.5rem; //  24px — 패널 사이·패널 안쪽·패널 안 큰 묶음 사이
+$sp-6: 2rem; //    32px — 화면 위아래
+$sp-row: 0.375rem; // 6px — 바탕색 칸 목록의 줄 사이, 목록 항목 사이, 칸 → 도움말
+
+// 입력칸 겉모양 — 흰 바탕 + 회색 a7 테두리, 초점은 강조 8단계 2px 테두리 (Radix surface, _radix.scss %surface·%focus 와 같은 값)
+// 입력칸마다 따로 적지 않고 이것을 쓴다 (설정 폼 · 변환 내역 거르기 · 로그인 · 관리 상한 · 공유 폴더 이름)
+@mixin field($bg: var(--card)) {
+  border: 1px solid var(--line2);
+  background: $bg;
+  &:focus { outline: 2px solid var(--indigo-8); outline-offset: -1px; border-color: var(--line2); box-shadow: none; }
+}
+
+@mixin callout($s) {
+  background: var(--#{$s}-a3);
+  color: var(--#{$s}-a11);
+  border: 0;
+}
+
 @mixin light {
-  --bg: #f4f6f9;
+  @include radix-light;
+  // 의미 토큰 → Radix 색 단계 (Radix Themes 와 같은 쓰임: 9 진한 색 · a3 옅은 바탕 · 11 글자 · a6/a7 테두리)
+  --bg: var(--slate-2);
   --card: #fff;
-  --ink: #1b2230;
-  --ink2: #394255;
-  --sub: #586174;
-  --line: #e4e8ee;
-  --line2: #cfd5de;
-  --acc: #2d5fd1;
-  --accbg: #e6edfb;
-  --accink: #2449a8;
-  --ok: #13803a;
-  --err: #c62a37;
-  --warn: #7a4a00;
-  --warnbg: #fbeccb;
+  @include semantic;
   --stage: #2a2d33; // 미리보기 뒤 어두운 판
   --code-bg: #1e2128;
+  // Radix Themes 그림자 (떠 있는 상자)
+  --shadow-float: 0 0 0 1px var(--slate-a3), 0 12px 60px var(--slate-a3), 0 12px 32px -16px var(--slate-a5);
   color-scheme: light;
 }
 
 @mixin dark {
-  --bg: #12151b;
-  --card: #1b2029;
-  --ink: #eef1f6;
-  --ink2: #cdd3de;
-  --sub: #9aa3b2;
-  --line: #283040;
-  --line2: #374156;
-  --acc: #4a74dc;
-  --accbg: #1f2a44;
-  --accink: #a8c0f5;
-  --ok: #3ecf5f;
-  --err: #ff6369;
-  --warn: #f0c060;
-  --warnbg: #3a2f14;
+  @include radix-dark;
+  --bg: var(--slate-1);
+  --card: var(--slate-2);
+  @include semantic;
   --stage: #0d0f13;
   --code-bg: #0d0f13;
+  --shadow-float: 0 0 0 1px var(--slate-a6), 0 12px 60px #00000080, 0 12px 32px -16px #000;
   color-scheme: dark;
 }
