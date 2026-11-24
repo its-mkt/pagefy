@@ -113,10 +113,20 @@ export interface Tile {
   data: string;
 }
 
+/**
+ * 이미지 주소 폴더 — <공개 주소 루트>/<채널>/<슬러그> (규칙 6-1).
+ * 2026-11-24 부터 날짜(rev) 폴더 없이 제품 폴더 하나에 올리고, 고친 이미지는 확인받은 뒤 같은 이름으로 덮어쓴다
+ */
+export function imageBaseUrl(meta: { publicRoot: string; channel: Channel; slug: string }) {
+  return `${meta.publicRoot.replace(/\/+$/, '')}/${meta.channel}/${meta.slug}`;
+}
+
 export interface GenerateMeta {
   productName: string;
   channel: Channel;
+  /** 이미지 서버 폴더 이름 (규칙 6-1, 영문 소문자·숫자·하이픈 — 한 번 정하면 바꾸지 않음) */
   slug: string;
+  /** 작업 판 번호(날짜). 2026-11-24 부터 이미지 주소에는 쓰지 않고, 작업 주소(?rev=)·작업 구분에만 쓴다 */
   rev: string;
   /** 이미지 공개 주소 루트 (예: https://itketweb.hgodo.com/data/detail) */
   publicRoot: string;
@@ -233,10 +243,15 @@ export interface HealthInfo {
   mock: boolean;
   hasKey: boolean;
   model: string;
+  /** 섹션 생성(옛 방식) effort */
   effort: string;
+  /** 구조 계획 effort — 지금 생성 방식에서 Claude 를 부르는 건 계획뿐이라 화면 머리에 이 값을 보여 준다 */
+  planEffort?: string;
   rules: { source: string; updatedAt: string | null; fallback: boolean };
   /** 이미지 호스팅 업로드를 쓸 수 있음 (서버에 FTP 접속 정보가 있음) */
   upload?: boolean;
+  /** 이번 달 사용액·월 상한 (배포 함수만 — 로컬 서버는 MOCK 일 때 예시 값) */
+  budget?: import('./ops.ts').BudgetInfo;
 }
 
 /** 서버 → 화면 SSE 이벤트 */

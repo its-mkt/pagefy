@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Session } from '@supabase/supabase-js';
-import type { GenerateMeta, HealthInfo, PlanBundle, PsdSummary, SectionRequest, UsageInfo } from '../shared/types';
-import { CLOUD, collect, fetchHealth, uploadCheck, uploadFiles, uploadRemove, uploadVerify, type UploadTarget } from './lib/api';
+import { type GenerateMeta, type HealthInfo, type PlanBundle, type PsdSummary, type SectionRequest, type UsageInfo, imageBaseUrl } from '../shared/types';
+import { CLOUD, collect, fetchHealth, uploadCheck, uploadFiles, uploadRemove, uploadVerify, type UploadedItem, type UploadTarget } from './lib/api';
 import { canUse, fetchRole, supabase, type Role } from './lib/supabase';
 import { bitmapToUrl, cutImages, localizeHtml, type CutImage } from './lib/images';
 import { checkOutput, parsePlanOutput, parseSectionOutput, type Check, type ParsedOutput } from './lib/output';
@@ -13,7 +13,13 @@ import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
 import { busyJobIds, deleteJob, fileKeyOf, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameMeta, saveFile, savesToAccount, touchRunning, type Job } from './lib/jobs';
-import Header from './components/Header';
+import Header, { type View } from './components/Header';
+import HelpPanel from './components/HelpPanel';
+import AdminPanel from './components/AdminPanel';
+import FeedbackBar from './components/FeedbackBar';
+import { BUDGET_WARN_RATIO } from '../shared/ops';
+import { CHANNEL_LABEL } from '../shared/types';
+import { MARKETS } from '../shared/markets';
 import JobsPanel from './components/JobsPanel';
 import SavedView from './components/SavedView';
 import LoginPanel from './components/LoginPanel';
@@ -93,6 +99,8 @@ function readRoute(): Route {
   const q = new URLSearchParams(window.location.search);
   return { markup: q.get('markup') || undefined, rev: q.get('rev') || undefined, job: q.get('job') || undefined, html: q.get('view') === 'html', trash: q.has('trash') };
 }
+/** 메뉴 화면 (#help · #admin) — 작업 주소(?markup=…)와 따로 움직인다 */
+const viewOfHash = (): View => (window.location.hash === '#help' ? 'help' : window.location.hash === '#admin' ? 'admin' : 'work');
 function routeUrl(r: Route) {
   const view = r.html ? '&view=html' : '';
   const q = r.markup
@@ -198,6 +206,14 @@ export default function App() {
   const [result, setResult] = useState<Result | null>(null);
   /** PSD 원본 없이 보는 저장된 결과 */
   const [viewJob, setViewJob] = useState<Job | null>(null);
+  /** 메뉴 화면. 만들기 화면은 숨기기만 하고 그대로 둔다 (도움말을 보고 와도 작업·결과가 그대로) */
+  const [view, setViewState] = useState<View>(viewOfHash);
+  const setView = (v: View) => {
+    if (v === view) return;
+    window.history.pushState(null, '', window.location.pathname + window.location.search + (v === 'work' ? '' : `#${v}`));
+    setViewState(v);
+    window.scrollTo({ top: 0 });
+  };
   const [revisionCount, setRevisionCount] = useState(0);
   /** 「문제 자동 수정」 결과 안내 (나아져서 바꿈 / 나아지지 않아 이전 결과 유지) — 새로 만들거나 다른 PSD 를 열면 지운다 */
   const [autoFix, setAutoFix] = useState<{ ok: boolean; text: string } | null>(null);
@@ -210,18 +226,17 @@ export default function App() {
     const runId = ++uploadRunRef.current;
     uploadAbortRef.current?.abort();
     setUpload({ phase: 'idle', done: 0, total: 0 });
-    // 다시 연 작업: 이미지 서버에 이 작업이 올린 폴더가 그대로 있으면 「올려 둔 상태」로 보여 준다 → 되돌리기 링크가 다시 보임.
-    // 이름·크기가 이 결과 이미지와 모두 같을 때만 (일부만 있으면 「HTML 복사」가 이어서 올림). 조용히 확인하고 실패해도 화면은 그대로
+    // 다시 연 작업: 이미지 서버 제품 폴더에 이 결과 이미지가 이름·크기 모두 같게 있으면 「올려 둔 상태」로 보여 준다 (표시용 —
+    // 「HTML 복사」를 누르면 내용(SHA-256)을 다시 확인해 다른 것만 덮어쓰기 확인 후 올린다). 조용히 확인하고 실패해도 화면은 그대로
     const r = result;
     if (!r || !health?.upload || r.bundle.plan.engine !== 'code' || !r.images.length) return;
     const ac = new AbortController();
     uploadAbortRef.current = ac;
     (async () => {
-      const token = await uploadToken(jobRef.current?.id ?? r.baseUrl, r.meta.rev);
-      const remote = await uploadCheck({ channel: r.meta.channel, slug: r.meta.slug, rev: r.meta.rev, publicRoot: r.meta.publicRoot, token }, ac.signal);
-      if (runId !== uploadRunRef.current || ac.signal.aborted || !remote.exists || !remote.owned) return;
+      const remote = await uploadCheck(uploadTargetOf(r), ac.signal);
+      if (runId !== uploadRunRef.current || ac.signal.aborted || !remote.exists) return;
       const sizes = new Map(remote.files.map((f) => [f.file, f.size]));
-      const all = r.images.length === remote.files.length && r.images.every((im) => sizes.get(im.file) === im.blob.size);
+      const all = r.images.every((im) => sizes.get(im.file) === im.blob.size);
       if (all) setUpload({ phase: 'done', done: r.images.length, total: r.images.length, restored: true });
     })().catch(() => {});
   }, [result?.baseUrl, result?.images, health?.upload]);
@@ -271,7 +286,9 @@ export default function App() {
     } catch (e) {
       setLoadError((e as Error).message);
     }
-    await openTrash();
+    // 휴지통 화면에서 복원하면 휴지통을 다시 읽고, 목록의 「되돌리기」(지운 직후 알림)면 목록에 머문다
+    if (trash) await openTrash();
+    else refreshTrashN();
     refreshJobs();
   }
   async function purgeFromTrash(id: string) {
@@ -371,8 +388,15 @@ export default function App() {
     return () => clearTimeout(t);
   }, [settings, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 생성 중에 새로고침·닫기를 누르면 브라우저가 한 번 묻는다
   const running = run.phase === 'running';
+  // 생성이 끝날 때마다 이번 달 사용액(상한 경고)을 다시 읽는다
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running && allowed) fetchHealth().then(setHealth, () => {});
+    wasRunning.current = running;
+  }, [running]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 생성 중에 새로고침·닫기를 누르면 브라우저가 한 번 묻는다
   useEffect(() => {
     if (!running) return;
     const warn = (e: BeforeUnloadEvent) => {
@@ -442,10 +466,12 @@ export default function App() {
       // 코드 생성 방식은 계획만 있으면 마크업을 다시 만들 수 있다 (API 호출 없음)
       setRun({ ...emptyRun(), phase: 'running', usage: job.usage, model: job.model, status: ['저장된 구조 계획으로 마크업을 다시 만듭니다.'] });
       try {
-        await buildFromPlan(job.meta, job.baseUrl!, job.plan.bundle, job.plan.report, job.plan.raw);
+        // 이미지 주소는 지금 규칙(날짜 폴더 없음, 6-1)으로 다시 만든다 — 예전 작업은 .../<슬러그>/<rev> 로 저장돼 있다
+        const base = imageBaseUrl(job.meta);
+        await buildFromPlan(job.meta, base, job.plan.bundle, job.plan.report, job.plan.raw);
         setRevisionCount(job.revisionCount);
         setRun((r) => ({ ...r, phase: 'done' }));
-        if (job.state !== 'done') updateJob({ state: 'done', error: undefined });
+        if (job.state !== 'done' || job.baseUrl !== base) updateJob({ state: 'done', error: undefined, baseUrl: base });
       } catch (e) {
         setRun((r) => ({ ...r, phase: 'error', error: (e as Error).message }));
       }
@@ -541,8 +567,8 @@ export default function App() {
   function syncUrl(replace = false) {
     const want = routeUrl(currentRoute());
     if (want === window.location.pathname + window.location.search) return;
-    if (replace) window.history.replaceState(null, '', want);
-    else window.history.pushState(null, '', want);
+    if (replace) window.history.replaceState(null, '', want + window.location.hash);
+    else window.history.pushState(null, '', want + window.location.hash);
   }
   // 화면이 바뀌면 주소에 쌓는다 (뒤로 가기로 돌아올 수 있게)
   useEffect(() => {
@@ -555,6 +581,8 @@ export default function App() {
 
   /** 주소대로 화면 맞추기 (처음 열 때·뒤로/앞으로 가기) */
   async function applyRoute(r: Route) {
+    // 메뉴(#help·#admin)만 바뀐 뒤로/앞으로 가기 — 작업 화면은 그대로
+    if (routeUrl(r) === routeUrl(currentRoute())) return;
     if (running || loading) {
       // 만드는 중엔 떠나지 않는다 — 주소를 지금 화면으로 되돌린다 (기록을 새로 쌓지 않고 바꿔서 「앞으로」가 끊기지 않게)
       syncUrl(true);
@@ -617,6 +645,7 @@ export default function App() {
   // 뒤로/앞으로 가기
   useEffect(() => {
     const onPop = () => {
+      setViewState(viewOfHash());
       if (routeReady.current) applyRouteRef.current(readRoute());
     };
     window.addEventListener('popstate', onPop);
@@ -625,6 +654,7 @@ export default function App() {
 
   /** 머리의 Pagefy 를 누르면 첫 화면(PSD 올리기 + 최근 작업)으로. 생성 중·읽는 중엔 작업을 잃지 않게 그대로 둔다 */
   function goHome() {
+    if (view !== 'work') return setView('work');
     if (running || loading) return;
     closeCurrent();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -684,7 +714,7 @@ export default function App() {
     () => ({ productName: settings.productName.trim(), channel: settings.channel, ...(settings.channel === 'openmarket' ? { market: settings.market } : {}), slug: settings.slug, rev: settings.rev, publicRoot: settings.publicRoot.trim(), date: kstDate() }),
     [settings],
   );
-  const baseUrl = `${meta.publicRoot.replace(/\/+$/, '')}/${meta.channel}/${meta.slug}/${meta.rev}`;
+  const baseUrl = imageBaseUrl(meta);
 
   const pushStatus = (m: string) => setRun((r) => ({ ...r, status: [...r.status, m] }));
   const setSection = (id: string, patch: Partial<SectionProgress>) => setRun((r) => ({ ...r, sections: r.sections.map((s) => (s.id === id ? { ...s, ...patch } : s)) }));
@@ -1078,12 +1108,13 @@ export default function App() {
   }
 
   /**
-   * 이미지 서버에 올리기 (규칙 6절): 서버가 FTP 로 올리고 공개 주소를 열어 확인한다.
-   * - 이 작업의 표시(token)가 있는 rev 폴더만 쓴다 (같은 작업이 끊겼다 이어 올리면 같은 크기 파일은 건너뜀)
-   * - 표시가 없는 폴더(다른 작업·사람)가 이미 있으면 덮어쓰지 않고 새 번호 rev 로 다시 만들라고 안내한다
-   * - 결과가 바뀌면(수정·새 rev) 진행 중인 업로드를 멈추고, 늦게 온 응답은 버린다
+   * 이미지 서버에 올리기 (규칙 6절·6-1): 서버가 FTP 로 <채널>/<슬러그>/ 에 올리고 공개 주소를 열어 확인한다.
+   * - 서버에 같은 이름 파일이 있으면 내용(SHA-256)을 비교해 같은 것은 건너뛴다
+   * - 내용이 다른 같은 이름 파일이 있으면 바로 올리지 않고 「덮어쓰기 안내」(phase 'confirm')를 띄운다.
+   *   담당자가 확인하면(confirmOverwrite) 그 파일들만 덮어쓴다 — 서버는 옛 파일을 숨김 백업으로 남긴다 (되돌리기에 씀)
+   * - 결과가 바뀌면(수정·다른 작업) 진행 중인 업로드를 멈추고, 늦게 온 응답은 버린다
    */
-  async function uploadImages(): Promise<boolean> {
+  async function uploadImages(confirmOverwrite = false): Promise<boolean> {
     if (!result) return false;
     const runId = ++uploadRunRef.current;
     uploadAbortRef.current?.abort();
@@ -1096,32 +1127,40 @@ export default function App() {
     try {
       const big = r.images.find((im) => im.blob.size > 5 * 1024 * 1024);
       if (big) throw new Error(`${big.file} 이(가) 5MB 를 넘어 올릴 수 없습니다 (규칙 6절 목표 1MB). 그 섹션을 나누거나 사진을 줄여 다시 만드세요.`);
-      const token = await uploadToken(jobRef.current?.id ?? r.baseUrl, r.meta.rev);
-      const target: UploadTarget = { channel: r.meta.channel, slug: r.meta.slug, rev: r.meta.rev, publicRoot: r.meta.publicRoot, token };
+      const target = uploadTargetOf(r);
+      // HTML 이 가리키는 주소와 올릴 곳이 같아야 한다 (예전 날짜 폴더 방식으로 만든 결과는 다시 만들어야 함)
+      if (r.baseUrl !== imageBaseUrl(r.meta)) throw new Error('예전 방식(날짜 폴더) 주소로 만든 결과입니다. 「다시 만들기」로 새 주소의 HTML 을 만든 뒤 올려 주세요.');
       set({ phase: 'checking', done: 0, total });
+      const want = await Promise.all(r.images.map(async (im) => ({ file: im.file, size: im.blob.size, sha256: await sha256Hex(im.blob) })));
       const remote = await uploadCheck(target, ac.signal);
-      if (remote.exists && !remote.owned) {
-        set({
-          phase: 'conflict',
-          done: 0,
-          total,
-          nextRev: nextRev(r.meta.rev),
-          message: `서버에 ${r.meta.rev} 폴더가 이미 있습니다 (다른 작업이 올린 이미지 ${remote.files.length}개). 판매 중인 페이지가 바뀌지 않게 덮어쓰지 않습니다.`,
-        });
+      const onServer = new Set(remote.files.map((f) => f.file));
+      // 같은 이름이 서버에 있는 것: 내용이 같으면 건너뛰고, 다르면 덮어쓸 목록
+      const same = new Set<string>();
+      const clash = want.filter((w) => onServer.has(w.file));
+      for (let i = 0; i < clash.length; i += 12) {
+        for (const x of (await uploadVerify(target, clash.slice(i, i + 12), ac.signal)).results) if (x.ok) same.add(x.file);
+      }
+      const overwrite = clash.filter((w) => !same.has(w.file)).map((w) => w.file);
+      /** 서버 제품 폴더에 있는데 이 HTML 이 쓰지 않는 파일 (지우지 않고 그대로 둔다) */
+      const unused = remote.files.filter((f) => !want.some((w) => w.file === f.file)).length;
+      if (overwrite.length && !confirmOverwrite) {
+        // 덮어쓰기 안내: 무엇을 덮어쓰는지, 그림 크기가 바뀌는지(이미 붙여 둔 옛 HTML 과 어긋남) 보여 주고 확인받는다
+        const items = await Promise.all(
+          overwrite.map(async (file) => {
+            const im = r.images.find((x) => x.file === file)!;
+            const old = await imageSize(`${remote.base}/${file}?v=${Date.now()}`);
+            const to = `${im.width}×${im.height}`;
+            return { file, from: old ? `${old.w}×${old.h}` : undefined, to, sizeChanged: !old || old.w !== im.width || old.h !== im.height };
+          }),
+        );
+        set({ phase: 'confirm', done: 0, total, overwrite: items, unused, folder: `${remote.base}/` });
         return false;
       }
-      // 같은 작업이 끊겼다 이어 올리는 경우: 같은 이름·크기 파일은 건너뛴다 (내용은 아래 확인에서 SHA-256 으로 다시 본다)
-      const sizes = new Map(r.images.map((im) => [im.file, im.blob.size]));
-      const skip = new Set(remote.files.filter((f) => sizes.get(f.file) === f.size).map((f) => f.file));
-      const stray = remote.files.filter((f) => !skip.has(f.file));
-      if (stray.length) {
-        set({ phase: 'conflict', done: 0, total, nextRev: nextRev(r.meta.rev), message: `서버의 ${r.meta.rev} 폴더에 이 결과와 다른 파일이 있습니다 (${stray.map((f) => f.file).slice(0, 3).join(', ')}…). 덮어쓰지 않습니다.` });
-        return false;
-      }
-      let done = skip.size;
+      let done = same.size;
+      const record: UploadedItem[] = [];
       set({ phase: 'uploading', done, total });
       // 4MB·40장 안쪽으로 묶어 보낸다 (서버는 한 번에 60장까지) (함수 요청 크기·150초 제한). 서버가 시간 때문에 남긴 파일(left)은 다음 묶음으로
-      const queue = r.images.filter((im) => !skip.has(im.file));
+      const queue = r.images.filter((im) => !same.has(im.file));
       while (queue.length) {
         const batch: { file: string; data: string }[] = [];
         let bytes = 0;
@@ -1130,17 +1169,21 @@ export default function App() {
           batch.push({ file: im.file, data: await blobToBase64(im.blob) });
           bytes += im.blob.size;
         }
-        const out = await uploadFiles(target, batch, ac.signal);
-        if (out.refused.length) throw new Error(out.refused.map((x) => `${x.file}: ${x.error}`).join(' / '));
+        const out = await uploadFiles(target, batch, overwrite, ac.signal);
+        record.push(...out.done.map((d) => ({ file: d.file, ...(d.backup ? { backup: d.backup } : {}) })));
+        if (out.refused.length) {
+          // 확인한 뒤 다른 사람이 같은 이름으로 올린 경우 등 — 올린 것까지는 되돌릴 수 있게 기록을 남긴다
+          set((u) => ({ ...u, record }));
+          throw new Error(out.refused.map((x) => `${x.file}: ${x.error}`).join(' / '));
+        }
         done += out.done.length;
-        set((u) => ({ ...u, done }));
+        set((u) => ({ ...u, done, record }));
         if (out.left?.length) {
           if (!out.done.length) throw new Error('서버 시간 안에 한 장도 올리지 못했습니다. 잠시 뒤 다시 올리기를 누르세요.');
           queue.unshift(...r.images.filter((im) => out.left!.includes(im.file)));
         }
       }
       set((u) => ({ ...u, phase: 'verifying' }));
-      const want = await Promise.all(r.images.map(async (im) => ({ file: im.file, size: im.blob.size, sha256: await sha256Hex(im.blob) })));
       const results: { file: string; status: number; ok: boolean; checked: boolean }[] = [];
       for (let i = 0; i < want.length; i += 12) results.push(...(await uploadVerify(target, want.slice(i, i + 12), ac.signal)).results);
       // 서버 시간 제한으로 확인하지 못한 것(checked=false)은 실패가 아니다 → 한 번 더 확인 요청
@@ -1155,7 +1198,10 @@ export default function App() {
         done,
         total,
         bad,
-        message: bad.length ? `올린 뒤 ${bad.length}장이 열리지 않거나 내용이 다릅니다. 잠시 뒤 「다시 올리기」로 다시 확인하고, 계속 다르면 새 번호 rev 로 다시 만드세요.` : undefined,
+        record,
+        overwritten: record.filter((x) => x.backup).length,
+        unused,
+        message: bad.length ? `올린 뒤 ${bad.length}장이 열리지 않거나 내용이 다릅니다. 잠시 뒤 「이미지 올리고 HTML 복사」로 다시 확인하세요.` : undefined,
       });
       return !bad.length && live();
     } catch (e) {
@@ -1165,13 +1211,12 @@ export default function App() {
     }
   }
 
-  /** 같은 날짜 폴더를 다른 작업이 쓰고 있을 때: rev 를 다음 번호로 바꾸고 저장된 구조 계획으로 다시 만든다 (Claude 호출 없음) */
   /**
-   * 잘못 올린 것 되돌리기 — 방금 이 작업이 올린 rev 폴더를 지운다 (서버가 이 작업 폴더인지·다른 파일이 없는지 다시 확인).
-   * 다 지우면 업로드 전 상태로 돌아가 「HTML 복사」를 누르면 다시 올린다
+   * 잘못 올린 것 되돌리기 — 이번 화면에서 올린 파일만 (upload.record).
+   * 덮어쓴 파일은 서버의 숨김 백업으로 되돌리고, 새로 올린 파일은 지운다. 다 끝나면 업로드 전 상태로 돌아가 「HTML 복사」를 누르면 다시 올린다
    */
   async function undoUpload() {
-    if (!result) return;
+    if (!result || !upload.record?.length) return;
     const runId = ++uploadRunRef.current;
     uploadAbortRef.current?.abort();
     const ac = new AbortController();
@@ -1179,48 +1224,34 @@ export default function App() {
     const live = () => runId === uploadRunRef.current && !ac.signal.aborted;
     const set = (u: UploadState | ((u: UploadState) => UploadState)) => live() && setUpload(u);
     const r = result;
-    const total = r.images.length;
+    let items = upload.record;
+    const total = items.length;
     try {
-      const token = await uploadToken(jobRef.current?.id ?? r.baseUrl, r.meta.rev);
-      const target: UploadTarget = { channel: r.meta.channel, slug: r.meta.slug, rev: r.meta.rev, publicRoot: r.meta.publicRoot, token };
-      set({ phase: 'removing', done: 0, total });
-      const files = r.images.map((im) => im.file);
+      set({ phase: 'removing', done: 0, total, record: items });
+      let restored = 0;
       let removed = 0;
-      // 함수 시간 제한으로 남긴 파일이 있으면 이어서 요청 (조금도 못 지우면 멈춤)
-      for (let i = 0; i < 10; i++) {
-        const out = await uploadRemove(target, files, ac.signal);
+      const failed: string[] = [];
+      // 함수 시간 제한으로 남긴 것이 있으면 이어서 요청 (조금도 못 하면 멈춤)
+      for (let i = 0; i < 10 && items.length; i++) {
+        const out = await uploadRemove(uploadTargetOf(r), items, ac.signal);
+        restored += out.restored.length;
         removed += out.removed.length;
-        set((u) => ({ ...u, done: removed }));
-        if (out.folderRemoved) {
-          set({ phase: 'removed', done: removed, total, message: `이미지 서버에서 ${r.meta.rev} 폴더(이미지 ${removed}장)를 지웠습니다.` });
-          return;
-        }
-        if (!out.removed.length) break;
+        failed.push(...out.failed.map((f) => `${f.file}(${f.error})`));
+        set((u) => ({ ...u, done: restored + removed }));
+        if (out.left.length && !out.restored.length && !out.removed.length) break;
+        items = out.left;
       }
-      throw new Error('서버 시간 안에 다 지우지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
+      if (items.length) throw new Error('서버 시간 안에 다 되돌리지 못했습니다. 잠시 뒤 다시 눌러 주세요.');
+      const parts = [restored && `덮어쓴 ${restored}장은 예전 이미지로 되돌렸고`, removed && `새로 올린 ${removed}장은 지웠습니다`].filter(Boolean).join(', ');
+      set({
+        phase: failed.length ? 'error' : 'removed',
+        done: restored + removed,
+        total,
+        message: failed.length ? `되돌리기 일부 실패: ${failed.join(', ')}` : `이미지 서버에서 ${parts || '되돌렸습니다'}.`,
+      });
     } catch (e) {
       if (ac.signal.aborted) return;
       set((u) => ({ ...u, phase: 'error', message: `되돌리기 실패: ${(e as Error).message}` }));
-    }
-  }
-
-  async function rebuildWithNextRev() {
-    if (!result || !loadedRef.current || running) return;
-    const plan = jobRef.current?.plan ?? { bundle: result.bundle, report: result.planReport, raw: result.planRaw };
-    if (plan.bundle.plan.engine !== 'code') return;
-    uploadAbortRef.current?.abort();
-    const rev = nextRev(result.meta.rev);
-    const m = { ...result.meta, rev };
-    const base = `${m.publicRoot.replace(/\/+$/, '')}/${m.channel}/${m.slug}/${rev}`;
-    setRun((r) => ({ ...r, phase: 'running', error: undefined, status: [...r.status, `rev 를 ${rev} 로 바꿔 다시 만듭니다 (비용 없음) — 전에 복사해 둔 HTML 이 있으면 새로 복사하세요`] }));
-    try {
-      await buildFromPlan(m, base, plan.bundle, plan.report, plan.raw);
-      // 다시 만들기가 끝난 뒤에만 설정·작업 기록을 바꾼다 (실패하면 이전 rev 그대로)
-      setSettings((st) => ({ ...st, rev }));
-      updateJob({ meta: m, baseUrl: base, state: 'done' });
-      setRun((r) => ({ ...r, phase: 'done' }));
-    } catch (e) {
-      setRun((r) => ({ ...r, phase: 'error', error: (e as Error).message }));
     }
   }
 
@@ -1254,15 +1285,27 @@ export default function App() {
   const resume = resumeInfo?.same ? resumeInfo : null;
 
   const ready = !!health && (health.mock || health.hasKey);
+  const budget = health?.budget;
+  // 결과를 만든 뒤 설정(채널·제품명·이미지 폴더)을 바꾸면 결과에는 반영되지 않는다 → 엉뚱한 곳에 붙여넣지 않게 알린다
+  const metaDiff = result && run.phase !== 'running' && !sameMeta(result.meta, meta)
+    ? [
+        result.meta.channel !== meta.channel || (result.meta.market ?? '') !== (meta.market ?? '')
+          ? `채널 ${CHANNEL_LABEL[result.meta.channel]}${result.meta.market ? ` · ${MARKETS[result.meta.market].label}` : ''} → ${CHANNEL_LABEL[meta.channel]}${meta.market ? ` · ${MARKETS[meta.market].label}` : ''}`
+          : '',
+        result.meta.productName !== meta.productName ? `제품명 「${result.meta.productName}」 → 「${meta.productName}」` : '',
+        result.meta.slug !== meta.slug || result.meta.publicRoot !== meta.publicRoot ? '이미지 폴더·주소' : '',
+        result.meta.rev !== meta.rev ? '작업 판(rev)' : '',
+      ].filter(Boolean)
+    : [];
   // 만들기 버튼이 왜 안 눌리는지 담당자에게 알려 준다
   const blockers = [
     !meta.productName && '제품명을 입력하세요.',
-    !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(meta.slug) && '고급 설정에서 제품슬러그를 영문 소문자·숫자·하이픈으로 입력하세요.',
-    !/^\d{8}(-\d+)?$/.test(meta.rev) && '고급 설정의 rev 는 20261123 처럼 날짜 8자리여야 합니다.',
-    !/^https:\/\//.test(meta.publicRoot) && '고급 설정의 이미지 공개 주소는 https:// 로 시작해야 합니다.',
+    !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(meta.slug) && '서버 폴더 이름을 영문 소문자·숫자·하이픈으로 입력하세요 (PSD 이름이 한글이면 영문 모델명으로).',
+    !/^https:\/\//.test(meta.publicRoot) && '이미지 공개 주소 루트는 https:// 로 시작해야 합니다.',
     !health && !healthError && '생성 서버 연결을 확인하는 중입니다…',
     healthError && '생성 서버에 연결하지 못했습니다. 위쪽 빨간 표시를 확인하세요.',
     health && !ready && '생성 서버에 Claude API 키가 없습니다. 관리자에게 알려 주세요.',
+    budget?.blocked && '이번 달 사용 한도에 도달했습니다. Pagefy 관리자에게 한도 해제를 요청하세요.',
   ].filter((b): b is string => !!b);
   const canGenerate = !!loaded && !blockers.length && run.phase !== 'running';
   const hasResult = run.phase !== 'idle' || !!result;
@@ -1291,11 +1334,15 @@ export default function App() {
         onNewPsd={allowed && (loaded || viewJob) ? (f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f)) : undefined}
         newPsdDisabled={running || !!loading}
         onHome={goHome}
-        homeBusy={running || !!loading}
+        homeBusy={view === 'work' && (running || !!loading)}
+        view={allowed && !showLogin ? view : undefined}
+        onView={setView}
+        showAdmin={role === 'admin'}
+        budgetAlert={!!budget && budget.spentUsd >= budget.capUsd * BUDGET_WARN_RATIO}
       />
       {/* 화면 어디에 PSD 를 놓아도 연다 — PSD 를 연 뒤엔 끌고 있는 동안만 화면 전체 안내판 */}
       <DropOverlay
-        enabled={allowed && !showLogin}
+        enabled={allowed && !showLogin && view === 'work'}
         cover={!!loaded}
         disabled={running || !!loading}
         onFile={(f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f))}
@@ -1305,6 +1352,25 @@ export default function App() {
           <LoginPanel session={session} role={role} />
         ) : (
           <>
+            {/* 월 상한: 80% 넘으면 경고, 다 쓰면 막힘 (모든 사용자에게 — 관리자에게 미리 알리게) */}
+            {budget && (budget.blocked || (!budget.unblocked && budget.spentUsd >= budget.capUsd * BUDGET_WARN_RATIO)) && (
+              <p className={`budget${budget.blocked ? ' budget--blocked' : ''}`} role={budget.blocked ? 'alert' : 'status'}>
+                <b>{budget.blocked ? '이번 달 사용 한도에 도달해 새로 만들 수 없습니다.' : '이번 달 사용 한도가 얼마 남지 않았습니다.'}</b>
+                <span>
+                  팀 전체 사용 ${budget.spentUsd.toFixed(2)} / 한도 ${budget.capUsd}
+                  {budget.blocked ? ' — 이미 만든 결과는 열고 복사할 수 있습니다. Pagefy 관리자에게 한도 해제를 요청하세요.' : ' — 한도에 닿으면 새로 만들 수 없습니다.'}
+                </span>
+                {role === 'admin' && view !== 'admin' && (
+                  <button type="button" className="link-btn" onClick={() => setView('admin')}>
+                    관리 화면에서 보기
+                  </button>
+                )}
+              </p>
+            )}
+            {view === 'help' && <HelpPanel />}
+            {view === 'admin' && role === 'admin' && <AdminPanel onChanged={() => fetchHealth().then(setHealth, () => {})} />}
+            {view === 'admin' && role !== 'admin' && <p className="msg msg--error">관리 화면은 관리자만 볼 수 있습니다.</p>}
+            <div className="app__view" hidden={view !== 'work'}>
             <Stepper step={step} />
             <UploadPanel
               onFile={(f) => openPsd(f)}
@@ -1333,6 +1399,24 @@ export default function App() {
                 tileCount={Math.ceil(loaded.summary.height / Math.floor(1560 / Math.min(1, 1000 / loaded.summary.width)))}
               />
             )}
+            {metaDiff.length > 0 && result && (
+              <div className="metadiff" role="alert">
+                <b>설정이 결과와 다릅니다 — 아래 결과는 바뀌기 전 설정({CHANNEL_LABEL[result.meta.channel]}{result.meta.market ? ` · ${MARKETS[result.meta.market].label}` : ''})으로 만든 것입니다.</b>
+                <span>바뀐 것: {metaDiff.join(' · ')}. 지금 설정으로 붙여넣으려면 다시 만들어야 합니다.</span>
+                <span className="metadiff__actions">
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={() => setSettings((s) => ({ ...s, productName: result.meta.productName, channel: result.meta.channel, ...(result.meta.market ? { market: result.meta.market } : {}), slug: result.meta.slug, rev: result.meta.rev, publicRoot: result.meta.publicRoot }))}
+                  >
+                    설정을 결과대로 되돌리기
+                  </button>
+                  <button type="button" className="btn btn--sm btn--primary" disabled={!canGenerate} onClick={() => generate()} title={canGenerate ? 'Claude 를 1회 부릅니다 (새로 만들 때와 비슷한 비용)' : blockers[0]}>
+                    지금 설정으로 다시 만들기
+                  </button>
+                </span>
+              </div>
+            )}
             {hasResult && loaded && (
               <div id="result" className="app__anchor">
               <ResultPanel
@@ -1347,25 +1431,24 @@ export default function App() {
                 onResume={resume && canGenerate ? () => generate() : undefined}
                 upload={health?.upload && result?.bundle.plan.engine === 'code' ? upload : undefined}
                 onUpload={uploadImages}
-                onNewRev={rebuildWithNextRev}
+                onUploadReset={() => {
+                  ++uploadRunRef.current;
+                  uploadAbortRef.current?.abort();
+                  setUpload({ phase: 'idle', done: 0, total: 0 });
+                }}
                 onUndoUpload={undoUpload}
                 resumeLabel={resume ? (resume.code ? "저장된 계획으로 마무리 (비용 없음)" : `이어서 만들기 (남은 섹션 ${resume.missing}개)`) : undefined}
+                rating={result && !running && jobId ? <FeedbackBar jobId={jobId} product={result.meta.productName} /> : undefined}
               />
               </div>
             )}
             {loaded && (jobs.length > 0 || jobsLoading || trashN > 0 || !!trash) && <JobsPanel jobs={jobs} currentId={jobId} busy={!!loading || running} account={savesToAccount()} more={moreJobs} loading={jobsLoading} onMore={showMoreJobs} onOpen={openJob} onRemove={removeJob} onView={showSaved} trash={trash} trashN={trashN} trashLoading={trashLoading} onTrashOpen={openTrash} onTrashClose={() => setTrash(null)} onRestore={restoreFromTrash} onPurge={purgeFromTrash} />}
+            </div>
           </>
         )}
       </main>
     </div>
   );
-}
-
-/** 20261123 → 20261123-2, 20261123-2 → 20261123-3 (규칙 6-1: 같은 날 다시 올리면 -2, -3 …) */
-function nextRev(rev: string) {
-  const m = /^(\d{8})(?:-(\d+))?$/.exec(rev);
-  if (!m) return rev;
-  return `${m[1]}-${m[2] ? Number(m[2]) + 1 : 2}`;
 }
 
 async function blobToBase64(b: Blob): Promise<string> {
@@ -1380,8 +1463,18 @@ async function sha256Hex(b: Blob): Promise<string> {
   return [...new Uint8Array(h)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-/** 업로드 표시: 같은 작업·같은 rev 면 늘 같은 값 (끊겼다 이어 올릴 때 자기 폴더를 알아본다) */
-async function uploadToken(jobKey: string, rev: string): Promise<string> {
-  const h = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`pagefy:${jobKey}:${rev}`));
-  return [...new Uint8Array(h)].slice(0, 12).map((x) => x.toString(16).padStart(2, '0')).join('');
+/** 업로드할 곳: <채널>/<슬러그>/ (규칙 6-1, 날짜 폴더 없음) */
+function uploadTargetOf(r: { meta: GenerateMeta }): UploadTarget {
+  return { channel: r.meta.channel, slug: r.meta.slug, publicRoot: r.meta.publicRoot };
+}
+
+/** 이미 서버에 있는 그림의 크기 (덮어쓰기 안내에서 크기가 바뀌는지 보려고). 열리지 않으면 null */
+function imageSize(url: string): Promise<{ w: number; h: number } | null> {
+  return new Promise((res) => {
+    const img = new Image();
+    const timer = window.setTimeout(() => res(null), 15_000);
+    img.onload = () => (window.clearTimeout(timer), res({ w: img.naturalWidth, h: img.naturalHeight }));
+    img.onerror = () => (window.clearTimeout(timer), res(null));
+    img.src = url;
+  });
 }
