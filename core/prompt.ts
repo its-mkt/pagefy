@@ -2,7 +2,7 @@
 // 현재 생성 방식 = 구조 계획(plan, engine "code") 한 번 → 마크업은 화면 프로그램이 PSD 값으로 만든다 (psd2html build.js 방식, 2026-11-23~).
 // 섹션별 마크업(section)은 옛 방식으로 저장된 작업(engine 없음)을 이어 하거나 고칠 때만 쓴다.
 import type Anthropic from '@anthropic-ai/sdk';
-import type { GenerateMeta, PlanRequest, SectionRequest, Tile } from '../shared/types.ts';
+import { type GenerateMeta, type PlanRequest, type SectionRequest, type Tile, imageBaseUrl } from '../shared/types.ts';
 import { trimRules } from './rules.ts';
 import { GODO_MAX_W, godoRootCss } from '../shared/width.ts';
 
@@ -41,9 +41,6 @@ export function buildSystem(rulesText: string): Anthropic.Beta.BetaTextBlockPara
   return [{ type: 'text', text: `${SERVICE_PREFACE}\n\n<rules>\n${trimRules(rulesText)}\n</rules>`, cache_control: { type: 'ephemeral' } }];
 }
 
-export function imageBaseUrl(meta: GenerateMeta) {
-  return `${meta.publicRoot.replace(/\/+$/, '')}/${meta.channel}/${meta.slug}/${meta.rev}`;
-}
 
 const channelFolder = (m: GenerateMeta) => ({ itket: '아이티켓', oncore: '온코어', openmarket: '오픈마켓' })[m.channel];
 const htmlMode = (m: GenerateMeta) => (m.channel === 'openmarket' ? '7-3 오픈마켓 공용 (인라인 전용)' : '7-2 고도몰용 (<style> + 고유 접두사)');
@@ -54,7 +51,7 @@ function jobBlock(meta: GenerateMeta) {
 채널 폴더: ${channelFolder(meta)} (${meta.channel}) → HTML 작성 방식: ${htmlMode(meta)}
 제품슬러그: ${meta.slug} / rev: ${meta.rev} / 작성일: ${meta.date}
 image_base_url: ${imageBaseUrl(meta)}
-결과 파일: ${meta.productName}.html (이미지: img/${meta.rev}/)
+결과 파일: ${meta.productName}.html (이미지: img/)
 </job>`;
 }
 
