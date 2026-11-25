@@ -1,7 +1,7 @@
 // Claude 응답 해석(계획 <plan>/<report> — 옛 방식은 <style>/<notes> 도, 섹션 <section_html>/<section_css>/<section_notes>) + 자동 점검
 import type { Plan, PsdSummary } from '../../shared/types';
 import { fontFaces, pretendardChars } from './fontLock';
-import { keepMap } from './codegen';
+import { INLINE_ROW_STYLE, keepMap } from './codegen';
 import { GODO_MAX_W, godoMaxWidth } from '../../shared/width';
 import { UPLOAD_FILE_RE } from '../../core/upload';
 
@@ -160,6 +160,14 @@ export function copySection(html: string): string {
   return html.slice(from, to).trim();
 }
 
+/**
+ * 코드 생성의 여러 칸 줄 감싸개(INLINE_ROW_STYLE) 여는 태그만 지운다 — 바로 뒤가 태그일 때만.
+ * 감싸개에 직접 글자가 있거나 다른 곳의 font-size:0 은 그대로 남아 점검에 잡힌다
+ */
+export function withoutLayoutRows(html: string) {
+  return html.replace(new RegExp(`<div style="${INLINE_ROW_STYLE}[^"]*">(?=\\s*<)`, 'g'), '<div>');
+}
+
 /** 업로더(core/upload.ts)와 같은 규칙 — 화면 점검은 통과했는데 업로드에서 거절되는 일이 없게 */
 const FILE_RE = UPLOAD_FILE_RE;
 
@@ -222,7 +230,7 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     if (noSize.length) add('warn', `width·height 속성 없는 <img> ${noSize.length}개 (7-1)`);
     const h2 = (copy.match(/<h2[\s>]/gi) || []).length;
     if (!h2) add('warn', '<h2> 가 하나도 없음 (8-2 제목 구조)', 'plan');
-    if (/display\s*:\s*none|font-size\s*:\s*0(px)?\s*[;"]/i.test(copy)) add('warn', '숨긴 글자 의심 (display:none / font-size:0) — 8-2 9항');
+    if (/display\s*:\s*none|font-size\s*:\s*0(px)?\s*[;"]/i.test(withoutLayoutRows(copy))) add('warn', '숨긴 글자 의심 (display:none / font-size:0) — 8-2 9항');
     // 7-5 모바일 = 이미지처럼 비율 축소만 (화면 폭에 따른 재배치·최소 글자 크기 금지)
     if (/@media\b[^{]*\b(max|min)-width|@container\b/i.test(copy)) add('warn', '@media 폭 조건·@container 규칙 사용 — 7-5: 휴대폰에서도 비율 축소만 (재배치·글자 크기 변경 금지)');
     if (/max\(\s*\d+(\.\d+)?px\s*,\s*calc\(/i.test(copy)) add('warn', 'max(…px, calc(…)) 최소 글자 크기 — 7-5: 글자만 커지면 배경과 어긋나므로 쓰지 않음');

@@ -11,6 +11,8 @@ import { MARKETS, marketWidth, normMarket, type MarketSpec } from '../../shared/
 import { FONT_MAP } from './psd/extract';
 import type { SectionOut } from './assemble';
 import type { Check } from './output';
+import { esc, escAttr } from './html';
+import { tabHtml, tabStopPx } from './tabs';
 
 /** 점검 경고. fix 'plan' = 구조 계획을 바로잡으면 사라지는 것 (「문제 자동 수정」 대상) */
 const warn = (message: string, fix?: Check['fix']): Check => ({ level: 'warn', message, fix });
@@ -38,8 +40,6 @@ export interface CodegenResult {
   warnings: Check[];
 }
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const escAttr = (s: string) => esc(s).replace(/"/g, '&quot;');
 const r1 = (n: number) => Math.round(n * 10) / 10;
 /** txt 이미지 파일명 뒤 내용 이름 (6-1: 영문 소문자·숫자·하이픈) — 글자에서 영문·숫자만, 없으면 text */
 const txtSlug = (s: string) =>
@@ -101,6 +101,8 @@ interface Ctx {
   rules?: MarketSpec['rules'];
   /** PSD px → 출력 px 배율 (오픈마켓 플랫폼 폭에 맞춰 줄일 때만 1 미만, 고도몰은 1 — 고도몰은 --u 로 줄인다) */
   scale: number;
+  /** 탭 간격 (PSD px) */
+  tabStop: number;
 }
 
 /** 색상 오버레이를 글자색에 섞는다 (불투명도 1 이면 오버레이 색 그대로) */
@@ -200,6 +202,7 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
       // 줄 앞 공백·이어진 공백은 white-space:nowrap 에서 하나로 접힌다 → PSD 처럼 남게 &nbsp; 로 (자간 측정도 공백을 다 센다)
       if (i === 0) h = h.replace(/^ +/, (sp) => '&nbsp;'.repeat(sp.length));
       h = h.replace(/ {2,}/g, (sp) => `${'&nbsp;'.repeat(sp.length - 1)} `);
+      if (h.includes('	')) h = tabHtml(h, sg.text, ln.segs.slice(0, i).map((x) => x.text).join(''), sg.size, ctx.tabStop, u);
       const st = [...sg.st];
       if (Math.abs(sg.size - cs) > 0.3) st.push(`font-size:${u(sg.size)}`);
       if (sg.size < ln.size - 0.3) st.push('line-height:0');
@@ -288,6 +291,12 @@ const styleStr = (o: Record<string, string | null>) =>
     .map(([k, v]) => `${k}:${v}`)
     .join(';');
 
+/**
+ * table 을 못 쓰는 플랫폼의 여러 칸 줄 감싸개 style. font-size:0 은 칸 사이 공백이 높이를 만들지 않게 하는 것이고
+ * 안의 칸은 글자 크기를 따로 지정하므로 숨긴 글자가 아니다 (output.ts 점검이 이 값만 제외)
+ */
+export const INLINE_ROW_STYLE = 'margin:0;padding:0;font-size:0;line-height:0;white-space:nowrap';
+
 /** 세로 범위가 겹치는 상자끼리 한 줄로 묶어 HTML 줄들로 (build.js emitRows) */
 function emitRows(boxes0: Box[], ctx: Ctx, tagOf: (b: Box) => { tag: string; attrs: string }, ind: string) {
   const { u, goodomall, prefix } = ctx;
@@ -335,7 +344,7 @@ function emitRows(boxes0: Box[], ctx: Ctx, tagOf: (b: Box) => { tag: string; att
     } else if (ctx.rules?.noTable) {
       // table 을 못 쓰는 플랫폼(스마트스토어 — table 이 있으면 모바일 미리보기 안 됨): 칸을 inline-block 으로 나란히.
       // 줄은 nowrap 이라 넘쳐도 아래로 안 떨어지고, font-size·line-height 0 으로 칸 사이 공백이 높이를 만들지 않게 (칸마다 글자 크기·행간은 인라인으로 다시 준다)
-      lines.push(`${ind}<div style="margin:0;padding:0;font-size:0;line-height:0;white-space:nowrap${mt ? `;margin-top:${u(mt)}` : ''}">`);
+      lines.push(`${ind}<div style="${INLINE_ROW_STYLE}${mt ? `;margin-top:${u(mt)}` : ''}">`);
       let x = 0;
       for (const b of row.items) {
         lines.push(`${ind}  ${render(b, { display: 'inline-block', 'vertical-align': 'top', width: u(b.width), 'margin-left': b.left - x ? u(b.left - x) : null, 'margin-top': b.top - row.top ? u(b.top - row.top) : null })}`);
@@ -418,6 +427,15 @@ export function clippedTexts(summary: PsdSummary): Set<number> {
   return out;
 }
 
+/** 바깥 폭 고정 대신 편집 영역 폭을 따른다 (max-width 금지 플랫폼 G마켓: width:860px 는 휴대폰에서 500px 넘침) — 되돌리기: false */
+export const OPENMARKET_FLUID_WRAPPER = true;
+
+/**
+ * 오픈마켓: 섹션마다 한 장 이미지로 (대응 방식 「섹션 이미지」, 2026-11-25 결정) — 되돌리기: false (글자 HTML 방식).
+ * 「글자만 이미지로 굽기」도 시험했지만(2026-11-25) 넘침·비율 어긋남이 그대로라 뺐다
+ */
+export const OPENMARKET_SECTION_IMAGE = true;
+
 /** 이미지에 남길 글자 id → 이유: 계획이 고른 것 + 자동(bakeHint·효과·칠 0%·표에 없는 폰트, 오픈마켓은 클리핑된 글자도) */
 export function keepMap(summary: PsdSummary, plan: Plan, openmarket = false): Map<number, string> {
   const m = new Map<number, string>();
@@ -428,15 +446,28 @@ export function keepMap(summary: PsdSummary, plan: Plan, openmarket = false): Ma
   // 고도몰은 클리핑된 글자를 background-clip:text 로 PSD 색 그대로 칠한다. 오픈마켓 에디터는 그 CSS 를 지울 수 있어 이미지로
   const clipped = clippedTexts(summary);
   if (openmarket) for (const id of clipped) if (!m.has(id)) m.set(id, '클리핑 마스크로 칠한 글자 (오픈마켓은 CSS 로 못 옮김)');
+  // 섹션 이미지 모드: 글자가 전부 이미지에 들어가므로(글자는 alt 에 남음) HTML 글자 대조·겹침 경고에서 빠지도록 모두 '이미지에 남긴 글자'로 등록
+  if (openmarket && OPENMARKET_SECTION_IMAGE) for (const t of summary.texts) if (!m.has(t.id) && t.text.trim()) m.set(t.id, '오픈마켓 섹션 이미지에 들어간 글자');
   // 고도몰은 클리핑된 글자를 계획이 이미지로 남기라고 해도 실제 글자로 둔다 (규칙 4절 표, 사용자 지시 2026-11-23: 제목·검색 유지)
   for (const k of plan.keepInImage || []) if (!m.has(k.id) && (openmarket || !clipped.has(k.id))) m.set(k.id, k.reason || '계획에서 이미지로');
   return m;
 }
 
-/**
- * 구조 계획 + PSD 요약 → 섹션별 HTML·공통 CSS·자를 이미지 목록.
- * lsAdj: 텍스트 id → 자간 보정(em, lsAdjust.ts 가 PSD 폭과 실제 글자 폭을 재서 구함)
- */
+/** 가로선 y 가 글자(빈 글자 제외)를 가로지르는지 */
+const crossesCut = (t: TextInfo, y: number) => !!t.text.trim() && t.b[1] < y && t.b[3] > y;
+
+/** y 에서 가장 가까운, 글자를 가로지르지 않는 가로 자름 위치 (같은 거리면 위쪽, [min, max] 안, 600px 까지). 이미 괜찮으면 y, 없으면 null */
+export function clearCut(texts: TextInfo[], y: number, min: number, max: number): number | null {
+  // 빈 글자는 한 번만 걸러 낸다 — 후보 줄(최대 1,200개)마다 모든 글자를 trim 하지 않게 (다시 계산할 때마다 섹션 경계마다 돈다)
+  const live = texts.filter((t) => t.text.trim());
+  const blocked = (c: number) => live.some((t) => t.b[1] < c && t.b[3] > c);
+  if (!blocked(y)) return y;
+  for (let d = 1; d <= 600; d++) {
+    for (const c of [y - d, y + d]) if (c >= min && c <= max && !blocked(c)) return c;
+  }
+  return null;
+}
+
 /**
  * 계획의 섹션을 문서에 맞게 정리한다: 위→아래 정렬, 0~문서 높이로 자르기, 빈틈·겹침 없이 잇기, id 를 s00… 로 다시 매기기.
  * Claude 가 섹션을 조금 틀리게 줘도 글자가 빠지거나 두 번 나오지 않게. 사진 띠의 section 도 새 id 로 바꾼다
@@ -466,10 +497,18 @@ function normalizeSections(plan: Plan, summary: PsdSummary, warnings: Check[]): 
     return { id, name: (s.name || '').trim() || `섹션 ${i + 1}`, y0, y1 };
   });
   if (fixed) warnings.push(warn('계획의 섹션 경계에 빈틈·겹침이 있어 이어지게 고쳤습니다.', 'plan'));
-  // 섹션 경계가 글자를 가로지르면 그 글자가 잘릴 수 있다
-  for (const s of sections.slice(1)) {
-    const hit = summary.texts.find((t) => t.text.trim() && t.b[1] < s.y0 - 1 && t.b[3] > s.y0 + 1);
-    if (hit) warnings.push(warn(`${s.id} 시작 경계(y ${s.y0})가 글자 "${hit.text.trim().slice(0, 15)}"를 가로지릅니다 — 글자가 잘려 보일 수 있습니다.`, 'plan'));
+  // 섹션 배경 블록은 overflow:hidden 이라 경계가 글자를 가로지르면 글자가 반쯤 잘려 보인다 (위치 대조는 기준선만 봐서 못 잡음)
+  // → 앞뒤 경계 사이에서 가장 가까운 빈 곳으로 경계를 옮긴다. 옮길 곳이 없을 때만 그대로 두고 알린다
+  for (let i = 1; i < sections.length; i++) {
+    const s = sections[i];
+    const y = clearCut(summary.texts, s.y0, sections[i - 1].y0 + 1, s.y1 - 1);
+    if (y == null) {
+      const hit = summary.texts.find((t) => crossesCut(t, s.y0))!;
+      warnings.push(warn(`${s.id} 시작 경계(y ${s.y0})가 글자 "${hit.text.trim().slice(0, 15)}"를 가로지릅니다 — 글자가 잘려 보일 수 있습니다.`, 'plan'));
+    } else if (y !== s.y0) {
+      sections[i - 1].y1 = y;
+      s.y0 = y;
+    }
   }
   const photos = (plan.photos || []).map((p) => {
     const sec = sections.find((s) => s.id === idMap.get(p.section)) ?? sections.find((s) => p.y0 >= s.y0 && p.y0 < s.y1) ?? sections[0];
@@ -478,6 +517,10 @@ function normalizeSections(plan: Plan, summary: PsdSummary, warnings: Check[]): 
   return { sections, photos };
 }
 
+/**
+ * 구조 계획 + PSD 요약 → 섹션별 HTML·공통 CSS·자를 이미지 목록.
+ * lsAdj: 텍스트 id → 자간 보정(em, lsAdjust.ts 가 PSD 폭과 실제 글자 폭을 재서 구함)
+ */
 export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: Plan, lsAdj: Record<number, number> = {}, wraps: Record<number, number[]> = {}): CodegenResult {
   const W = summary.width;
   const goodomall = meta.channel !== 'openmarket';
@@ -504,6 +547,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
     wraps,
     warnings,
     usesPaperlogy: false,
+    tabStop: tabStopPx(summary.dpi),
     scale: omScale,
     u: goodomall
       ? (n) => {
@@ -527,6 +571,23 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
 
   for (const sec of plan.sections) {
     const sid = sec.id;
+    // 오픈마켓: 섹션을 배경·글자가 합쳐진 이미지 한 장(또는 세로 제한에 맞춘 여러 장)으로 — 모든 크기가 이미지 비율로 줄어 휴대폰에서 잘리지 않는다 (7-5)
+    // 글자는 alt 에 남긴다. 검색 영향은 규칙 8-4 에서 확인되지 않았다고 본다
+    if (!goodomall && OPENMARKET_SECTION_IMAGE) {
+      const st = summary.texts.filter((t) => t.text.trim() && t.lineTop >= sec.y0 && t.lineTop < sec.y1);
+      const altAll = [...st].sort((p, q) => p.lineTop - q.lineTop || p.b[0] - q.b[0]).map((t) => t.text.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' · ');
+      const cuts = splitBg(sec.y0, sec.y1, usable, maxH);
+      const parts: string[] = [];
+      for (let i = 0; i < cuts.length - 1; i++) {
+        const c0 = cuts[i], c1 = cuts[i + 1];
+        const file = `${sid}_bg${i + 1}.jpg`;
+        const alt = i === 0 ? (altAll || sec.name) : '';
+        images.push({ file, kind: 'bg', source: 'composite', x0: 0, y0: c0, x1: W, y1: c1 });
+        parts.push(`  <img src="${base}/${file}" alt="${escAttr(alt)}" width="${OW}" height="${Math.round((c1 - c0) * omScale)}" style="display:block;width:100%;height:auto;border:0">`);
+      }
+      sections.push({ id: sid, name: sec.name, html: [`<div class="${prefix}-${sid}"${altAll ? '' : ` aria-label="${escAttr(sec.name)}"`}>`, ...parts, '</div>'].join('\n'), css: '', notes: '', raw: '' });
+      continue;
+    }
     const inSec = (t: TextInfo) => t.baseline >= sec.y0 && t.baseline < sec.y1;
     const secTexts = htmlTexts.filter(inSec);
     const all = secTexts.map((t) => textBox(t, ctx));
@@ -692,7 +753,13 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
         const py1 = Math.min(blk.y1, t.b[3] + pad);
         if (px1 <= px0 || py1 <= py0) continue;
         const clash = htmlTexts.find((o) => !(o.b[2] <= px0 || o.b[0] >= px1 || o.b[3] <= py0 || o.b[1] >= py1));
-        const inside = t.b[1] - pad >= blk.y0 && t.b[3] + pad <= blk.y1;
+        // 글자는 이웃 블록에 있고 여백·효과만 이 블록에 걸친 경우: 효과가 있으면 그 부분만 조용히 덧그리고 넘어간다 (경고·<img> 는 글자가 있는 블록에서)
+        if (t.b[3] <= blk.y0 || t.b[1] >= blk.y1) {
+          if (fxPad && !clash) patches.push([px0, py0, px1, py1]);
+          continue;
+        }
+        // 글자 본체가 블록 안이면 <img alt> 로 뺀다 — 여백은 위에서 블록 안으로 잘라 두었다 (섹션 경계가 글자에 가까워도 alt 를 잃지 않게)
+        const inside = t.b[1] >= blk.y0 && t.b[3] <= blk.y1;
         if (!clash && inside) {
           tn++;
           const file = `${sid}_txt${tn}-${txtSlug(t.text)}.jpg`;
@@ -727,7 +794,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
   const style = goodomall ? baseCss(prefix, W, ctx.usesPaperlogy) : '';
   const wrapperStyle = goodomall
     ? undefined
-    : `${rules?.noMaxWidth ? 'width' : 'max-width'}:${OW}px;margin:0 auto;font-family:'Pretendard',${FALLBACK_FAMILY};line-height:1.2;word-break:keep-all;text-align:left;font-weight:400;letter-spacing:normal`;
+    : `${rules?.noMaxWidth ? (OPENMARKET_FLUID_WRAPPER ? 'width:100%' : `width:${OW}px`) : `max-width:${OW}px`};margin:0 auto;font-family:'Pretendard',${FALLBACK_FAMILY};line-height:1.2;word-break:keep-all;text-align:left;font-weight:400;letter-spacing:normal`;
   // 오픈마켓: 만든 HTML 에 그 플랫폼이 지우거나 막는 요소가 없는지 마지막으로 확인 (규칙 원본 7-4 [공식] 근거).
   // 스마트스토어는 iframe·table·link 가 있으면 모바일 캡처 미리보기가 안 돼 HTML 이 모바일용 고정 글자 크기로 보이며 시안과 달라진다
   if (!goodomall) {

@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react';
+import { Button } from './Button';
 import { RadioGroup } from 'radix-ui';
 import type { Channel, HealthInfo } from '../../shared/types';
 import { readLocal, toSlug } from '../lib/util';
 import { MARKETS, normMarket, type Market } from '../../shared/markets';
+import JobInfoFields from './JobInfoFields';
+import { platformLabel, type JobNote } from '../lib/jobs';
 
 export interface Settings {
   productName: string;
@@ -34,15 +37,17 @@ interface Props {
   collapsed: boolean;
   /** 만들기 전에 해결할 것 (버튼 아래에 보여 줌) */
   blockers: string[];
+  /** 만든 사람 (로그인 계정 이름) — 담당자 칸을 비우면 이 사람 */
+  me?: string;
+  /** 작업 기록 (담당자·메모·테스트) — 만들기 설정과 따로 작업의 note 에 저장된다 */
+  note: JobNote;
+  onNoteChange: (n: JobNote) => void;
 }
 
 /** 고도몰 쇼핑몰 (같은 규칙 — <style> 사용, PC 최대 860px) */
 const GODO = ['itket', 'oncore'] as const satisfies readonly Channel[];
 const GODO_LABEL: Record<(typeof GODO)[number], string> = { itket: '아이티켓', oncore: '온코어' };
-/** 접힌 줄에 보일 판매처 — 고도몰 · 아이티켓 / 오픈마켓 · 쿠팡 */
-const placeOf = (c: Channel, m: Market) => (c === 'openmarket' ? `오픈마켓 · ${MARKETS[m].label}` : `고도몰 · ${GODO_LABEL[c]}`);
-
-export default function SettingsPanel({ settings: s, onChange, baseUrl, canGenerate, running, resume, resumeChanged, onGenerate, onCancel, health, collapsed, blockers }: Props) {
+export default function SettingsPanel({ settings: s, onChange, baseUrl, canGenerate, running, resume, resumeChanged, onGenerate, onCancel, health, collapsed, blockers, me, note, onNoteChange }: Props) {
   // 예전에 저장된 작업은 market 이 없다 → 기본 플랫폼으로
   const mk: Market = normMarket(s.market);
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => onChange({ ...s, [k]: v });
@@ -65,11 +70,14 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
         <div className="setrow">
           <p className="setrow__text">
             <b>{s.productName.trim() || '제품명 없음'}</b>
-            <span>{placeOf(s.channel, mk)}</span>
+            {/* 접힌 줄의 판매처 — 아이티켓 · 쿠팡처럼 이름만 (변환 내역 배지와 같은 이름) */}
+            <span>{platformLabel({ channel: s.channel, market: mk })}</span>
             <span>서버 폴더 {s.slug}</span>
+            {note.test && <span className="badge badge--test">테스트</span>}
+            {note.assignee?.trim() && <span>담당 {note.assignee.trim()}</span>}
           </p>
           <div className="setrow__acts">
-            <button type="button" className="btn btn--sm btn--ghost" onClick={() => setExpanded(true)}>설정 바꾸기</button>
+            <Button type="button" size="sm" onClick={() => setExpanded(true)}>설정 바꾸기</Button>
           </div>
         </div>
       </section>
@@ -80,7 +88,7 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
     <section className="panel">
       <div className="setup__head">
         <h2 className="panel__title">만들기 설정</h2>
-        {collapsed && <button type="button" className="btn btn--sm btn--ghost" onClick={() => setExpanded(false)}>접기</button>}
+        {collapsed && <Button type="button" size="sm" onClick={() => setExpanded(false)}>접기</Button>}
       </div>
 
       <fieldset className="setup__fields" disabled={running}>
@@ -164,7 +172,17 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
           <label className="form__wide">
             <span>추가 지시 (선택)</span>
             <textarea rows={2} value={s.extra} onChange={(e) => set('extra', e.target.value)} placeholder="예) 마지막 포트 섹션은 표로 만들어 줘 / 헤드카피는 이미지로 구워 줘" />
+            <small>Claude 에게 보내는 지시입니다. 기록용 설명은 아래 「메모」에 적으세요.</small>
           </label>
+        </div>
+
+        {/* 작업 기록 — 변환 내역에서 누가·왜 만든 작업인지 알아보게. Claude 에 보내지 않고 결과·이어서 만들기에도 영향 없음 (sameMeta 에 들지 않음) */}
+        <div className="form setup__memo">
+          <p className="setup__memo-head form__wide">
+            <b>작업 기록</b>
+            <small>변환 내역에만 보입니다 · 마크업에는 영향 없음{me ? ` · 만든 사람 ${me}` : ''}</small>
+          </p>
+          <JobInfoFields value={note} onChange={onNoteChange} me={me} />
         </div>
 
         {/* 이미지 주소는 늘 보이게 두고(확인용), 루트는 잠가 둔다 — 실수로 바뀌면 HTML 의 모든 이미지 주소가 틀어진다 */}
@@ -209,14 +227,14 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
 
       <div className="actions setup__actions">
         {running ? (
-          <button type="button" className="btn btn--ghost" onClick={onCancel}>취소</button>
+          <Button type="button"  onClick={onCancel}>취소</Button>
         ) : resume ? (
           <>
-            <button type="button" className="btn btn--primary btn--go" disabled={!canGenerate} onClick={() => onGenerate()}>{resume.code ? (resume.changed ? "지금 설정으로 다시 계산 (비용 없음)" : "저장된 계획으로 마무리 (비용 없음)") : `이어서 만들기 (남은 섹션 ${resume.missing}개)`}</button>
-            <button type="button" className="btn" disabled={!canGenerate} onClick={() => onGenerate(true)}>처음부터 다시</button>
+            <Button type="button" variant="primary" className="btn--go" disabled={!canGenerate} onClick={() => onGenerate()}>{resume.code ? (resume.changed ? "지금 설정으로 다시 계산 (비용 없음)" : "저장된 계획으로 마무리 (비용 없음)") : `이어서 만들기 (남은 섹션 ${resume.missing}개)`}</Button>
+            <Button type="button"  disabled={!canGenerate} onClick={() => onGenerate(true)}>처음부터 다시</Button>
           </>
         ) : (
-          <button type="button" className="btn btn--primary btn--go" disabled={!canGenerate} onClick={() => onGenerate(true)}>마크업 만들기</button>
+          <Button type="button" variant="primary" className="btn--go" disabled={!canGenerate} onClick={() => onGenerate(true)}>마크업 만들기</Button>
         )}
       </div>
       {!running && blockers.length > 0 && (

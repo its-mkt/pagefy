@@ -4,14 +4,25 @@
 // - PSD 원본: 너무 커서(수십~수백 MB) 계정에 올리지 않고 이 브라우저에만 둔다 (최근 MAX_JOBS 개 작업의 PSD 만 보관).
 //   다른 PC 에서 열면 같은 PSD(이름·크기)를 다시 골라야 이미지 자르기·이어서 만들기가 된다.
 // - 생성 중 표시: 같은 브라우저 탭끼리는 Web Lock, 다른 PC·브라우저끼리는 running_until(3분, 생성 중 1분마다 연장).
-import type { Channel, GenerateMeta, PlanBundle, UsageInfo } from '../../shared/types';
-import type { Market } from '../../shared/markets';
+import { CHANNEL_LABEL, type Channel, type GenerateMeta, type PlanBundle, type UsageInfo } from '../../shared/types';
+import { MARKETS, normMarket, type Market } from '../../shared/markets';
+import { rangeMs, type DayRange } from './dayRange';
 import type { Settings } from '../components/SettingsPanel';
 import type { SectionOut } from './assemble';
 import { CLOUD } from './api';
 import { supabase } from './supabase';
 
 export type JobState = 'ready' | 'running' | 'stopped' | 'error' | 'done';
+
+/** 작업 기록 — 변환 내역에만 보인다 (Claude 에 보내지 않고 마크업에 영향 없음) */
+export interface JobNote {
+  /** 담당자 (디자이너·요청자 등) — 비우면 만든 사람 */
+  assignee?: string;
+  /** 한 줄 메모 (예: 리뉴얼 시안 2차) */
+  memo?: string;
+  /** 테스트용 작업 — 변환 내역에 「테스트」 표시, 거르기로 뺄 수 있다 */
+  test?: boolean;
+}
 
 export interface Job {
   id: string;
@@ -23,6 +34,10 @@ export interface Job {
   /** PSD 원본을 저장하지 못함 (용량 부족 등) → 다시 올려야 열 수 있다 */
   noFile?: boolean;
   settings: Settings;
+  /** 만든 사람 (작업을 만든 로그인 계정 이름·이메일). 담당자(note.assignee)를 비우면 이 사람이 담당. 예전 작업엔 없다 */
+  creator?: string;
+  /** 작업 기록 (담당자·메모·테스트) — 만들기 설정과 따로 둔다: 결과·이어서 만들기와 상관없고, 설정 자동 저장이 건드리지 않는다 */
+  note?: JobNote;
   state: JobState;
   error?: string;
   /** 계획을 만들 때 쓴 값 — 설정이 이와 같아야 이어서 만들 수 있다 */
@@ -177,9 +192,11 @@ const fromRow = (r: Row): Job => ({
 });
 
 /** 목록은 계획·결과(작업당 수십~수백 KB)를 빼고 요약만 읽는다 */
-const LIST_COLS = 'id,created_at,updated_at,file_key,file_name,file_size,state,running_until,deleted_at,cost_usd,model,settings:data->settings,error:data->>error,info:data->info,revisionCount:data->revisionCount';
+const LIST_COLS = 'id,created_at,updated_at,file_key,file_name,file_size,state,running_until,deleted_at,cost_usd,model,settings:data->settings,creator:data->>creator,note:data->note,error:data->>error,info:data->info,revisionCount:data->revisionCount';
 interface LiteRow extends Omit<Row, 'data'> {
   settings: Settings;
+  creator: string | null;
+  note: JobNote | null;
   error: string | null;
   info: ListInfo | null;
   revisionCount: number | null;
@@ -196,6 +213,8 @@ const fromLite = (r: LiteRow): Job => ({
   runningUntil: r.running_until ? Date.parse(r.running_until) : undefined,
   deletedAt: r.deleted_at ? Date.parse(r.deleted_at) : undefined,
   settings: r.settings,
+  creator: r.creator ?? undefined,
+  note: r.note ?? undefined,
   error: r.error ?? undefined,
   sections: {},
   failed: {},
@@ -268,12 +287,16 @@ export interface JobFilter {
   market?: Market;
   /** done = 완료만, problem = 오류·중단 */
   state?: 'done' | 'problem';
-  /** 최근 n일 안에 작업한 것 (마지막 수정 기준) */
+  /** 최근 n일 안에 작업한 것 (마지막 수정 기준) — 기간 선택의 빠른 선택(오늘·7일·30일). 날이 바뀌어도 「최근 n일」로 따라간다 */
   days?: number;
-  /** 제품명·PSD 파일명 검색 */
+  /** 달력에서 고른 날·기간 (마지막 수정 기준, 양 끝 날 포함) — days 와 함께 쓰지 않는다 */
+  range?: DayRange;
+  /** 제품명·PSD 파일명·담당자·메모 검색 */
   q?: string;
+  /** 테스트용 작업 (note.test) — hide = 빼기, only = 테스트만 */
+  test?: 'hide' | 'only';
 }
-export const filterOn = (f: JobFilter) => !!(f.channel || f.state || f.days || f.q?.trim());
+export const filterOn = (f: JobFilter) => !!(f.channel || f.state || f.days || f.range || f.test || f.q?.trim());
 const PROBLEM: JobState[] = ['error', 'stopped'];
 /** 고도몰 채널 */
 const GODO: Channel[] = ['itket', 'oncore'];
@@ -284,16 +307,47 @@ const sinceMs = (days: number) => {
   d.setHours(0, 0, 0, 0); // 「오늘」= 오늘 0시부터, 「7일」= 6일 전 0시부터
   return d.getTime() - (days - 1) * 86_400_000;
 };
-function matchFilter(j: Job, f: JobFilter) {
-  if (f.channel === 'godo' ? !GODO.includes(j.settings?.channel as Channel) : f.channel && j.settings?.channel !== f.channel) return false;
-  if (f.channel === 'openmarket' && f.market && j.settings?.market !== f.market) return false;
-  if (f.state === 'done' && j.state !== 'done') return false;
-  if (f.state === 'problem' && !PROBLEM.includes(j.state)) return false;
-  if (f.days && j.updatedAt < sinceMs(f.days)) return false;
-  const q = cleanQ(f.q).toLowerCase();
-  if (q && !`${j.settings?.productName ?? ''} ${j.fileName}`.toLowerCase().includes(q)) return false;
-  return true;
+/** 계정 목록 조회 (휴지통 제외) — 거르기 규칙이 조건을 덧붙인다 */
+const listQuery = () => supabase.from(TABLE).select(LIST_COLS).is('deleted_at', null);
+type ListQuery = ReturnType<typeof listQuery>;
+/** 거르기 조건 하나 = 브라우저 사본 판정 + 계정 조회 조건 (둘이 같은 뜻이 되게 한곳에 둔다 — 새 조건은 여기에만 추가) */
+interface FilterRule {
+  local: (j: Job) => boolean;
+  cloud: (q: ListQuery) => ListQuery;
 }
+const iso = (ms: number) => new Date(ms).toISOString();
+function filterRules(f: JobFilter): FilterRule[] {
+  const rules: FilterRule[] = [];
+  if (f.channel === 'godo') rules.push({ local: (j) => GODO.includes(j.settings?.channel as Channel), cloud: (q) => q.in('data->settings->>channel', GODO) });
+  else if (f.channel) rules.push({ local: (j) => j.settings?.channel === f.channel, cloud: (q) => q.eq('data->settings->>channel', f.channel!) });
+  if (f.channel === 'openmarket' && f.market) rules.push({ local: (j) => j.settings?.market === f.market, cloud: (q) => q.eq('data->settings->>market', f.market!) });
+  if (f.state === 'done') rules.push({ local: (j) => j.state === 'done', cloud: (q) => q.eq('state', 'done') });
+  if (f.state === 'problem') rules.push({ local: (j) => PROBLEM.includes(j.state), cloud: (q) => q.in('state', PROBLEM) });
+  if (f.days) {
+    const since = sinceMs(f.days);
+    rules.push({ local: (j) => j.updatedAt >= since, cloud: (q) => q.gte('updated_at', iso(since)) });
+  }
+  if (f.range) {
+    const { start, end } = rangeMs(f.range);
+    rules.push({ local: (j) => j.updatedAt >= start && j.updatedAt < end, cloud: (q) => q.gte('updated_at', iso(start)).lt('updated_at', iso(end)) });
+  }
+  // 테스트 여부 — 기록이 없는 작업(note 없음)도 「빼기」에 남도록 늘 있는 data 칸이 {note:{test:true}} 를 품는지로 고른다 (note 값 비교면 null 이 빠진다)
+  if (f.test) {
+    const only = f.test === 'only';
+    rules.push({ local: (j) => !!j.note?.test === only, cloud: (q) => (only ? q.contains('data', { note: { test: true } }) : q.not('data', 'cs', '{"note":{"test":true}}')) });
+  }
+  const q = cleanQ(f.q);
+  if (q) {
+    const lower = q.toLowerCase();
+    rules.push({
+      local: (j) => `${j.settings?.productName ?? ''} ${j.fileName} ${j.note?.assignee ?? ''} ${j.note?.memo ?? ''}`.toLowerCase().includes(lower),
+      cloud: (qq) => qq.or(`file_name.ilike.%${q}%,data->settings->>productName.ilike.%${q}%,data->note->>assignee.ilike.%${q}%,data->note->>memo.ilike.%${q}%`),
+    });
+  }
+  return rules;
+}
+/** 브라우저 사본이 거르기에 맞는지 (계정 목록은 같은 규칙의 cloud 조건으로 서버에서 거른다) */
+export const matchFilter = (j: Job, f: JobFilter) => filterRules(f).every((r) => r.local(j));
 
 export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jobs: Job[]; more: boolean }) => void, filter: JobFilter = {}): Promise<{ jobs: Job[]; more: boolean }> {
   const cloud = await cloudReady(); // 계정 id 를 먼저 알아야 이 계정의 브라우저 사본만 고른다
@@ -310,15 +364,7 @@ export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jo
   let rows: Job[];
   if (quick && lastCloud && lastCloud.limit === limit && lastCloud.filter === fkey) rows = lastCloud.rows;
   else {
-    let query = supabase.from(TABLE).select(LIST_COLS).is('deleted_at', null);
-    if (filter.channel === 'godo') query = query.in('data->settings->>channel', GODO);
-    else if (filter.channel) query = query.eq('data->settings->>channel', filter.channel);
-    if (filter.channel === 'openmarket' && filter.market) query = query.eq('data->settings->>market', filter.market);
-    if (filter.state === 'done') query = query.eq('state', 'done');
-    if (filter.state === 'problem') query = query.in('state', PROBLEM);
-    if (filter.days) query = query.gte('updated_at', new Date(sinceMs(filter.days)).toISOString());
-    const q = cleanQ(filter.q);
-    if (q) query = query.or(`file_name.ilike.%${q}%,data->settings->>productName.ilike.%${q}%`);
+    const query = filterRules(filter).reduce((q, r) => r.cloud(q), listQuery());
     const { data, error } = await query.order('updated_at', { ascending: false }).limit(limit + 1);
     if (error) {
       cloudFailed(error, '읽기');
@@ -509,6 +555,38 @@ export async function jobBySlug(slug: string, rev?: string): Promise<{ job: Job 
   return { job: ids.length ? await jobById(ids[0]) : null, count: ids.length };
 }
 
+/** 같은 폴더 확인에서 한 번에 받는 최대 작업 수 — 이만큼 꽉 차면 다 봤다고 할 수 없어 지우기를 막는다 */
+const FOLDER_CHECK_MAX = 200;
+
+/**
+ * 같은 슬러그(이미지 서버 폴더)를 쓰는 다른 작업 — 휴지통 것은 빼고, HTML 까지 받는다.
+ * 「이미지 서버에서 지우기」가 다른 작업도 쓰는 파일을 지우지 않으려고 쓴다. 실제로 같은 파일을 쓰는지는 HTML 주소로 가린다(imageDelete.ts).
+ *  - 슬러그는 마크업을 만들 때 값(meta)과 지금 설정(settings) 둘 다로 찾는다 — 만든 뒤 설정의 슬러그만 고친 작업도 HTML 은 옛 폴더를 가리킨다
+ *  - 다 보지 못하면 던진다 (계정 저장 중인데 로그인이 안 됨·읽기 실패·최대 수 도달). 덜 보고 지우면 남이 쓰는 파일을 지울 수 있다
+ *  - scope: 'account' = 내 계정 작업 전부 · 'browser' = 계정 저장을 안 써서 이 브라우저 작업만 (다른 사람 작업은 어느 쪽도 볼 수 없음)
+ */
+export async function jobsInFolder(slug: string, exceptId: string): Promise<{ jobs: Job[]; scope: 'account' | 'browser' }> {
+  const out = new Map<string, Job>();
+  const cloud = await cloudReady(); // 계정 id 를 먼저 알아야 이 계정의 브라우저 사본만 고른다
+  if (!cloud && savesToAccount()) throw new Error('계정에 로그인되어 있지 않아 같은 폴더를 쓰는 작업을 다 확인할 수 없습니다. 로그인한 뒤 다시 열어 주세요.');
+  // 목록 칸 + HTML 만 (계획·섹션 결과까지 받으면 작업당 수십~수백 KB). 계정·브라우저 사본은 동시에 읽는다
+  // 슬러그는 6-1 규칙상 영문 소문자·숫자·하이픈뿐이라 or 필터 문자열에 그대로 넣어도 된다
+  const safe = /^[a-z0-9-]+$/.test(slug) ? slug : '';
+  const [remote, local] = await Promise.all([
+    cloud && safe
+      ? supabase.from(TABLE).select(`${LIST_COLS},html:data->>html`).is('deleted_at', null).or(`data->meta->>slug.eq.${safe},data->settings->>slug.eq.${safe}`).neq('id', exceptId).limit(FOLDER_CHECK_MAX)
+      : null,
+    listLocal(),
+  ]);
+  if (cloud && !safe) throw new Error('서버 폴더 이름(제품슬러그)이 올바르지 않습니다.');
+  if (remote?.error) throw new Error(`같은 폴더를 쓰는 작업을 확인하지 못했습니다 (${remote.error.message})`);
+  const rows = (remote?.data ?? []) as unknown as (LiteRow & { html: string | null })[];
+  if (rows.length >= FOLDER_CHECK_MAX) throw new Error(`같은 슬러그를 쓰는 작업이 ${FOLDER_CHECK_MAX}개를 넘어 다 확인할 수 없습니다. 관리자에게 문의해 주세요.`);
+  for (const r of rows) out.set(r.id, { ...fromLite(r), html: r.html ?? undefined });
+  for (const j of local) if (!j.deletedAt && j.id !== exceptId && (j.meta?.slug === slug || j.settings?.slug === slug) && !out.has(j.id)) out.set(j.id, j);
+  return { jobs: [...out.values()], scope: cloud ? 'account' : 'browser' };
+}
+
 /** 열기 전에 전체 작업 받기: 가벼운 사본이면 브라우저 사본(같거나 더 새로우면) 또는 계정에서 전체를 읽는다 */
 export async function fullJob(j: Job): Promise<Job> {
   if (!j.lite) return j;
@@ -533,6 +611,22 @@ export async function putJob(job: Job) {
     clearTimeout(flushTimer);
     await flushCloud();
   }
+}
+
+/** 작업 기록을 같은지 비교 (빈 글자·없음은 같은 것으로) */
+export const sameNote = (a: JobNote = {}, b: JobNote = {}) => (a.assignee ?? '') === (b.assignee ?? '') && (a.memo ?? '') === (b.memo ?? '') && !!a.test === !!b.test;
+
+/**
+ * 작업 기록(담당자·메모·테스트) 저장 — 변환 내역 「작업 정보 편집」·만들기 화면의 작업 기록 칸이 같이 쓴다 (PSD 없이, 결과에는 영향 없음).
+ * 목록의 작업은 계획·결과를 뺀 가벼운 사본이라 그대로 저장하면 계정의 계획·HTML 이 지워진다 → 반드시 전체를 받은 뒤 고친다.
+ * 수정 시각은 1ms 만 올린다 — 기록만 고쳤는데 목록 맨 위로 올라가지 않게, 그러면서도 다른 사본보다 새것으로 보이게
+ */
+export async function saveJobNote(job: Job, note: JobNote): Promise<Job> {
+  const full = await fullJob(job);
+  if (full.state === 'running') throw new Error('만드는 중인 작업은 끝난 뒤에 고칠 수 있습니다.');
+  const next: Job = { ...full, note, updatedAt: full.updatedAt + 1 };
+  await putJob(next);
+  return next;
 }
 
 /** 생성 중 표시 연장 (holdLock 이 1분마다 부른다) — 다른 PC 가 같은 작업을 동시에 만들지 않게 */
@@ -648,7 +742,56 @@ export const sameFile = (job: Pick<Job, 'fileName' | 'fileSize'>, f: File) => f.
 export const sameMeta = (a: GenerateMeta, b: GenerateMeta) =>
   a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot && (a.market ?? '') === (b.market ?? '');
 /** 같은 묶음(고도몰끼리 · 오픈마켓끼리) — 구조 계획은 고도몰/오픈마켓 방식에만 달려 있어 묶음이 같으면 계획을 다시 쓸 수 있다 */
-export const sameGroup = (a: GenerateMeta, b: GenerateMeta) => (a.channel === 'openmarket') === (b.channel === 'openmarket');
+export const sameGroup = (a: Pick<GenerateMeta, 'channel'>, b: Pick<GenerateMeta, 'channel'>) => (a.channel === 'openmarket') === (b.channel === 'openmarket');
+
+/** 판매처 하나 (채널 + 오픈마켓이면 플랫폼) */
+export type Platform = { channel: Channel; market?: Market };
+/** 같은 판매처 — 고도몰은 채널만, 오픈마켓은 플랫폼까지 본다 (고도몰 작업의 settings.market 은 쓰지 않는 값) */
+export const samePlatform = (a: Platform, b: Platform) => a.channel === b.channel && (a.channel !== 'openmarket' || normMarket(a.market) === normMarket(b.market));
+/** 판매처 이름 — 고도몰은 채널(아이티켓·온코어), 오픈마켓은 플랫폼(쿠팡·11번가). 변환 내역 배지·복제 메뉴가 같이 쓴다 */
+export const platformLabel = (p: Platform) => (p.channel === 'openmarket' ? MARKETS[normMarket(p.market)].label : CHANNEL_LABEL[p.channel].replace(/\s*\(.*\)$/, ''));
+/** 묶음 이름 (고도몰 · 오픈마켓) */
+export const groupLabel = (c: Channel) => (c === 'openmarket' ? '오픈마켓' : '고도몰');
+
+// ── 판매처는 작업의 고정 값 ──
+// 계획을 받은 작업(meta 있음)의 판매처는 바꾸지 않는다. 같은 PSD 를 다른 판매처로 만들려면 새 작업으로 가른다(forkJob) — 원래 결과를 덮어쓰지 않게.
+// 설정 자동 저장 · 다시 만들기(갈라 저장) · 화면 안내가 모두 아래 두 함수로 같은 판단을 한다
+
+/** 지금 설정의 판매처가 이 작업의 고정 판매처와 다른가 (계획 전 작업은 아직 고정되지 않음 → false) */
+export const platformMoved = (j: Pick<Job, 'meta'>, p: Platform) => !!j.meta && !samePlatform(j.meta, p);
+/** 설정 자동 저장 값 — 판매처를 바꿔 놓았어도 작업에는 고정 판매처를 남긴다 (바뀐 판매처는 다시 만들 때 새 작업으로 간다) */
+export const settingsToSave = (j: Pick<Job, 'meta' | 'settings'>, s: Settings): Settings =>
+  platformMoved(j, s) ? { ...s, channel: j.meta!.channel, market: j.meta!.market ?? j.settings.market } : s;
+
+/**
+ * 같은 PSD 를 다른 판매처로 만들 새 작업 (변환 내역의 「복제」 · 판매처를 바꿔 다시 만들 때) — 원래 작업은 그대로 둔다.
+ * 같은 묶음(고도몰끼리 · 오픈마켓끼리)이고 코드 생성 계획이 있으면 계획을 그대로 옮겨 비용 없이 다시 계산하고,
+ * 묶음이 다르면 HTML 방식이 달라 계획 없이 시작한다 (「마크업 만들기」로 Claude 1회).
+ * planMeta: 옮긴 계획에 붙일 설정 — 생략하면 원래 작업 것 (다시 계산할 때 generate 가 지금 설정으로 바꾼다)
+ */
+export function forkJob(src: Job, settings: Settings, opt: { keepPlan: boolean; planMeta?: GenerateMeta; creator?: string }): Job {
+  const now = Date.now();
+  const keep = opt.keepPlan && !!src.plan && !!src.meta && src.plan.bundle.plan.engine === 'code' && sameGroup(src.meta, settings);
+  return {
+    id: crypto.randomUUID(),
+    createdAt: now,
+    updatedAt: now,
+    fileKey: src.fileKey,
+    fileName: src.fileName,
+    fileSize: src.fileSize,
+    noFile: src.noFile,
+    settings,
+    // 복제한 사람이 새 작업을 만든 사람 (담당자·메모·테스트 표시는 그대로 옮긴다)
+    creator: opt.creator ?? src.creator,
+    note: src.note,
+    state: 'ready',
+    extra: src.extra,
+    sections: {},
+    failed: {},
+    revisionCount: 0,
+    ...(keep ? { plan: src.plan, meta: opt.planMeta ?? src.meta, model: src.model } : {}),
+  };
+}
 
 /** 브라우저가 공간이 모자랄 때 임의로 지우지 않게 요청 (거절돼도 동작은 같다) */
 export function requestPersist() {

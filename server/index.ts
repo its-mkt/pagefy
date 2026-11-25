@@ -11,7 +11,7 @@ import { validatePlan, validateSection } from '../core/validate.ts';
 import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude.ts';
 import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
 import { loadRules } from './rules.ts';
-import { type UploadFile, type UploadTarget, checkFolder, checkTarget, putFiles, undoUpload, verifyFiles, type UploadedItem } from '../core/upload.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, deleteFiles, putFiles, undoUpload, verifyFiles, type UploadedItem } from '../core/upload.ts';
 import { localFtpConfig, nodeDial, readSecretsFile } from './ftpNode.ts';
 import { checkGoodsNo, fetchGoods, godoConfigFrom } from '../core/godo.ts';
 import { localBudget, opsRouter } from './opsLocal.ts';
@@ -168,6 +168,19 @@ api.post('/upload/remove', express.json(), async (req, res) => {
   try {
     const out = await undoUpload(g.cfg, nodeDial, g.t, req.body.items as UploadedItem[]);
     console.log(`[upload] ${g.t.channel}/${g.t.slug} 되돌림 — 복원 ${out.restored.length}개 · 지움 ${out.removed.length}개${out.failed.length ? ` · 실패 ${out.failed.length}개` : ''}`);
+    res.json(out);
+  } catch (err) {
+    res.status(502).json({ error: describeError(err) });
+  }
+});
+
+// 변환 내역 「이미지 서버에서 지우기」 — 화면이 고른 파일과 그 숨김 백업을 지운다 (core/upload.ts deleteFiles)
+api.post('/upload/delete', express.json(), async (req, res) => {
+  const g = uploadGuard(req, res);
+  if (!g) return;
+  try {
+    const out = await deleteFiles(g.cfg, nodeDial, g.t, req.body.files as string[]);
+    console.log(`[upload] ${g.t.channel}/${g.t.slug} 지움 ${out.removed.length}개 (백업 ${out.backups}개${out.missing.length ? ` · 이미 없음 ${out.missing.length}개` : ''}${out.failed.length ? ` · 실패 ${out.failed.length}개` : ''})`);
     res.json(out);
   } catch (err) {
     res.status(502).json({ error: describeError(err) });

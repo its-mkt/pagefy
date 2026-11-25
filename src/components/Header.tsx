@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { Button } from './Button';
 import type { HealthInfo } from '../../shared/types';
 import { BUDGET_WARN_RATIO, type BudgetInfo } from '../../shared/ops';
 import { CLOUD } from '../lib/api';
@@ -6,8 +7,8 @@ import ProfileMenu, { type ProfileUser } from './ProfileMenu';
 import { Tip, TipWrap } from './ui';
 import logo from '../assets/pagefy.svg';
 
-/** 화면 (주소 #jobs · #help · #admin, 없으면 만들기) */
-export type View = 'work' | 'jobs' | 'help' | 'admin';
+/** 화면 (주소 #jobs · #tester · #help · #admin, 없으면 만들기) */
+export type View = 'work' | 'jobs' | 'tester' | 'help' | 'admin';
 
 interface Props {
   health: HealthInfo | null;
@@ -23,7 +24,7 @@ interface Props {
   onHome?: () => void;
   /** 생성 중·읽는 중이면 첫 화면으로 가지 않는다 (작업을 잃지 않게) */
   homeBusy?: boolean;
-  /** 지금 화면과 바꾸기 — 있으면 메뉴(만들기·변환 내역·도움말·관리) */
+  /** 지금 화면과 바꾸기 — 있으면 메뉴(만들기·변환 내역·에디터 테스트·도움말·관리) */
   view?: View;
   onView?: (v: View) => void;
   /** 관리 메뉴를 보일지 (광고 인사이트 역할 admin) */
@@ -64,6 +65,7 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
             [
               ['work', '만들기', ''],
               ['jobs', '변환 내역', '#jobs'],
+              ['tester', '에디터 테스트', '#tester'],
               ['help', '도움말', '#help'],
               ...(showAdmin ? ([['admin', '관리', '#admin']] as const) : []),
             ] as const
@@ -111,12 +113,12 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
         {onNewPsd && (
           <>
             <TipWrap disabled={newPsdDisabled} content={newPsdDisabled ? '만드는 중에는 다른 PSD 를 열 수 없습니다' : '다른 PSD 를 골라 새로 마크업합니다 — 화면에 끌어다 놓아도 됩니다 (지금 작업은 「변환 내역」에 저장돼 있음)'}>
-            <button type="button" className="btn btn--sm header__new" disabled={newPsdDisabled} onClick={() => pick.current?.click()}>
+            <Button type="button" size="sm" className="header__new" disabled={newPsdDisabled} onClick={() => pick.current?.click()}>
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
               </svg>
               새 PSD
-            </button>
+            </Button>
             </TipWrap>
             <input
               ref={pick}

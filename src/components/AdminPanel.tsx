@@ -1,6 +1,7 @@
 // 관리 화면 (주소 #admin, 광고 인사이트 역할 admin 만) — 이번 달 비용·월 상한, 사용·실패 기록
 // 숫자는 함수가 DB(pagefy_runs·settings)에서 모은다 (core/ops.ts). 로컬은 MOCK=1 일 때 예시 숫자
 import { useCallback, useEffect, useState } from 'react';
+import { Button } from './Button';
 import { type AdminStats, BUDGET_WARN_RATIO, monthKST, nextMonth } from '../../shared/ops';
 import { fetchAdminStats, saveAdminSettings } from '../lib/api';
 import { when } from '../lib/time';
@@ -63,16 +64,16 @@ export default function AdminPanel({ onChanged }: { onChanged?: () => void }) {
       <div className="admin__head">
         <h2 id="admin-title" className="panel__title">관리</h2>
         <div className="admin__month" role="group" aria-label="달 고르기">
-          <button type="button" className="btn btn--sm btn--ghost" aria-label="이전 달" onClick={() => setMonth((m) => nextMonth(m, -1))}>
+          <Button type="button" size="sm" icon aria-label="이전 달" onClick={() => setMonth((m) => nextMonth(m, -1))}>
             ‹
-          </button>
+          </Button>
           <b>{month.replace('-', '년 ')}월</b>
-          <button type="button" className="btn btn--sm btn--ghost" aria-label="다음 달" disabled={thisMonth} onClick={() => setMonth((m) => nextMonth(m, 1))}>
+          <Button type="button" size="sm" icon aria-label="다음 달" disabled={thisMonth} onClick={() => setMonth((m) => nextMonth(m, 1))}>
             ›
-          </button>
-          <button type="button" className="btn btn--sm" disabled={loading} onClick={() => load(month)}>
+          </Button>
+          <Button type="button" size="sm" disabled={loading} onClick={() => load(month)}>
             {loading ? '불러오는 중…' : '새로고침'}
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -126,18 +127,18 @@ export default function AdminPanel({ onChanged }: { onChanged?: () => void }) {
                   $
                   <input type="number" min={1} max={10000} step={10} value={capInput} onChange={(e) => setCapInput(e.target.value)} aria-label="월 상한 (달러)" />
                 </label>
-                <button type="button" className="btn btn--sm" disabled={saving || !capValid || cap === b.capUsd} onClick={() => save({ capUsd: cap }, `월 상한을 $${cap} 로 바꿨습니다.`)}>
+                <Button type="button" size="sm" disabled={saving || !capValid || cap === b.capUsd} onClick={() => save({ capUsd: cap }, `월 상한을 $${cap} 로 바꿨습니다.`)}>
                   상한 바꾸기
-                </button>
+                </Button>
                 {b.blocked && (
-                  <button type="button" className="btn btn--sm btn--primary" disabled={saving} onClick={() => save({ unblock: true }, '이번 달 상한을 풀었습니다. 다음 달 1일에 다시 적용됩니다.')}>
+                  <Button type="button" size="sm" variant="primary" disabled={saving} onClick={() => save({ unblock: true }, '이번 달 상한을 풀었습니다. 다음 달 1일에 다시 적용됩니다.')}>
                     이번 달만 상한 풀기
-                  </button>
+                  </Button>
                 )}
                 {b.unblocked && (
-                  <button type="button" className="btn btn--sm" disabled={saving} onClick={() => save({ unblock: false }, '상한을 다시 적용했습니다.')}>
+                  <Button type="button" size="sm" disabled={saving} onClick={() => save({ unblock: false }, '상한을 다시 적용했습니다.')}>
                     상한 다시 적용
-                  </button>
+                  </Button>
                 )}
                 <span className="hint">사용액이 상한의 {BUDGET_WARN_RATIO * 100}% 를 넘으면 모든 사용자 화면에 경고가 뜨고, 100% 가 되면 새 생성이 막힙니다.</span>
               </div>

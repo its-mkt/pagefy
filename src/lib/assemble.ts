@@ -12,7 +12,7 @@ export interface SectionOut {
   raw: string;
 }
 
-const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+import { esc } from './html';
 const indent = (s: string, n = 2) => s.split('\n').map((l) => (l ? ' '.repeat(n) + l : l)).join('\n');
 
 export function assembleHtml(meta: GenerateMeta, bundle: PlanBundle, sections: SectionOut[], summary?: PsdSummary): string {

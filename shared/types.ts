@@ -1,4 +1,5 @@
 // 화면(브라우저)과 서버가 함께 쓰는 데이터 모양
+import { normMarket } from './markets.ts';
 
 export type Channel = 'itket' | 'oncore' | 'openmarket';
 
@@ -114,11 +115,17 @@ export interface Tile {
 }
 
 /**
- * 이미지 주소 폴더 — <공개 주소 루트>/<채널>/<슬러그> (규칙 6-1).
- * 2026-11-24 부터 날짜(rev) 폴더 없이 제품 폴더 하나에 올리고, 고친 이미지는 확인받은 뒤 같은 이름으로 덮어쓴다
+ * 서버 폴더 경로(공개 주소 루트 아래) — <채널>/<슬러그>, 오픈마켓은 openmarket/<플랫폼>/<슬러그> (규칙 6-1).
+ * 2026-11-24 부터 날짜(rev) 폴더 없이 제품 폴더 하나에 올리고, 고친 이미지는 확인받은 뒤 같은 이름으로 덮어쓴다.
+ * 2026-11-25 부터 오픈마켓은 플랫폼 폴더를 한 단계 더 — 플랫폼마다 이미지 자르는 자리가 달라 같은 이름 파일이 서로 덮어쓰지 않게
  */
-export function imageBaseUrl(meta: { publicRoot: string; channel: Channel; slug: string }) {
-  return `${meta.publicRoot.replace(/\/+$/, '')}/${meta.channel}/${meta.slug}`;
+export function imageFolder(meta: { channel: Channel; slug: string; market?: string }) {
+  return meta.channel === 'openmarket' ? `openmarket/${normMarket(meta.market)}/${meta.slug}` : `${meta.channel}/${meta.slug}`;
+}
+
+/** 이미지 주소 폴더 — <공개 주소 루트>/<imageFolder> */
+export function imageBaseUrl(meta: { publicRoot: string; channel: Channel; slug: string; market?: string }) {
+  return `${meta.publicRoot.replace(/\/+$/, '')}/${imageFolder(meta)}`;
 }
 
 export interface GenerateMeta {

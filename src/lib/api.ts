@@ -108,10 +108,12 @@ export async function collect(
 
 // ───── 이미지 호스팅 업로드 (서버가 FTP 로 올린다, core/upload.ts) ─────
 
-/** 이미지는 <공개 주소 루트>/<채널>/<슬러그>/<파일명> 에 올린다 (규칙 6-1, 날짜 폴더 없음) */
+/** 이미지는 <공개 주소 루트>/<채널>/<슬러그>/<파일명>, 오픈마켓은 …/openmarket/<플랫폼>/<슬러그>/<파일명> 에 올린다 (규칙 6-1, shared/types.ts imageFolder) */
 export interface UploadTarget {
   channel: string;
   slug: string;
+  /** 오픈마켓 플랫폼 — channel 이 openmarket 이면 꼭 보낸다 (서버가 없으면 거절) */
+  market?: string;
   publicRoot: string;
 }
 
@@ -145,6 +147,10 @@ export const uploadVerify = (target: UploadTarget, files: { file: string; size: 
 /** 잘못 올린 것 되돌리기 — 이번에 올린 파일(items): 덮어쓴 것은 백업으로 되돌리고 새로 올린 것은 지운다. left 가 있으면 다시 부른다 */
 export const uploadRemove = (target: UploadTarget, items: UploadedItem[], signal?: AbortSignal) =>
   postJson<{ restored: string[]; removed: string[]; failed: { file: string; error: string }[]; left: UploadedItem[]; folderRemoved: boolean }>('upload/remove', { target, items }, signal);
+
+/** 변환 내역 「이미지 서버에서 지우기」 — 고른 파일과 그 숨김 백업을 지운다. 서버에 이미 없으면 missing. left 가 있으면 다시 부른다 */
+export const uploadDelete = (target: UploadTarget, files: string[], signal?: AbortSignal) =>
+  postJson<{ removed: string[]; missing: string[]; failed: { file: string; error: string }[]; backupFailed?: string[]; left: string[]; backups: number; folderRemoved: boolean }>('upload/delete', { target, files }, signal);
 
 /** 고도몰 상품 조회 (상세설명·수정일, 읽기 전용) — 등록 확인용 */
 export const fetchGodoGoods = (goodsNo: string, signal?: AbortSignal) => postJson<GodoGoods>('godo/goods', { goodsNo }, signal);

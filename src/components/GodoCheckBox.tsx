@@ -1,6 +1,7 @@
 // 고도몰 등록 확인 — 상품번호(또는 상품 주소)를 넣으면 고도몰 상세설명을 읽어 지금 결과와 같은지 보여 준다 (읽기 전용, core/godo.ts)
 // 상품번호는 제품(채널/슬러그)마다 이 브라우저에 기억해 두고, 다음에 결과를 열면 자동으로 다시 확인한다
 import { useEffect, useRef, useState } from 'react';
+import { Button } from './Button';
 import { fetchGodoGoods } from '../lib/api';
 import { Tip } from './ui';
 import { compareGodo, goodsNoOf, rememberGoodsNo, rememberedGoodsNo, type GodoCheck } from '../lib/godoCheck';
@@ -78,9 +79,9 @@ export default function GodoCheckBox({ html, folder }: Props) {
           aria-label="고도몰 상품번호 또는 상품 주소"
           spellCheck={false}
         />
-        <button type="button" className="btn btn--sm" disabled={busy || !input.trim()} onClick={() => void run()}>
+        <Button type="button" size="sm" disabled={busy || !input.trim()} onClick={() => void run()}>
           {busy ? '확인 중…' : check ? '다시 확인' : '확인'}
-        </button>
+        </Button>
         {st && <span className={`badge ${st.tone}`}>{st.label}</span>}
       </div>
       {error && <p className="msg msg--error godo__msg" role="alert">{error}</p>}

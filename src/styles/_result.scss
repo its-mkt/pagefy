@@ -177,6 +177,8 @@
     align-items: center;
     gap: 0.5rem 1rem;
   }
+  // 복사(주) + 에디터 미리보기(보조) 버튼 묶음 — 좁으면 안내 글이 아래로
+  &__btns { display: flex; flex-wrap: wrap; gap: 0.5rem; }
   // 주 버튼이지만 다른 버튼과 같은 크기(높이 36px) — 색으로만 눈에 띄게
   &__copy.btn { font-weight: 600; }
   &__paste {

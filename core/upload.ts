@@ -1,12 +1,15 @@
 // 이미지 호스팅 업로드 규칙 (규칙 6절·6-1) — 로컬 서버·Supabase 함수 공용 (node: 모듈 금지)
 // 검증본: ~/.claude/tools/psd2html/upload.js 와 같은 안전장치를 바탕으로 한다
-//  - 정해진 폴더에만: <FTP_ROOT>/<채널>/<슬러그>/<파일명> (2026-11-24 규칙 6-1: 날짜(rev) 폴더 없이 제품 폴더 하나), 파일명은 6-1 규칙에 맞는 것만
+//  - 정해진 폴더에만: <FTP_ROOT>/<채널>/<슬러그>/<파일명>, 오픈마켓은 <FTP_ROOT>/openmarket/<플랫폼>/<슬러그>/<파일명>
+//    (규칙 6-1: 2026-11-24 날짜(rev) 폴더 없음 · 2026-11-25 오픈마켓 플랫폼 폴더 — shared/types.ts imageFolder), 파일명은 6-1 규칙에 맞는 것만
 //  - 덮어쓰기는 화면이 확인받은 파일만: 같은 이름 파일이 있는데 overwrite 목록에 없으면 거절 (확인 사이에 다른 사람이 올린 것을 덮지 않게)
 //  - 덮어쓸 때는 옛 파일을 같은 폴더의 숨김 백업 .bak-<YYYYMMDD-HHmmss>-<파일명> 으로 옮겨 두고 새 파일을 올린다 (되돌리기에 씀)
 //  - 올린 뒤 공개 주소를 실제로 열어 200 응답 + 용량 + 내용(SHA-256) 일치 확인 (9절)
 //  - 화면 설정의 이미지 공개 주소 루트가 서버 설정(PUBLIC_BASE)과 같을 때만 (HTML 주소와 실제 올린 곳이 어긋나지 않게)
 //  - 함수 150초 제한: 마감 시각이 가까우면 남은 파일은 다음 요청으로 넘긴다 (화면이 이어서 보냄)
 import { type Dial, FtpClient } from './ftp.ts';
+import { imageFolder } from '../shared/types.ts';
+import { MARKETS } from '../shared/markets.ts';
 
 export interface FtpConfig {
   host: string;
@@ -22,6 +25,8 @@ export interface FtpConfig {
 export interface UploadTarget {
   channel: string;
   slug: string;
+  /** 오픈마켓 플랫폼 (channel 이 openmarket 일 때 폴더 한 단계 — 반드시 있어야 함) */
+  market?: string;
   /** 화면 설정의 이미지 공개 주소 루트 */
   publicRoot: string;
 }
@@ -71,13 +76,17 @@ export function checkTarget(cfg: FtpConfig, t: UploadTarget): string | null {
   if (!t || typeof t !== 'object') return '요청 값이 없습니다.';
   if (!/^(itket|oncore|openmarket)$/.test(t.channel || '')) return '채널 값이 올바르지 않습니다.';
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(t.slug || '') || t.slug.length > 80) return '서버 폴더 이름(제품슬러그)은 영문 소문자·숫자·하이픈만 됩니다.';
+  // 오픈마켓은 플랫폼 폴더가 꼭 있어야 한다 — 없거나 모르는 값을 기본 플랫폼으로 바꿔 올리면 다른 플랫폼 파일을 덮을 수 있다
+  if (t.channel === 'openmarket' && !(typeof t.market === 'string' && Object.hasOwn(MARKETS, t.market))) return '오픈마켓 플랫폼 값이 없거나 올바르지 않습니다.';
   if (trimSlash(t.publicRoot || '') !== cfg.publicBase)
     return `이미지 공개 주소 루트가 업로드 서버 주소와 다릅니다 (설정: ${String(t.publicRoot).slice(0, 80)} / 서버: ${cfg.publicBase}). 고급 설정의 주소를 서버 주소로 맞춘 뒤 다시 만드세요.`;
   return null;
 }
 
-const folderOf = (cfg: FtpConfig, t: UploadTarget) => `${cfg.root}/${t.channel}/${t.slug}`;
-export const publicUrlOf = (cfg: FtpConfig, t: UploadTarget, file: string) => `${cfg.publicBase}/${t.channel}/${t.slug}/${file}`;
+/** 제품 폴더 (루트 아래 경로는 화면의 이미지 주소와 같은 규칙 — shared/types.ts imageFolder) */
+const pathOf = (t: UploadTarget) => imageFolder({ channel: t.channel as 'itket' | 'oncore' | 'openmarket', slug: t.slug, market: t.market });
+const folderOf = (cfg: FtpConfig, t: UploadTarget) => `${cfg.root}/${pathOf(t)}`;
+export const publicUrlOf = (cfg: FtpConfig, t: UploadTarget, file: string) => `${cfg.publicBase}/${pathOf(t)}/${file}`;
 
 function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);
@@ -222,6 +231,76 @@ export async function undoUpload(cfg: FtpConfig, dial: Dial, t: UploadTarget, it
     }
     return { restored, removed, failed, left, folderRemoved };
   });
+}
+
+/** deleteIn 이 쓰는 FTP 동작만 (테스트에서 가짜로 바꿔 끼운다) */
+export interface DeleteClient {
+  isDir(path: string): Promise<boolean>;
+  list(dir: string, all?: boolean): Promise<string[]>;
+  size(path: string): Promise<number | null>;
+  remove(path: string): Promise<unknown>;
+  rmdir(path: string): Promise<unknown>;
+}
+
+/**
+ * 제품 폴더에서 파일 지우기 (변환 내역 「이미지 서버에서 지우기」) — 화면이 고른 파일만.
+ *  - 그 파일의 숨김 백업(.bak-<시각>-<파일명>)·끊긴 임시 파일(.part-<파일명>)도 함께 지운다 (되살릴 일이 없게 정리)
+ *  - 서버에 이미 없으면 missing (실패 아님)
+ *  - 마감이 가까우면 남은 것은 left (화면이 다시 요청). 폴더가 비면 폴더도 지운다
+ *  - 본 파일과 백업은 따로 센다: 본 파일을 지운 뒤 백업만 못 지우면 그 파일은 removed + backupFailed (failed 아님)
+ *  - folderRemoved 는 rmdir 이 실제로 성공했을 때만 true (폴더가 처음부터 없으면 false)
+ */
+export async function deleteIn(c: DeleteClient, dir: string, files: string[], deadline = Infinity) {
+  const removed: string[] = [];
+  const missing: string[] = [];
+  const failed: { file: string; error: string }[] = [];
+  const backupFailed: string[] = [];
+  const left: string[] = [];
+  let backups = 0;
+  if (!(await c.isDir(dir))) return { removed, missing: [...files], failed, backupFailed, left, backups, folderRemoved: false };
+  const all = await c.list(dir, true);
+  // 있는지는 위에서 받은 폴더 목록으로 본다 (파일마다 SIZE 를 물으면 최대 300번 왕복이 더 들어 마감 시간을 먹는다 — putFiles 와 같은 방식)
+  const present = new Set(all);
+  for (const file of files) {
+    if (Date.now() > deadline - 20_000) {
+      left.push(file);
+      continue;
+    }
+    try {
+      const path = `${dir}/${file}`;
+      if (present.has(file)) {
+        await c.remove(path);
+        removed.push(file);
+      } else missing.push(file);
+    } catch (e) {
+      failed.push({ file, error: (e as Error).message || String(e) });
+      continue; // 본 파일을 못 지웠으면 백업도 남겨 둔다 (되돌릴 길)
+    }
+    for (const n of all) {
+      if (BACKUP_RE.exec(n)?.[1] === file || n === `${PART}${file}`) {
+        try {
+          await c.remove(`${dir}/${n}`);
+          backups++;
+        } catch {
+          backupFailed.push(n);
+        }
+      }
+    }
+  }
+  let folderRemoved = false;
+  if (!left.length && !(await c.list(dir, true)).length) {
+    folderRemoved = await c.rmdir(dir).then(
+      () => true,
+      () => false,
+    );
+  }
+  return { removed, missing, failed, backupFailed, left, backups, folderRemoved };
+}
+
+export async function deleteFiles(cfg: FtpConfig, dial: Dial, t: UploadTarget, files: string[], deadline = Infinity) {
+  if (!Array.isArray(files) || !files.length || files.length > 300) throw new Error('지울 파일 목록이 올바르지 않습니다.');
+  for (const f of files) if (!UPLOAD_FILE_RE.test(f || '')) throw new Error(`파일명 규칙(6-1) 위반: ${String(f).slice(0, 60)}`);
+  return session(cfg, dial, (c) => deleteIn(c, folderOf(cfg, t), [...new Set(files)], deadline));
 }
 
 /** 공개 주소를 실제로 열어 확인 (200 + 용량 + SHA-256). 동시에 4개씩, 마감이 가까우면 남은 것은 checked=false */
