@@ -1,0 +1,179 @@
+// 에디터 테스트 (#tester) — 플랫폼 고르기 · 에디터 흉내 · 바뀌는 것 목록 · 상품 페이지 미리보기
+@use 'tokens' as *;
+
+.tester {
+  font-size: 0.8125rem;
+  color: var(--ink2);
+
+  &__head .panel__title { margin-bottom: $sp-4; }
+
+  // 플랫폼 칩 — 고도몰 · 오픈마켓 두 묶음
+  &__platforms { display: flex; flex-wrap: wrap; gap: $sp-3 $sp-5; margin-bottom: $sp-4; }
+  &__group { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-1; }
+  &__glabel { margin-right: $sp-2; color: var(--sub); font-size: 0.75rem; font-weight: 600; }
+  &__chip {
+    height: 2rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--line2);
+    background: var(--card);
+    color: var(--slate-11);
+    font-size: 0.8125rem;
+    &:hover:not(.is-on) { background: var(--slate-a3); color: var(--ink); }
+    &.is-on { background: var(--indigo-9); border-color: var(--indigo-9); color: #fff; font-weight: 600; }
+  }
+
+  // 폭·주의 사항
+  &__spec {
+    display: flex;
+    flex-wrap: wrap;
+    gap: $sp-1 $sp-5;
+    padding: $sp-3 $sp-4;
+    margin-bottom: $sp-5;
+    background: var(--tile);
+    b { color: var(--ink); font-variant-numeric: tabular-nums; }
+    em { font-style: normal; color: var(--accink); font-size: 0.75rem; }
+    small { color: var(--sub); font-size: 0.75rem; }
+    ul { flex-basis: 100%; margin: $sp-1 0 0; padding-left: 1.125rem; display: grid; gap: 2px; color: var(--sub); font-size: 0.75rem; }
+  }
+
+  // 세로로 쌓음: 에디터 → 저장하면 바뀌는 것 → 미리보기 전체 폭 (바뀌는 것은 짧아 옆 칸이 비고, 미리보기는 PC 750~980px 가 가로 스크롤 없이 보이게)
+  &__grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: $sp-5; }
+  &__col { min-width: 0; display: grid; gap: $sp-3; align-content: start; }
+  &__preview { min-width: 0; display: grid; gap: $sp-3; margin-top: $sp-5; }
+
+  &__actions { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-2; }
+  &__len { margin-left: auto; color: var(--sub); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+  &__opts { display: grid; gap: $sp-row; .hint { font-size: 0.75rem; } }
+
+  &__report {
+    h3 { margin: 0 0 $sp-2; }
+  }
+  &__clean { margin: 0; padding: $sp-3 $sp-4; @include callout(green); }
+  &__changes {
+    margin: $sp-2 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: $sp-row;
+    li { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); align-items: start; gap: $sp-3; padding: $sp-2 $sp-3; background: var(--tile); }
+    li.is-strict { opacity: 0.8; }
+    .badge { justify-content: center; }
+    b { color: var(--ink); font-weight: 600; }
+  }
+  &__n { color: var(--sub); font-variant-numeric: tabular-nums; }
+  &__ev {
+    display: inline-block;
+    margin-left: $sp-2;
+    padding: 0 0.3125rem;
+    font-size: 0.6875rem;
+    line-height: 1.125rem;
+    cursor: help;
+    border: 1px solid currentColor;
+    &--sure { color: var(--green-a11); }
+    &--mid { color: var(--amber-a11); }
+    &--guess { color: var(--slate-a10); border-style: dashed; }
+  }
+  &__samples {
+    margin-top: 2px;
+    .sum { font-size: 0.75rem; color: var(--sub); padding: 0; }
+    .sum-body { display: grid; gap: 2px; margin-top: $sp-1; }
+    code { display: block; font: 0.6875rem/1.5 $mono; color: var(--ink2); background: var(--card); padding: 2px $sp-2; word-break: break-all; }
+  }
+
+  // 미리보기
+  &__phead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: $sp-2; h3 { margin: 0; } .seg { margin: 0; } }
+  &__stage {
+    overflow: auto;
+    max-height: 75vh;
+    padding: $sp-4;
+    background: repeating-conic-gradient(var(--slate-a2) 0 25%, transparent 0 50%) 0 0 / 16px 16px, var(--slate-a3);
+  }
+  &__device {
+    margin: 0 auto;
+    overflow: hidden;
+    background: #fff;
+    box-shadow: 0 0 0 1px var(--slate-a6), 0 4px 16px var(--slate-a4);
+    iframe { display: block; border: 0; background: #fff; }
+  }
+  &__empty { display: grid; place-items: center; min-height: 16rem; padding: $sp-5; background: var(--tile); color: var(--sub); text-align: center; }
+  &__measure {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: $sp-row;
+    li { display: flex; flex-wrap: wrap; align-items: baseline; gap: $sp-2; padding: $sp-2 $sp-3; background: var(--tile); }
+  }
+  &__out {
+    .sum { font-size: 0.8125rem; color: var(--ink); font-weight: 600; }
+    pre { max-height: 20rem; overflow: auto; margin: $sp-2 0 0; padding: $sp-3; background: var(--tile); font: 0.75rem/1.5 $mono; white-space: pre-wrap; word-break: break-all; }
+  }
+  &__outbar { display: flex; align-items: center; gap: $sp-3; margin-top: $sp-2; }
+  &__foot { margin: $sp-5 0 0; }
+}
+
+// 에디터 흉내 — 쇼핑몰 관리자 상세설명 칸 (제목 줄 · 도구 막대 · 입력 · 아래 모드 탭)
+.edsim {
+  border: 1px solid var(--line2);
+  background: var(--card);
+
+  &__bar {
+    display: flex;
+    align-items: baseline;
+    gap: $sp-3;
+    padding: $sp-2 $sp-3;
+    background: var(--slate-a3);
+    border-bottom: 1px solid var(--line);
+    b { color: var(--ink); font-size: 0.8125rem; }
+    span { color: var(--sub); font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
+  &__tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 2px;
+    padding: $sp-1 $sp-2;
+    border-bottom: 1px solid var(--line);
+    color: var(--slate-a9);
+    font-size: 0.75rem;
+    user-select: none;
+    > span, > b, > em, > u, > s { display: inline-grid; place-items: center; min-width: 1.5rem; height: 1.5rem; padding: 0 $sp-1; border: 1px solid transparent; }
+    > i { width: 1px; height: 1rem; margin: 0 $sp-1; background: var(--line); }
+  }
+  &__body { min-height: 16rem; display: grid; }
+  &__src {
+    width: 100%;
+    min-height: 16rem;
+    resize: vertical;
+    padding: $sp-3;
+    border: 0;
+    background: var(--card);
+    font: 0.75rem/1.55 $mono;
+    tab-size: 2;
+    &:focus { outline: 2px solid var(--indigo-8); outline-offset: -2px; }
+  }
+  &__text { margin: 0; padding: $sp-3; max-height: 30rem; overflow: auto; white-space: pre-wrap; font-size: 0.8125rem; }
+  &__design {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    iframe { width: 100%; height: 26rem; border: 0; background: #fff; }
+  }
+  &__warn { margin: 0; padding: $sp-2 $sp-3; @include callout(amber); font-size: 0.75rem; }
+  &__modes {
+    display: flex;
+    justify-content: flex-end;
+    gap: 2px;
+    padding: $sp-1;
+    border-top: 1px solid var(--line);
+    background: var(--slate-a2);
+    button {
+      height: 1.625rem;
+      padding: 0 $sp-3;
+      border: 1px solid var(--line2);
+      background: var(--card);
+      color: var(--sub);
+      font-size: 0.75rem;
+      &.is-on { background: var(--slate-12); border-color: var(--slate-12); color: var(--slate-1); font-weight: 600; }
+    }
+  }
+}

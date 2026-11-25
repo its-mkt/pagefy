@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button } from './Button';
 import { Tabs } from 'radix-ui';
 import { godoMaxWidth } from '../../shared/width';
 import { marketWidth } from '../../shared/markets';
@@ -11,9 +12,9 @@ import GodoCheckBox from './GodoCheckBox';
 import Select from './Select';
 import { buildZip, download, fmtBytes } from '../lib/util';
 import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, saveZipToShared, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
-import { CheckField, Fold, Seg, Tip } from './ui';
+import { CheckField, Fold, Seg, Tip, TipWrap } from './ui';
 import Elapsed from './Elapsed';
-import { CheckIcon } from './icons';
+import { CheckIcon, EyeIcon } from './icons';
 import { copyText, useCopy } from '../lib/clipboard';
 import { fmtDur, secMs } from '../lib/time';
 import { useFrameHeight } from '../lib/useFrameHeight';
@@ -39,6 +40,8 @@ interface Props {
   onUndoUpload?: () => void;
   /** 「문제 자동 수정」 — 구조 계획으로 고칠 수 있는 점검만 모아 Claude 1회, 나아졌을 때만 바꿈 (코드 생성 방식) */
   onAutoFix?: () => void;
+  /** 에디터 테스트 화면으로 넘어가 지금 결과를 불러온다 */
+  onOpenTester?: () => void;
   /** 지난 자동 수정 결과 안내 */
   autoFix?: { ok: boolean; text: string } | null;
   /** 고도몰 등록 확인 상자 (서버에 아이티켓 고도몰 API 키가 있고 채널이 아이티켓일 때) */
@@ -130,7 +133,7 @@ function diagnostics(result: Result, loaded: Loaded, run: RunState) {
   ].join('\n');
 }
 
-export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, autoFix, godo }: Props) {
+export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
   const [feedback, setFeedback] = useState('');
   const [target, setTarget] = useState('all');
@@ -219,12 +222,12 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
   /** 직접 올릴 때 쓰는 것: zip 내려받기 + 이미지 주소 (자동 업로드일 때 「직접 올리기」 접기 안) */
   const manualTools = result && (
     <span className="getit__tools">
-      <button className="btn btn--sm" disabled={!result.parsed.html || zipping} onClick={downloadZip}>
+      <Button size="sm" disabled={!result.parsed.html || zipping} onClick={downloadZip}>
         {zipping ? 'zip 만드는 중…' : 'zip 내려받기 (HTML + 이미지)'}
-      </button>
+      </Button>
       <span className="getit__url">
         <code className="getit__code">{result.baseUrl}/</code>
-        <button className="btn btn--sm" onClick={() => copy('url', `${result.baseUrl}/`)}>{copied === 'url' ? '복사됨' : '이미지 주소 복사'}</button>
+        <Button size="sm" onClick={() => copy('url', `${result.baseUrl}/`)}>{copied === 'url' ? '복사됨' : '이미지 주소 복사'}</Button>
       </span>
     </span>
   );
@@ -240,7 +243,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             <span className="progress__label">{prog.label}</span>
             <span className="progress__pct">{pct}%</span>
             {run.startedAt && <Elapsed since={run.startedAt} className="progress__time" suffix=" 지남" />}
-            <button className="btn btn--ghost btn--sm" onClick={onCancel}>취소</button>
+            <Button size="sm" onClick={onCancel}>취소</Button>
           </p>
           <div className="progress__bar" role="progressbar" aria-label="만드는 중" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
             <span style={{ width: `${pct}%` }} />
@@ -261,7 +264,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
           <p className="msg msg--error progress-error__msg">{run.error || '만드는 중 문제가 생겼습니다.'}</p>
           {onResume && (
             <div className="actions">
-              <button className="btn btn--primary" onClick={onResume}>{resumeLabel}</button>
+              <Button variant="primary" onClick={onResume}>{resumeLabel}</Button>
             </div>
           )}
         </div>
@@ -316,6 +319,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             </div>
             {/* 담당자가 할 일은 「복사 → 붙여넣기」 하나. 이미지 업로드는 복사 버튼이 알아서 먼저 한다 */}
             <div className="getit__main">
+              <div className="getit__btns">
               <button
                 className={`btn ${autoUpload || imgReady ? 'btn--primary' : ''} getit__copy`}
                 disabled={!result.parsed.html || upBusy || (!autoUpload && !imgReady)}
@@ -332,6 +336,17 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   autoUpload && upload!.phase !== 'done' ? '이미지 올리고 HTML 복사' : 'HTML 복사'
                 )}
               </button>
+              {/* 붙여넣기 전에 — 에디터 테스트(#tester)로 넘어가 지금 결과를 불러 둔다.
+                  예전엔 안내 글 아래 글자 링크라 설명처럼 묻혀서(2026-11-25 의견) 복사 버튼 옆 보조 버튼으로. 복사가 막혀 있어도(이미지 올리기 전) 미리 볼 수 있다 */}
+              {onOpenTester && (
+                <TipWrap disabled={!result.parsed.html} content="붙여넣기 전에, 쇼핑몰 에디터가 저장하면서 이 HTML을 어떻게 바꾸는지 미리 봅니다">
+                  <Button type="button" className="getit__tester" disabled={!result.parsed.html} onClick={onOpenTester}>
+                    <EyeIcon className="btn__ico" />
+                    에디터 미리보기
+                  </Button>
+                </TipWrap>
+              )}
+              </div>
               <p className="getit__paste">
                 <span className="getit__where">
                   <b>{openmarket ? '오픈마켓 상세 편집기의 HTML 입력' : '고도몰 상품 상세설명 (HTML 모드)'}</b>
@@ -382,8 +397,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   <span>예전 이미지는 서버에 백업해 두고, 올린 뒤 「잘못 올렸으면 되돌리기」로 되돌릴 수 있습니다.</span>
                   {!!upload!.unused && <span>이 HTML 이 쓰지 않는 서버 파일 {upload!.unused}개는 지우지 않고 그대로 둡니다.</span>}
                   <span className="getit__undo-actions">
-                    <button className="btn btn--sm btn--primary" onClick={() => copyHtml(true)}>덮어쓰고 HTML 복사</button>
-                    <button className="btn btn--sm btn--ghost" onClick={onUploadReset}>취소</button>
+                    <Button size="sm" variant="primary" onClick={() => copyHtml(true)}>덮어쓰고 HTML 복사</Button>
+                    <Button size="sm" onClick={onUploadReset}>취소</Button>
                   </span>
                 </div>
               );
@@ -401,8 +416,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   이 HTML 은 아직 쇼핑몰에 붙여넣지 않았습니다
                 </CheckField>
                 <span className="getit__undo-actions">
-                  <button className="btn btn--sm is-danger" disabled={!undoSure} onClick={() => { setUndoAsk(false); onUndoUpload(); }}>되돌리기</button>
-                  <button className="btn btn--sm btn--ghost" onClick={() => setUndoAsk(false)}>취소</button>
+                  <Button size="sm" variant="danger" disabled={!undoSure} onClick={() => { setUndoAsk(false); onUndoUpload(); }}>되돌리기</Button>
+                  <Button size="sm" onClick={() => setUndoAsk(false)}>취소</Button>
                 </span>
               </div>
               );
@@ -461,9 +476,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               {autoFix && <p className="autofix__result">{autoFix.text}</p>}
               {fixable.length > 0 && onAutoFix && (
                 <div className="autofix__row">
-                  <button className="btn btn--primary btn--sm" disabled={running} onClick={onAutoFix}>
+                  <Button variant="primary" size="sm" disabled={running} onClick={onAutoFix}>
                     문제 자동 수정 ({fixable.length}건)
-                  </button>
+                  </Button>
                   <span className="autofix__note">
                     빠진 글자·제목 구조처럼 구조 계획으로 고칠 수 있는 문제만 고칩니다 · Claude 1회(1~2분, 새로 만들 때와 비슷한 비용) · <b>나아졌을 때만</b> 새 결과로 바꿉니다
                   </span>
@@ -471,9 +486,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               )}
               {codeSide.length > 0 && (
                 <div className="autofix__row">
-                  <button className="btn btn--sm" onClick={() => copy('diag', diagnostics(result, loaded, run))}>
+                  <Button size="sm" onClick={() => copy('diag', diagnostics(result, loaded, run))}>
                     {copied === 'diag' ? '복사됨' : copied === 'fail:diag' ? '복사 실패' : '진단 정보 복사'}
-                  </button>
+                  </Button>
                   <span className="autofix__note">
                     나머지 {codeSide.length}건({layoutOff ? '위치 어긋남 등 ' : ''}마크업 코드 쪽 문제)은 Claude 에게 다시 시켜도 바뀌지 않아 자동으로 고치지 않습니다. 진단 정보를 복사해 관리자에게 보내 주세요.
                   </span>
@@ -540,9 +555,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
           <div className="revise">
             {autoCount > 0 && (
               <Tip content="PSD 위치 대조에서 어긋난 텍스트가 있는 섹션만 골라 고치게 합니다">
-              <button className="btn btn--sm" onClick={() => onRevise(auto)}>
+              <Button size="sm" onClick={() => onRevise(auto)}>
                 대조 결과로 고치기 (섹션 {autoCount}개)
-              </button>
+              </Button>
               </Tip>
             )}
             <Select
@@ -720,12 +735,12 @@ function Code({ html }: { html: string }) {
             { value: 'full', label: '전체 문서' },
           ]}
         />
-        <button
-          className="btn btn--sm"
+        <Button
+          size="sm"
           onClick={() => copy('code', text)}
         >
           {copied === 'code' ? '복사됨' : copied === 'fail:code' ? '복사 실패 — 아래 글을 직접 선택하세요' : '복사'}
-        </button>
+        </Button>
         <span className="hint">{text.length.toLocaleString()}자 · 이미지 주소는 업로드 후 실제로 열리는지 확인하세요 (9절 6항)</span>
       </div>
       <pre className="pre pre--code">{text}</pre>
@@ -850,9 +865,9 @@ function SharedSave({ result, loaded, onSaved, primary, label = '공유 폴더�
             <b>{st.path}</b> 에 있는 <b>{folder}.html</b> 이 지금 결과와 다릅니다. 새 것으로 바꿀까요? (공유 폴더 HTML 은 보관용이라 쇼핑몰에는 영향이 없습니다)
           </span>
           <span className="shared__actions">
-            <button className="btn btn--sm btn--primary" onClick={() => write(st.root, true)}>새 HTML 로 바꾸기</button>
-            <button className="btn btn--sm" onClick={() => write(st.root, false)}>HTML 은 그대로 두고 나머지만 저장</button>
-            <button className="btn btn--sm btn--ghost" onClick={() => setSt({ s: 'idle' })}>취소</button>
+            <Button size="sm" variant="primary" onClick={() => write(st.root, true)}>새 HTML 로 바꾸기</Button>
+            <Button size="sm" onClick={() => write(st.root, false)}>HTML 은 그대로 두고 나머지만 저장</Button>
+            <Button size="sm" onClick={() => setSt({ s: 'idle' })}>취소</Button>
           </span>
         </div>
       )}
@@ -937,9 +952,9 @@ function ManualSteps(p: {
                 {/* 공유 폴더 주소 복사는 zip 방식(아래)에만 — 여기서는 앱이 그 폴더에 바로 쓰고, 처음 폴더 고를 때는 위 「경로 복사」를 쓴다 */}
                 <div className="msteps__act msteps__alt">
                   <span>또는</span>
-                  <button type="button" className="btn btn--sm btn--ghost" disabled={p.zipping} onClick={p.onZip}>
+                  <Button type="button" size="sm" disabled={p.zipping} onClick={p.onZip}>
                     {p.zipping ? 'zip 만드는 중…' : p.zipDone ? 'zip 다시 받기' : 'zip 으로 받기'}
-                  </button>
+                  </Button>
                 </div>
               </>
             ) : (
@@ -951,9 +966,9 @@ function ManualSteps(p: {
                   <button type="button" className={`btn btn--sm${now === 1 ? ' btn--primary' : ''}`} disabled={p.zipping} onClick={p.onZip}>
                     {p.zipping ? 'zip 만드는 중…' : p.zipDone ? 'zip 다시 받기' : 'zip 저장하기'}
                   </button>
-                  <button type="button" className="btn btn--sm btn--ghost" onClick={p.onCopyFolder}>
+                  <Button type="button" size="sm" onClick={p.onCopyFolder}>
                     {p.folderCopied ? '복사됨 — 탐색기 주소창에 붙여넣으세요' : '공유 폴더 주소 복사'}
-                  </button>
+                  </Button>
                 </div>
               </>
             )}
@@ -973,7 +988,7 @@ function ManualSteps(p: {
             </span>
             <div className="msteps__act msteps__url">
               <code title={p.url}>{p.url}</code>
-              <button type="button" className="btn btn--sm" onClick={p.onCopyUrl}>{p.urlCopied ? '복사됨' : '주소 복사'}</button>
+              <Button type="button" size="sm" onClick={p.onCopyUrl}>{p.urlCopied ? '복사됨' : '주소 복사'}</Button>
             </div>
           </div>
         </li>
@@ -986,9 +1001,9 @@ function ManualSteps(p: {
                 이미지 {p.count}장을 올렸습니다
               </CheckField>
               {p.ready && (
-                <button type="button" className="btn btn--sm btn--primary" onClick={p.onCopyHtml}>
+                <Button type="button" size="sm" variant="primary" onClick={p.onCopyHtml}>
                   {p.htmlCopied ? '복사됨 ✓ 이제 붙여넣으세요' : 'HTML 복사'}
-                </button>
+                </Button>
               )}
             </div>
           </div>

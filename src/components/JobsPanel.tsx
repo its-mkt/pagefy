@@ -1,13 +1,18 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
-import { filterOn, listInfo, TRASH_DAYS, type Job, type JobFilter, type JobState } from '../lib/jobs';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Button } from './Button';
+import { DropdownMenu } from 'radix-ui';
+import { filterOn, groupLabel, listInfo, platformLabel, sameGroup, samePlatform, TRASH_DAYS, type Job, type JobFilter, type JobNote, type JobState, type Platform } from '../lib/jobs';
 import { CHANNEL_LABEL } from '../../shared/types';
-import { MARKETS, normMarket, type Market } from '../../shared/markets';
+import { MARKETS, type Market } from '../../shared/markets';
 import { fmtBytes } from '../lib/util';
 import { SHARED_ROOT } from '../lib/sharedFolder';
 import Select from './Select';
+import PeriodPicker from './PeriodPicker';
 import { Tip, TipWrap } from './ui';
-import { TrashIcon } from './icons';
-import { ago, clock, dayLabel, dayStart, timeOf, when } from '../lib/time';
+import { CopyIcon, ImageOffIcon, MoreIcon, PencilIcon, TrashIcon } from './icons';
+import ImageDeleteDialog from './ImageDeleteDialog';
+import JobInfoDialog from './JobInfoDialog';
+import { ago, clock, dayHeading, when } from '../lib/time';
 
 /** 다른 PC 에서 열 PSD 가 있는 곳 (「공유 폴더에 저장」이 PSD 를 넣는 폴더) */
 const PSD_DIR = String.raw`${SHARED_ROOT}\채널\제품명`;
@@ -30,6 +35,10 @@ interface Props {
   /** file: 이 브라우저에 PSD 원본이 없을 때 사용자가 고른 PSD */
   onOpen: (job: Job, file?: File) => void;
   onRemove: (id: string) => void;
+  /** 같은 PSD 를 다른 판매처용 새 작업으로 만들어 연다 (원래 작업은 그대로) — 변환 내역 화면에서만 */
+  onCopy?: (job: Job, to: Platform) => void;
+  /** 「⋯ → 작업 정보 편집」 저장 — 담당자·메모·테스트만 (PSD 없이, 결과 영향 없음). 실패하면 throw */
+  onEditInfo?: (job: Job, note: JobNote) => Promise<void>;
   /** PSD 원본 없이 저장된 결과(HTML) 보기 */
   onView: (job: Job) => void;
   /** 휴지통 목록 — null 이면 닫힘(최근 작업을 보여 줌) */
@@ -51,13 +60,16 @@ interface Props {
   onShowAll?: () => void;
   /** 'page' 에서 지금 열린 작업 줄의 「작업 화면으로」 — 만들기 화면으로 돌아간다 (열린 작업은 거기 그대로 있음) */
   onGoCurrent?: () => void;
+  /** 이미지 서버 업로드가 설정돼 있음 — 줄 끝 「⋯」에 「이미지 서버에서 지우기」를 보인다 */
+  imageServer?: boolean;
 }
 
-type SortKey = 'name' | 'channel' | 'state' | 'time';
+type SortKey = 'name' | 'channel' | 'who' | 'state' | 'time';
 /** 변환 내역 표 머리 (누르면 정렬) — [기준, 이름, 칸 class] */
 const SORT_COLS: [SortKey, string, string][] = [
   ['name', '제품명', 'jtable__c-name'],
   ['channel', '판매처', 'jtable__c-ch'],
+  ['who', '담당', 'jtable__c-who'],
   ['state', '상태', 'jtable__c-state'],
   ['time', '날짜', 'jtable__c-time'],
 ];
@@ -71,7 +83,7 @@ function SortArrow({ up }: { up: boolean }) {
 }
 /** 표 날짜 칸 — 오늘 14:05 · 어제 09:12 · 그 전은 11. 20. 14:05 */
 function dateCell(t: number) {
-  const d = dayLabel(t);
+  const d = dayHeading(t);
   return d === '오늘' || d === '어제' ? `${d} ${clock(t)}` : when(t);
 }
 /** 상태 정렬 순서: 손볼 것(오류·중단) 먼저 */
@@ -79,9 +91,23 @@ const STATE_ORDER: Record<JobState, number> = { error: 0, stopped: 1, running: 2
 function sortCmp(k: SortKey, x: Job, y: Job) {
   if (k === 'time') return x.updatedAt - y.updatedAt;
   if (k === 'state') return STATE_ORDER[x.state] - STATE_ORDER[y.state] || y.updatedAt - x.updatedAt;
-  const a = k === 'name' ? x.settings.productName || x.fileName : channelOf(x);
-  const b = k === 'name' ? y.settings.productName || y.fileName : channelOf(y);
-  return a.localeCompare(b, 'ko') || y.updatedAt - x.updatedAt;
+  const key = (j: Job) => (k === 'name' ? j.settings.productName || j.fileName : k === 'who' ? whoOf(j) : `${groupOf(j)} ${channelOf(j)}`);
+  return key(x).localeCompare(key(y), 'ko') || y.updatedAt - x.updatedAt;
+}
+
+/** 담당 — 담당자 칸을 비웠으면 만든 사람 (예전 작업은 둘 다 없음) */
+const whoOf = (j: Job) => j.note?.assignee?.trim() || j.creator || '';
+/** 담당 칸 마우스 올림 글 — 담당자와 만든 사람이 다르면 둘 다 */
+const whoTip = (j: Job) => {
+  if (!j.creator) return undefined;
+  const a = j.note?.assignee?.trim();
+  return a && a !== j.creator ? `담당 ${a} · 만든 사람 ${j.creator}` : `만든 사람 ${j.creator}`;
+};
+
+/** 제품명 아래 줄에 붙는 메모 (변환 내역 표와 최근 작업 목록 공용) — 「테스트」 표시는 제목 줄 배지로 */
+function MemoLine({ j }: { j: Job }) {
+  const memo = j.note?.memo?.trim();
+  return memo ? <span className="jobs__memo">{memo}</span> : null;
 }
 
 /** 만들기 화면에 보여 줄 최근 작업 수 (사용자 지시 2026-11-24) */
@@ -98,14 +124,142 @@ const STATE: Record<JobState, { label: string; tone: string }> = {
 /** 스켈레톤 줄의 제목 자리 — 길이를 조금씩 달리해 실제 목록처럼 보이게 */
 const SKEL_NAMES = ['상세페이지 제품명 자리', '제품명 자리 표시', '상세페이지 제품 이름 자리 표시'];
 
-/** 채널 · 플랫폼 (예전 작업엔 settings 가 비어 있을 수 있다) */
-function channelOf(j: Job) {
-  const c = j.settings?.channel;
-  if (!c || !CHANNEL_LABEL[c]) return '';
-  return c === 'openmarket' ? `오픈마켓 · ${MARKETS[normMarket(j.settings.market)].label}` : CHANNEL_LABEL[c].replace(/\s*\(.*\)$/, '');
+/** 예전 작업엔 settings 가 비어 있을 수 있다 → 판매처를 모르면 빈 글자 */
+const known = (j: Job) => !!j.settings?.channel && !!CHANNEL_LABEL[j.settings.channel];
+/** 판매처 이름 (제품명 옆 배지) */
+const channelOf = (j: Job) => (known(j) ? platformLabel(j.settings) : '');
+/** 판매처 칸 — 묶음(고도몰 · 오픈마켓). 어느 쇼핑몰인지는 제품명 옆 배지로 (2026-11-25 의견: 배지 = 판매처, 칸 = 묶음) */
+const groupOf = (j: Job) => (known(j) ? groupLabel(j.settings.channel) : '');
+
+/**
+ * 제품명 + 판매처 배지(아이티켓·쿠팡 — 색은 묶음: 고도몰 보라 · 오픈마켓 주황) + 「테스트」 배지(점선 테두리 — 주황과 헷갈리지 않게).
+ * 배지는 색 있는 표시만 — 회색 면·파란 옅은 면은 단추(.btn·.btn--soft)와 헷갈려서 쓰지 않는다
+ */
+function NameLine({ j }: { j: Job }) {
+  const ch = channelOf(j);
+  const om = j.settings?.channel === 'openmarket';
+  return (
+    <span className="jobs__title">
+      <b>{j.settings.productName || j.fileName}</b>
+      {ch && <span className={`badge badge--${om ? 'om' : 'godo'} jobs__group`}>{ch}</span>}
+      {j.note?.test && <span className="badge badge--test jobs__group">테스트</span>}
+    </span>
+  );
 }
 
-const PERIODS: { days?: number; label: string }[] = [{ label: '전체 기간' }, { days: 1, label: '오늘' }, { days: 7, label: '최근 7일' }, { days: 30, label: '최근 30일' }];
+/** 「복제」에서 고를 판매처 (고도몰 2 + 오픈마켓 플랫폼) */
+const PLATFORMS: { to: Platform; label: string }[] = ([{ channel: 'itket' }, { channel: 'oncore' }, ...(Object.keys(MARKETS) as Market[]).map((market) => ({ channel: 'openmarket', market }))] as Platform[]).map((to) => ({ to, label: platformLabel(to) }));
+
+/** 같은 PSD(이름·크기)·같은 제품의 작업 — 「복제」 메뉴에 이미 만든 판매처를 표시 */
+const sibling = (a: Job, b: Job) => a.fileName === b.fileName && a.fileSize === b.fileSize && (a.settings.productName ?? '') === (b.settings.productName ?? '');
+
+/**
+ * 변환 내역 줄의 「복제」(다른 판매처용) — 같은 PSD 를 고도몰·스마트스토어·쿠팡 등에 모두 올릴 때 (원래 작업은 그대로 두고 새 작업으로).
+ * 같은 묶음(고도몰끼리·오픈마켓끼리)은 구조 계획을 옮겨 비용 없이, 묶음이 다르면 새 작업에서 「마크업 만들기」(Claude 1회).
+ */
+function CopySub({ job, all, busy, onCopy }: { job: Job; all: Job[]; busy: boolean; onCopy: (job: Job, to: Platform) => void }) {
+  const from: Platform = { channel: job.settings.channel, market: job.settings.market };
+  const planned = listInfo(job).engine === 'code';
+  const made = all.filter((j) => j.id !== job.id && !j.deletedAt && sibling(j, job));
+  // 「⋯」 메뉴 안의 하위 메뉴 (2026-11-25: 복제는 보조 동작이라 행 버튼 대신 ⋯ 메뉴로 옮김 — 열기는 행에 그대로)
+  return (
+    <DropdownMenu.Sub>
+      <DropdownMenu.SubTrigger className="profile__item" disabled={busy} aria-label={`「${job.settings.productName || job.fileName}」 다른 판매처용으로 복제`}>
+        <span className="jobs__rowmenu-ico">
+          <CopyIcon className="btn__ico" />
+          다른 판매처용으로 복제
+        </span>
+        <span aria-hidden="true" className="jobs__copy-arrow">›</span>
+      </DropdownMenu.SubTrigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.SubContent className="profile__pop jobs__copy" sideOffset={14} alignOffset={-8} collisionPadding={8} aria-label="복제할 판매처">
+          <div className="jobs__copy-head">
+            <b>어느 판매처용으로 복제할까요?</b>
+            <span>
+              지금 작업({platformLabel(from)})은 그대로 남고, 새 작업이 열립니다.
+            </span>
+          </div>
+          <DropdownMenu.Separator className="profile__sep" />
+          {PLATFORMS.filter((p) => !samePlatform(p.to, from)).map((p, i, list) => {
+            const free = planned && sameGroup(p.to, from);
+            const has = made.some((j) => samePlatform(j.settings, p.to));
+            const groupStart = i === 0 || (list[i - 1].to.channel === 'openmarket') !== (p.to.channel === 'openmarket');
+            return (
+              <Fragment key={p.label}>
+                {groupStart && i > 0 && <DropdownMenu.Separator className="profile__sep" />}
+                {groupStart && <DropdownMenu.Label className="jobs__copy-group">{groupLabel(p.to.channel)}</DropdownMenu.Label>}
+                <DropdownMenu.Item className="profile__item" onSelect={() => onCopy(job, p.to)}>
+                  <span>
+                    {p.label}
+                    {has && <em className="jobs__copy-has"> · 이미 있음</em>}
+                  </span>
+                  <small className={free ? 'jobs__copy-free' : 'jobs__copy-cost'}>{free ? '비용 없음' : 'Claude 1회'}</small>
+                </DropdownMenu.Item>
+              </Fragment>
+            );
+          })}
+        </DropdownMenu.SubContent>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Sub>
+  );
+}
+
+/**
+ * 변환 내역 줄 끝 「⋯」 메뉴 — 「작업 정보 편집…」(담당자·메모·테스트, 결과 영향 없음) / 지우는 것: 「이미지 서버에서 지우기…」(올린 이미지 정리, 확인 창) ·
+ * 「휴지통으로 옮기기」(기간 안에 복원 가능). 안전한 것을 위에, 지우는 것을 구분선 아래에. 만드는 중인 작업은 모두 못 한다
+ */
+function RowMenu({ job, locked, canDeleteImages, onEdit, onDeleteImages, onTrash, copy }: { job: Job; locked: boolean; canDeleteImages: boolean; onEdit?: () => void; onDeleteImages: () => void; onTrash: () => void; copy?: ReactNode }) {
+  const name = job.settings.productName || job.fileName;
+  return (
+    <DropdownMenu.Root modal={false}>
+      <TipWrap content={locked ? '만드는 중인 작업은 고치거나 지울 수 없습니다' : '더 보기 — 작업 정보 편집 · 이미지 지우기 · 휴지통으로'} disabled={locked}>
+        <DropdownMenu.Trigger className="btn btn--sm btn--icon btn--more" disabled={locked} aria-label={`「${name}」 더 보기`}>
+          <MoreIcon className="btn__ico" />
+        </DropdownMenu.Trigger>
+      </TipWrap>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="profile__pop jobs__rowmenu" align="end" sideOffset={6} collisionPadding={8}>
+          {copy && (
+            <>
+              {copy}
+              <DropdownMenu.Separator className="profile__sep" />
+            </>
+          )}
+          {onEdit && (
+            <>
+              <DropdownMenu.Item className="profile__item" onSelect={onEdit}>
+                <span className="jobs__rowmenu-ico">
+                  <PencilIcon className="btn__ico" />
+                  작업 정보 편집…
+                </span>
+                <small className="jobs__rowmenu-sub">담당 · 메모 · 테스트</small>
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator className="profile__sep" />
+            </>
+          )}
+          {canDeleteImages && (
+            <>
+              <DropdownMenu.Item className="profile__item profile__item--out" onSelect={onDeleteImages}>
+                <span className="jobs__rowmenu-ico">
+                  <ImageOffIcon className="btn__ico" />
+                  이미지 서버에서 지우기…
+                </span>
+              </DropdownMenu.Item>
+              <DropdownMenu.Separator className="profile__sep" />
+            </>
+          )}
+          <DropdownMenu.Item className="profile__item" onSelect={onTrash}>
+            <span className="jobs__rowmenu-ico">
+              <TrashIcon className="btn__ico" />
+              휴지통으로 옮기기
+            </span>
+            <small className="jobs__rowmenu-sub">{TRASH_DAYS}일 안에 복원</small>
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
 
 /** 변환 내역 거르기 막대 */
 function FilterBar({ filter: f, onFilter, count, more }: { filter: JobFilter; onFilter: (f: JobFilter) => void; count: number; more: boolean }) {
@@ -125,7 +279,7 @@ function FilterBar({ filter: f, onFilter, count, more }: { filter: JobFilter; on
   const on = filterOn(f);
   return (
     <div className="jobs__filter" role="search" aria-label="변환 내역 거르기">
-      <input className="jobs__q" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·파일명 검색" aria-label="제품명·파일명 검색" />
+      <input className="jobs__q" type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="제품명·파일명·담당·메모 검색" aria-label="제품명·파일명·담당·메모 검색" />
       {/* 판매처는 한 칸에서 고른다: 고도몰(아이티켓·온코어) / 오픈마켓(플랫폼별). 값 = 채널 또는 openmarket:<플랫폼> */}
       <Select
         size="md"
@@ -162,15 +316,20 @@ function FilterBar({ filter: f, onFilter, count, more }: { filter: JobFilter; on
           { value: 'problem', label: '오류·중단' },
         ]}
       />
-      {/* 기간도 판매처·상태와 같은 선택 상자로 — 한 줄에 같은 모양 칸만 나란히 (2026-11-24, 세그먼트 단추가 어색하다는 의견) */}
+      {/* 테스트용 작업 거르기 (작업 기록의 「테스트용 작업」) */}
       <Select
         size="md"
-        className="jobs__period"
-        aria-label="기간"
-        value={String(f.days ?? 'all')}
-        onChange={(v) => onFilter({ ...f, days: v === 'all' ? undefined : Number(v) })}
-        options={PERIODS.map((p) => ({ value: String(p.days ?? 'all'), label: p.label }))}
+        aria-label="테스트 작업"
+        value={f.test ?? ''}
+        onChange={(v) => onFilter({ ...f, test: (v || undefined) as JobFilter['test'] })}
+        options={[
+          { value: '', label: '테스트 포함' },
+          { value: 'hide', label: '테스트 제외' },
+          { value: 'only', label: '테스트만' },
+        ]}
       />
+      {/* 기간 — 겉모양은 판매처·상태와 같은 선택 상자, 열면 빠른 선택 + 달력(날·기간) (2026-11-25) */}
+      <PeriodPicker value={{ days: f.days, range: f.range }} onChange={(p) => onFilter({ ...f, days: p.days, range: p.range })} />
       {/* 글자 길이가 바뀌면 검색 칸 폭이 흔들리므로 늘 「N개」만 — 거른 상태라는 뜻은 화면 읽기·마우스 올림 글로 */}
       <span className="jobs__count" aria-live="polite" title={on ? '조건에 맞는 작업 수' : '전체 작업 수'}>
         <span className="sr-only">{on ? '조건에 맞는 작업 ' : '전체 작업 '}</span>
@@ -202,7 +361,7 @@ function daysLeft(deletedAt: number) {
 
 /** 작업 목록 — 계정(또는 이 브라우저)에 저장돼 새로고침·다른 PC 에서도 이어서 볼 수 있다 */
 export default function JobsPanel(props: Props) {
-  const { filter, onFilter, currentId, busy, account, loading, onMore, onOpen, onRemove, onView, trash, trashN, onTrashOpen, onRestore, mode, onShowAll, onGoCurrent } = props;
+  const { filter, onFilter, currentId, busy, account, loading, onMore, onOpen, onRemove, onView, trash, trashN, onTrashOpen, onRestore, mode, onShowAll, onGoCurrent, onCopy } = props;
   const recent = mode === 'recent';
   // 최근 작업은 거르기 없이 읽은 목록의 앞 5건만 (거르기는 변환 내역 화면에서만 — App 이 화면에 따라 거르기를 빼고 읽는다)
   const jobs = recent ? props.jobs.slice(0, RECENT_COUNT) : props.jobs;
@@ -224,14 +383,25 @@ export default function JobsPanel(props: Props) {
     setRemoved({ id: j.id, name: j.settings.productName || j.fileName });
   };
   /** 줄 하나의 작업 단추 (열기·PSD 고르기·결과 보기·작업 화면으로·지우기) — 최근 작업 목록과 변환 내역 표가 같이 쓴다 */
+  /** 그 줄의 주 단추가 하는 일 — 이름 칸을 눌러도 같게. 못 누를 때(만드는 중 등)는 null */
+  const openOf = (j: Job, cur: boolean): (() => void) | null => {
+    if (cur) return onGoCurrent ?? null;
+    if (busy) return null;
+    if (!j.noFile) return () => onOpen(j);
+    if (listInfo(j).html) return () => onView(j);
+    return () => {
+      setPickFor(j);
+      picker.current?.click();
+    };
+  };
   const acts = (j: Job, cur: boolean) => (
         <span className="jobs__acts">
           {cur ? (
             // 변환 내역 화면에서는 열린 작업으로 돌아갈 길이 있어야 한다 (만들기 화면에 그대로 열려 있음)
             onGoCurrent ? (
-              <button type="button" className="btn btn--sm btn--primary" onClick={onGoCurrent}>
+              <Button type="button" size="sm" variant="primary" onClick={onGoCurrent}>
                 작업 화면으로
-              </button>
+              </Button>
             ) : (
               <span className="jobs__cur">열려 있음</span>
             )
@@ -239,16 +409,17 @@ export default function JobsPanel(props: Props) {
             j.noFile ? (
               <>
               {listInfo(j).html && (
-                <TipWrap disabled={busy} content="PSD 원본 없이 저장된 HTML을 봅니다.">
-                <button className="btn btn--sm" disabled={busy} onClick={() => onView(j)}>
+                // 저장된 HTML 이 있으면 PSD 없이도 연다 — 이미지가 서버에 다 있으면 복사·붙여넣기로 끝 (2026-11-25)
+                <TipWrap disabled={busy} content="PSD 없이 저장된 결과를 엽니다 — 이미지가 서버에 다 있는지 확인한 뒤 HTML을 복사할 수 있습니다.">
+                <Button size="sm" variant="soft" disabled={busy} onClick={() => onView(j)}>
                   {busy && <span className="spinner" aria-hidden="true" />}
-                  결과 보기
-                </button>
+                  열기
+                </Button>
                 </TipWrap>
               )}
-              <TipWrap disabled={busy} content={`이 PC 브라우저에 PSD 원본이 없습니다. 공유 폴더(${PSD_DIR})의 같은 PSD를 고르면 이어서 열립니다.`}>
+              <TipWrap disabled={busy} content={`이 PC 브라우저에 PSD 원본이 없습니다. 공유 폴더(${PSD_DIR})의 같은 PSD를 고르면 이어서 열립니다 — 다시 만들기·수정 요청·이미지 다시 올리기는 PSD가 있어야 합니다.`}>
               <button
-                className="btn btn--sm btn--soft"
+                className={`btn btn--sm${listInfo(j).html ? '' : ' btn--soft'}`}
                 disabled={busy}
                 onClick={() => {
                   setPickFor(j);
@@ -261,22 +432,19 @@ export default function JobsPanel(props: Props) {
               </TipWrap>
               </>
             ) : (
-              <button className="btn btn--sm btn--soft" disabled={busy} onClick={() => onOpen(j)}>
+              <Button size="sm" variant="soft" disabled={busy} onClick={() => onOpen(j)}>
                 {/* 만드는 중·여는 중이라 못 누를 때는 왼쪽에 도는 표시 — 멈춘 게 아니라 기다리는 중임을 알린다 */}
                 {busy && <span className="spinner" aria-hidden="true" />}
                 열기
-              </button>
+              </Button>
             )
           )}
-          {/* 휴지통으로 옮기기만 하므로(기간 안에 복원 가능) 한 번에 누르면 된다 */}
-          {/* 글자 대신 휴지통 아이콘 (줄마다 반복 — 자리 절약). 뜻은 툴팁·화면 읽기 이름으로 (2026-11-24) */}
-          <TipWrap disabled={busy && cur} content={busy && cur ? '만드는 중인 작업은 휴지통으로 옮길 수 없습니다' : `휴지통으로 옮기기 (${TRASH_DAYS}일 안에 복원 가능)`}>
-          <button className="btn btn--sm btn--ghost btn--icon btn--trash" aria-label={`「${j.settings.productName || j.fileName}」 휴지통으로 옮기기`} disabled={busy && cur} onClick={() => remove(j)}>
-            <TrashIcon className="btn__ico" />
-          </button>
-          </TipWrap>
+          {/* 줄 끝 「⋯」 — 이미지 서버에서 지우기 · 휴지통으로 옮기기 (2026-11-25: 지우는 동작을 한곳에 모음) */}
+          <RowMenu job={j} locked={busy && cur} copy={onCopy && j.settings?.channel ? <CopySub job={j} all={props.jobs} busy={busy} onCopy={onCopy} /> : undefined} canDeleteImages={!!props.imageServer && listInfo(j).html} onEdit={props.onEditInfo && (() => setInfoFor(j))} onDeleteImages={() => setImgDel(j)} onTrash={() => remove(j)} />
         </span>
   );
+  const [imgDel, setImgDel] = useState<Job | null>(null);
+  const [infoFor, setInfoFor] = useState<Job | null>(null);
   // 변환 내역 표 정렬 (읽어 온 작업 안에서) — 기본 최근 순. 날짜는 묶음 줄 대신 날짜 칸에 (오늘 14:05 · 어제 09:12 · 11. 20. 14:05)
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'time', dir: -1 });
   const rows = recent || (sort.key === 'time' && sort.dir === -1) ? jobs : [...jobs].sort((x, y) => sortCmp(sort.key, x, y) * sort.dir);
@@ -286,6 +454,8 @@ export default function JobsPanel(props: Props) {
 
   return (
     <section className={`panel jobs${recent ? ' jobs--recent' : ''}`}>
+      <ImageDeleteDialog job={imgDel} onClose={() => setImgDel(null)} />
+      {props.onEditInfo && <JobInfoDialog job={infoFor} onClose={() => setInfoFor(null)} onSave={props.onEditInfo} />}
       <div className="jobs__head">
         <h2 className="panel__title">
           {recent ? '최근 작업' : '변환 내역'}{' '}
@@ -303,9 +473,9 @@ export default function JobsPanel(props: Props) {
         )}
         {!recent && trashN > 0 && (
           <Tip content={`지운 작업 — ${TRASH_DAYS}일 안에 복원할 수 있습니다`}>
-          <button type="button" className="btn btn--sm btn--ghost jobs__trash" onClick={onTrashOpen}>
+          <Button type="button" size="sm" className="jobs__trash" onClick={onTrashOpen}>
             <TrashIcon className="jobs__ico" /> 휴지통 {trashN}
-          </button>
+          </Button>
           </Tip>
         )}
       </div>
@@ -324,9 +494,9 @@ export default function JobsPanel(props: Props) {
           <span>
             「{removed.name}」을(를) 휴지통으로 옮겼습니다 ({TRASH_DAYS}일 안에 복원 가능).
           </span>
-          <button
+          <Button
             type="button"
-            className="btn btn--sm"
+            size="sm"
             disabled={busy}
             onClick={() => {
               onRestore(removed.id);
@@ -334,7 +504,7 @@ export default function JobsPanel(props: Props) {
             }}
           >
             되돌리기
-          </button>
+          </Button>
           <button type="button" className="jobs__undo-x" aria-label="알림 닫기" onClick={() => setRemoved(null)}>
             ×
           </button>
@@ -373,57 +543,23 @@ export default function JobsPanel(props: Props) {
               </span>
               <span className="jobs__acts">
                 <span className="btn btn--sm skel">열기</span>
-                <span className="btn btn--sm btn--ghost btn--icon skel">&nbsp;</span>
+                <span className="btn btn--sm btn--icon skel">&nbsp;</span>
               </span>
             </li>
           ))}
         </ul>
       )}
-      {/* 최근 작업(만들기 첫 화면)만 목록 — 변환 내역 화면은 아래 표 (hidden 속성은 .jobs__list 의 display 가 이겨서 아예 그리지 않는다) */}
-      {recent && jobs.length > 0 && (
-      <ul className="jobs__list">
-        {jobs.map((j, i) => {
-          const st = STATE[j.state];
-          const cur = j.id === currentId;
-          // 목록은 최근 수정순 → 날짜가 바뀌는 줄 앞에 날짜 머리를 끼운다 (같은 표 칸을 쓰도록 같은 ul 안에)
-          const newDay = i === 0 || dayStart(jobs[i - 1].updatedAt) !== dayStart(j.updatedAt);
-          const ch = channelOf(j);
-          return (
-            <Fragment key={j.id}>
-            {newDay && (
-              <li className="jobs__day" role="presentation">
-                {dayLabel(j.updatedAt)}
-              </li>
-            )}
-            <li className={`jobs__row ${cur ? 'is-cur' : ''}`}>
-              <Tip content={j.error}>
-              <span className="jobs__name">
-                <b>{j.settings.productName || j.fileName}</b>
-                <small>
-                  {ch && <span className="jobs__ch">{ch}</span>}
-                  {j.fileName} · {fmtBytes(j.fileSize)}
-                  {j.noFile ? ' · 이 PC에 PSD 없음' : ''}
-                </small>
-              </span>
-              </Tip>
-              <span className={`badge ${st.tone ? `badge--${st.tone}` : ''}`}>{st.label}</span>
-              <span className="jobs__prog">{progress(j)}</span>
-              <Tip content={when(j.updatedAt)}>
-                <span className="jobs__time">{timeOf(j.updatedAt)}</span>
-              </Tip>
-              {acts(j, cur)}
-            </li>
-            </Fragment>
-          );
-        })}
-      </ul>
-      )}
-      {!recent && jobs.length > 0 && (
+      {/* 최근 작업(만들기 첫 화면)도 변환 내역과 같은 표 (2026-11-25 — 두 화면이 같은 칸·같은 단추로 읽히게). 최근 5건이라 정렬은 없이 최근 순 */}
+      {jobs.length > 0 && (
         <div className="jtable__wrap">
           <table className="jtable">
             <thead>
               <tr>
-                {SORT_COLS.map(([key, label, cls]) => (
+                {SORT_COLS.map(([key, label, cls]) => recent ? (
+                  <th key={key} className={cls}>
+                    {label}
+                  </th>
+                ) : (
                   <th key={key} className={cls} aria-sort={sort.key === key ? (sort.dir === 1 ? 'ascending' : 'descending') : undefined}>
                     <button
                       type="button"
@@ -447,23 +583,44 @@ export default function JobsPanel(props: Props) {
                   <Fragment key={j.id}>
                     <tr className={cur ? 'is-cur' : ''}>
                       <td className="jtable__c-name">
-                        <Tip content={j.error}>
-                          <span className="jobs__name">
-                            <b>{j.settings.productName || j.fileName}</b>
-                            <small>
-                              {j.fileName}
-                              <span className="jtable__size"> · {fmtBytes(j.fileSize)}</span>
-                              {j.noFile ? ' · 이 PC에 PSD 없음' : ''}
-                            </small>
-                          </span>
+                        {(() => {
+                          const body = (
+                            <>
+                              <NameLine j={j} />
+                              <MemoLine j={j} />
+                              <small>
+                                {j.fileName}
+                                <span className="jtable__size"> · {fmtBytes(j.fileSize)}</span>
+                                {j.noFile ? ' · 이 PC에 PSD 없음' : ''}
+                              </small>
+                            </>
+                          );
+                          // 이름 칸을 눌러도 그 줄의 주 단추와 같은 일 (작업 화면으로 · 열기 · PSD 고르기) — 2026-11-25
+                          const go = openOf(j, cur);
+                          return (
+                            <Tip content={j.error}>
+                              {go ? (
+                                <button type="button" className="jobs__name jobs__name--go" onClick={go}>
+                                  {body}
+                                </button>
+                              ) : (
+                                <span className="jobs__name">{body}</span>
+                              )}
+                            </Tip>
+                          );
+                        })()}
+                      </td>
+                      <td className="jtable__c-ch">{groupOf(j) || '—'}</td>
+                      <td className="jtable__c-who">
+                        <Tip content={whoTip(j)}>
+                          <span>{whoOf(j) || '—'}</span>
                         </Tip>
                       </td>
-                      <td className="jtable__c-ch">{channelOf(j) || '—'}</td>
                       <td className="jtable__c-state">
                         <span className={`badge ${st.tone ? `badge--${st.tone}` : ''}`}>{st.label}</span>
                       </td>
                       <td className="jtable__c-time">
-                        <Tip content={`${dayLabel(j.updatedAt)} ${clock(j.updatedAt)} · ${ago(j.updatedAt)}`}>
+                        <Tip content={`${dayHeading(j.updatedAt)} ${clock(j.updatedAt)} · ${ago(j.updatedAt)}`}>
                           <span className="jobs__time">{dateCell(j.updatedAt)}</span>
                         </Tip>
                       </td>
@@ -479,9 +636,9 @@ export default function JobsPanel(props: Props) {
       )}
       {more && (
         <div className="jobs__more">
-          <button className="btn btn--sm btn--ghost" disabled={loading} onClick={onMore}>
+          <Button size="sm" disabled={loading} onClick={onMore}>
             {loading ? '불러오는 중…' : '더 보기'}
-          </button>
+          </Button>
         </div>
       )}
       <input
@@ -514,16 +671,16 @@ function TrashView({ trash, trashLoading, busy, onTrashClose, onRestore, onPurge
             </span>
           )}
         </h2>
-        <button type="button" className="btn btn--sm btn--ghost" onClick={onTrashClose}>
+        <Button type="button" size="sm" onClick={onTrashClose}>
           ← 변환 내역
-        </button>
+        </Button>
       </div>
       {!trash.length && !trashLoading && <p className="hint jobs__empty">휴지통이 비었습니다.</p>}
       <ul className="jobs__list" hidden={!trash.length}>
         {trash.map((j) => (
           <li key={j.id} className="jobs__row">
             <span className="jobs__name">
-              <b>{j.settings.productName || j.fileName}</b>
+              <NameLine j={j} />
               <small>
                 {j.fileName} · {fmtBytes(j.fileSize)}
               </small>
@@ -532,11 +689,11 @@ function TrashView({ trash, trashLoading, busy, onTrashClose, onRestore, onPurge
             <span className="jobs__prog">{j.deletedAt ? `${ago(j.deletedAt)} 지움` : ''}</span>
             <span className="jobs__time">{j.deletedAt ? `${daysLeft(j.deletedAt)}일 후 삭제` : ''}</span>
             <span className="jobs__acts">
-              <button className="btn btn--sm" disabled={busy || trashLoading} onClick={() => onRestore(j.id)}>
+              <Button size="sm" disabled={busy || trashLoading} onClick={() => onRestore(j.id)}>
                 복원
-              </button>
+              </Button>
               <button
-                className={`btn btn--sm btn--ghost ${armed === j.id ? 'is-danger' : ''}`}
+                className={`btn btn--sm ${armed === j.id ? 'is-danger' : ''}`}
                 disabled={busy || trashLoading}
                 title="되돌릴 수 없습니다"
                 onClick={() => (armed === j.id ? (setArmed(null), onPurge(j.id)) : setArmed(j.id))}

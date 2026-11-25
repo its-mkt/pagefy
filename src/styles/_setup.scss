@@ -333,6 +333,23 @@
 
 .setup__extra { margin-top: 0.75rem; }
 
+// 작업 기록 (담당자·메모·테스트용) — 추가 지시(Claude 로 감)와 가는 선으로 나눠 「기록용」임을 보인다
+.setup__memo {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  row-gap: 0.75rem;
+  &-head {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.25rem 0.5rem;
+    b { font-size: 0.875rem; color: var(--ink); }
+  }
+}
+
+
 // 큰 만들기 버튼
 // Radix Themes Button 크기 4 (48px)
 .btn.btn--go {

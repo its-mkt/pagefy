@@ -41,6 +41,52 @@ export function TrashIcon({ className }: IconProps) {
   );
 }
 
+/** 그림 + 빗금 — 이미지 지우기 (변환 내역 「이미지 서버에서 지우기」) */
+export function ImageOffIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 3l18 18M9 4h11v11M20 20H4V6M4 16l5-5 3 3M14 10h.01" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="square" />
+    </svg>
+  );
+}
+
+/** 연필 — 고치기 (변환 내역 「작업 정보 편집」) */
+export function PencilIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 20h4L19 9l-4-4L4 16v4zM13.5 6.5l4 4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 더 보기 — 가로 점 세 개 (변환 내역 줄 끝 메뉴) */
+export function MoreIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 8h.01M8 8h.01M13 8h.01" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="square" />
+    </svg>
+  );
+}
+
+/** 눈 — 미리보기 (결과 화면의 「에디터 미리보기」) */
+export function EyeIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+/** 복제 — 겹친 두 장 + 더하기 (변환 내역의 「다른 판매처용 복제」) */
+export function CopyIcon({ className }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 8V4h12v12h-4M4 8h12v12H4zM10 11v6M7 14h6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="square" />
+    </svg>
+  );
+}
+
 /** 자물쇠 (로그인·권한 안내) */
 export function LockIcon({ className }: IconProps) {
   return (

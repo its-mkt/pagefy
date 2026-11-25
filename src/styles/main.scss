@@ -4,6 +4,7 @@
 @use 'stepper';
 @use 'operate';
 @use 'radix';
+@use 'tester';
 
 :root { @include light; }
 :root[data-theme='dark'] { @include dark; }
@@ -97,7 +98,7 @@ button:disabled, [aria-disabled='true'] { cursor: not-allowed; }
     &.is-busy { cursor: not-allowed; &:hover h1 { color: inherit; } }
   }
 
-  // 로고 이미지 (src/assets/pagefy.svg — 둥근 보라 네모가 그림 안에 있음)
+  // 로고 이미지 (src/assets/pagefy.svg — 보라 네모가 그림 안에 있음, 모서리 0. 파비콘도 같은 파일)
   &__mark {
     width: 2rem;
     height: 2rem;
@@ -235,6 +236,11 @@ button:disabled, [aria-disabled='true'] { cursor: not-allowed; }
   &--warn { color: var(--amber-a11); background: var(--amber-a3); }
   &--error { color: var(--red-a11); background: var(--red-a3); }
   &--acc { color: var(--indigo-a11); background: var(--indigo-a3); }
+  // 판매처 묶음 (변환 내역 제품명 옆) — 고도몰 보라 · 오픈마켓 주황 (상태 색 초록·노랑·빨강, 단추 색 회색·파랑과 겹치지 않게)
+  &--godo { color: var(--violet-a11); background: var(--violet-a3); }
+  &--om { color: var(--orange-a11); background: var(--orange-a3); }
+  // 테스트용 작업 (작업 기록) — 면 없이 점선 테두리: 판매처 배지(보라·주황)·상태 배지와 모양으로 구분
+  &--test { color: var(--slate-a11); background: none; outline: 1px dashed var(--slate-a8); outline-offset: -1px; }
 }
 
 // 패널 — 테두리 없이 흰 면
@@ -292,9 +298,10 @@ h3 {
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: $sp-4;
 
-  label { display: grid; gap: $sp-2; align-content: start; }
-  label > small { margin-top: calc(#{$sp-row} - #{$sp-2}); } // 칸 → 도움말은 이름 → 칸보다 조금 붙인다
-  label > span { font-size: 0.75rem; color: var(--sub); font-weight: 500; }
+  // 칸 이름 + 입력 칸을 세로로 — 체크박스(CheckField, label.ck)는 상자와 글자가 한 줄이라 뺀다 (.ck 모양은 _radix.scss)
+  label:not(.ck) { display: grid; gap: $sp-2; align-content: start; }
+  label:not(.ck) > small { margin-top: calc(#{$sp-row} - #{$sp-2}); } // 칸 → 도움말은 이름 → 칸보다 조금 붙인다
+  label:not(.ck) > span { font-size: 0.75rem; color: var(--sub); font-weight: 500; }
   small { color: var(--sub); font-size: 0.75rem; word-break: break-all; }
   &__wide { grid-column: 1 / -1; }
 
@@ -320,7 +327,8 @@ h3 {
 
 // 버튼 — 광고 인사이트 .btn (테두리 없는 면, 마우스를 올리면 연한 강조 바탕)
 // 단추 — Radix Themes Button (모서리 0). 크기 2(32px) · --sm 크기 1(24px)
-// 기본 = soft 회색(보조 동작) · --primary = solid 강조 · --ghost = ghost · .is-danger = solid 빨강
+// 기본 = soft 회색(보조 동작) · --primary = solid 강조 · .is-danger = solid 빨강
+// 글자 단추는 늘 면이 있다 — 바탕 없는 모양은 아이콘만 있는 --icon 에만 (2026-11-25: ghost 를 없앰 — 글자와 단추가 헷갈려서)
 .btn {
   display: inline-flex;
   align-items: center;
@@ -356,12 +364,6 @@ h3 {
     &:hover:not(:disabled) { background: var(--indigo-a4); }
     &:active:not(:disabled) { background: var(--indigo-a5); }
   }
-  &--ghost {
-    background: transparent;
-    color: var(--slate-a11);
-    &:hover:not(:disabled) { background: var(--slate-a3); color: var(--slate-12); }
-    &:active:not(:disabled) { background: var(--slate-a4); }
-  }
   &.is-danger {
     background: var(--red-9);
     color: #fff;
@@ -369,14 +371,18 @@ h3 {
   }
   // 못 누를 때는 변형과 상관없이 Radix 처럼 옅은 회색
   &:disabled { background: var(--slate-a3); color: var(--slate-a8); cursor: not-allowed; filter: none; }
-  &--ghost:disabled { background: transparent; }
   &--sm { height: 2rem; gap: 0.375rem; padding: 0 0.75rem; font-size: 0.8125rem; line-height: 1rem; }
-  // 아이콘만 있는 정사각 단추 (뜻은 aria-label·툴팁으로) — 높이에 맞춰 폭도 같게
-  &--icon { padding: 0; aspect-ratio: 1; justify-content: center; }
-  // 지우기(휴지통) — 평소엔 조용한 회색, 올리거나 초점이 가면 연한 붉은 바탕 + 붉은 아이콘 (줄마다 반복돼 늘 붉으면 목록이 경고처럼 보임)
-  &--trash {
-    &:hover:not(:disabled), &:focus-visible { background: var(--red-a3); color: var(--red-a11); }
-    &:active:not(:disabled) { background: var(--red-a4); color: var(--red-a11); }
+  // 아이콘만 있는 정사각 단추 (뜻은 aria-label·툴팁으로) — 높이에 맞춰 폭도 같게. 아이콘 모양이 누를 수 있다는 신호라 바탕 없이 (줄마다 반복돼도 무겁지 않게)
+  &--icon {
+    padding: 0;
+    aspect-ratio: 1;
+    justify-content: center;
+    background: transparent;
+    color: var(--slate-a11);
+    &:hover:not(:disabled) { background: var(--slate-a3); color: var(--slate-12); }
+    &:active:not(:disabled) { background: var(--slate-a4); }
+    &:disabled { background: transparent; }
+    &[data-state='open'] { background: var(--slate-a4); color: var(--slate-12); }
   }
   &__ico { width: 1rem; height: 1rem; flex: none; }
 }
@@ -641,8 +647,33 @@ h3 {
     min-width: 0;
     b, small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     b { font-weight: 600; }
-    small { color: var(--sub); font-size: 0.75rem; }
   }
+  // 제품명 + 묶음 배지 한 줄 — 이름이 길면 이름만 줄임표, 배지는 늘 보이게
+  &__title { display: flex; align-items: center; gap: $sp-2; min-width: 0; b { min-width: 0; } }
+  &__group { flex: none; min-height: 1.125rem; padding: 0 0.3125rem; font-size: 0.6875rem; }
+  &__name {
+    small { color: var(--sub); font-size: 0.75rem; }
+    // 눌러서 여는 이름 칸 (button) — 단추 모양은 없이 글자 그대로, 올리면 제품명에 밑줄 + 손가락 (누를 수 있다는 신호)
+    // 누르는 자리는 글자 길이만큼만 (2026-11-25 사용자): 칸은 글자 폭으로 줄이고(inline-grid · 줄마다 왼쪽 맞춤),
+    // 줄 사이·짧은 줄 옆 빈 곳은 눌리지 않게 단추 자체는 pointer-events 를 끄고 글자 줄에만 켠다 (눌림은 글자 → 단추로 올라감)
+    &--go {
+      display: inline-grid;
+      justify-items: start;
+      max-width: 100%;
+      padding: 0;
+      border: 0;
+      background: none;
+      font: inherit;
+      color: inherit;
+      text-align: left;
+      pointer-events: none;
+      > * { max-width: 100%; pointer-events: auto; cursor: pointer; }
+      &:hover .jobs__title b { text-decoration: underline; text-underline-offset: 0.1875rem; }
+      &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: 2px; }
+    }
+  }
+  // 작업 기록 메모 — 제품명과 파일명 사이 한 줄 (길면 줄임표). 「테스트」는 제목 줄 배지
+  &__memo { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; color: var(--ink2); }
 
   &__prog, &__time { font-size: 0.75rem; color: var(--sub); font-variant-numeric: tabular-nums; }
   &__acts { display: flex; gap: 0.25rem; justify-content: flex-end; align-items: center; }
@@ -705,16 +736,6 @@ h3 {
     line-height: 1.5;
   }
   &__count { margin-left: auto; font-size: 0.75rem; color: var(--sub); font-variant-numeric: tabular-nums; }
-  // 날짜 머리 — 표 칸 전체를 차지하는 한 줄
-  &__day {
-    grid-column: 1 / -1;
-    padding: $sp-4 $sp-1 $sp-1;
-    font-size: 0.75rem;
-    font-weight: 700;
-    color: var(--ink2);
-    &:first-child { padding-top: 0; }
-  }
-  &__ch { color: var(--accink); font-weight: 600; margin-right: 0.375rem; }
   // 지운 직후 되돌리기 알림
   &__undo {
     margin: 0 0 0.5rem;
@@ -767,8 +788,23 @@ h3 {
 // 저장된 결과 보기 (PSD 원본 없이)
 .saved {
   scroll-margin-top: 5rem; // 위에 붙은 머리글에 제목이 가리지 않게
-  &__note { margin: 0 0 0.75rem; }
-  &__acts.actions { margin: 0 0 0.75rem; gap: 0.5rem; }
+  // 이미지가 서버에 다 있는지 (= 바로 붙여넣어도 되는지)
+  &__status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: $sp-1 $sp-2;
+    margin: 0 0 $sp-3;
+    padding: $sp-3 $sp-4;
+    background: var(--tile);
+    color: var(--sub);
+    font-size: 0.8125rem;
+    &--ok { @include callout(green); }
+    &--missing { @include callout(red); span { flex-basis: 100%; } .link-btn { margin-left: 0; padding-left: 0; } }
+  }
+  &__acts.actions { margin: 0 0 0.75rem; gap: 0.5rem; align-items: center; }
+  &__close { margin-left: auto; }
+  &__more { margin: 0 0 $sp-3; }
   &__frame {
     overflow: auto;
     max-height: 80vh;
@@ -779,7 +815,7 @@ h3 {
 }
 
 // 변환 내역 표 (#jobs 화면) — Radix Themes Table 느낌: 머리는 옅은 바탕·보조 글자, 줄 사이 옅은 선, 열린 작업 줄은 강조 바탕
-// 좁아지면 섹션·용량 칸을 먼저 숨긴다. 최근 작업(만들기 첫 화면)은 위 .jobs__list 목록 그대로
+// 좁아지면 섹션·용량 칸을 먼저 숨긴다. 최근 작업(만들기 첫 화면)도 같은 표 (머리 정렬 단추만 없음)
 .jtable__wrap { overflow-x: auto; }
 .jtable {
   width: 100%;
@@ -814,13 +850,161 @@ h3 {
 
   &__c-name { width: 100%; min-width: 14rem; max-width: 0; } // 남는 폭을 제품명이 쓴다 (max-width 0 + 말줄임)
   &__c-ch, &__c-state, &__c-time, &__c-prog { white-space: nowrap; }
-  &__c-ch { color: var(--accink); font-weight: 500; }
+  &__c-ch { color: var(--ink2); } // 묶음(고도몰·오픈마켓)만 — 어느 쇼핑몰인지는 제품명 옆 배지가 눈에 띄게
+  // 담당 — 이름이 길면 말줄임 (전체는 마우스 올림 글)
+  &__c-who { max-width: 8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.8125rem; color: var(--ink2); }
   &__c-time, &__c-prog { color: var(--sub); font-size: 0.75rem; }
   &__c-acts { white-space: nowrap; text-align: right; .jobs__acts { justify-content: flex-end; } }
 
   @media (max-width: 900px) { &__c-prog, &__size { display: none; } }
   @media (max-width: 640px) {
-    &__c-ch { display: none; }
+    &__c-ch, &__c-who { display: none; }
     th, td { padding-inline: 0.5rem; }
   }
+}
+
+// 변환 내역 줄의 「복제」(다른 판매처용) 메뉴 — 상자·항목 모양은 프로필 메뉴(.profile__pop · .profile__item)와 같다
+// 변환 내역 줄 끝 「⋯」 메뉴 (작업 정보 편집 · 이미지 서버에서 지우기 · 휴지통으로)
+// 상자(popover) 여백 = 항목 사이 간격 (2026-11-25 사용자): 상자 안쪽 0.5rem(8px) ≈ 항목 사이 4 + 1 + 4 = 9px. 항목(단추)은 넉넉하게 — 옆 0.75rem · 높이 2.25rem
+.jobs__rowmenu {
+  width: max-content; // 가장 긴 항목(이름 + 옆 설명)에 맞춰 — 넘치면 오른쪽 여백만 줄어 보임
+  min-width: 14rem;
+  padding: 0.5rem;
+  .profile__item { min-height: 2.25rem; padding: 0 0.75rem; }
+  .profile__sep { margin: 0.25rem 0; }
+  &-ico { display: inline-flex; align-items: center; gap: $sp-2; }
+  &-sub { color: var(--sub); font-size: 0.75rem; }
+  [data-highlighted] &-sub { color: inherit; }
+}
+
+// 확인 창 (Radix Dialog) — 가운데 떠 있는 상자 + 뒤를 어둡게
+.dlg__overlay { position: fixed; inset: 0; z-index: 60; background: var(--slate-a8); animation: rx-in 0.12s ease-out; }
+.dlg {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 61;
+  transform: translate(-50%, -50%);
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 4rem);
+  overflow: auto;
+  padding: $sp-5;
+  display: grid;
+  gap: $sp-3;
+  @extend %float; // 흰 면 + 떠 있는 그림자 (메뉴·달력과 같은 모양). z-index 는 위 61 이 이긴다
+  color: var(--ink2);
+  font-size: 0.875rem;
+  &:focus-visible { outline: none; }
+  &__title { margin: 0; font-size: 1.0625rem; color: var(--ink); }
+  &__sub { margin: -$sp-2 0 0; color: var(--sub); font-size: 0.8125rem; }
+  &__actions { display: flex; justify-content: flex-end; gap: $sp-2; margin-top: $sp-2; }
+  .msg { margin: 0; }
+}
+
+// 변환 내역 기간 (PeriodPicker) — 단추는 선택 상자(.sel) 그대로, 열면 왼쪽 빠른 선택 + 오른쪽 달력
+// 달력 칠하기(시작·끝 진한 면, 사이 옅은 면, 일 빨강·토 파랑)는 광고 인사이트 달력과 같은 규칙
+.period {
+  &.is-on .sel__value { color: var(--ink); font-weight: 600; }
+  &__pop {
+    @extend %float;
+    display: flex;
+    gap: $sp-3;
+    padding: $sp-3;
+    animation: rx-in 0.1s ease-out;
+    &:focus-visible { outline: none; }
+  }
+  &__presets {
+    margin: 0;
+    padding: 0 $sp-3 0 0;
+    list-style: none;
+    display: grid;
+    align-content: start;
+    gap: 0.125rem;
+    border-right: 1px solid var(--line);
+  }
+  &__preset {
+    @extend %item;
+    width: 100%;
+    min-width: 6.5rem;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 0.8125rem;
+    &.is-on { color: var(--indigo-11); font-weight: 600; }
+    &:hover { background: var(--slate-a3); }
+    &:focus-visible { @extend %focus; }
+  }
+  &__cal { display: grid; gap: $sp-2; width: 15.75rem; }
+  &__head { display: flex; align-items: center; justify-content: space-between; }
+  &__title { font-size: 0.875rem; color: var(--ink); }
+  &__nav {
+    display: inline-grid;
+    place-items: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border: 0;
+    background: none;
+    color: var(--slate-a11);
+    cursor: pointer;
+    svg { width: 0.875rem; height: 0.875rem; }
+    &:hover:not(:disabled) { background: var(--slate-a3); }
+    &:disabled { color: var(--slate-a7); cursor: default; }
+    &:focus-visible { @extend %focus; }
+  }
+  &__prev { transform: rotate(180deg); }
+  &__grid { display: grid; grid-template-columns: repeat(7, 2.25rem); row-gap: 0.125rem; }
+  &__wd { height: 1.75rem; display: grid; place-items: center; font-size: 0.6875rem; color: var(--sub); &.sun { color: var(--red-11); } &.sat { color: var(--blue-11); } }
+  &__day {
+    height: 2rem;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 0.8125rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    cursor: pointer;
+    &.sun { color: var(--red-11); }
+    &.sat { color: var(--blue-11); }
+    &.today { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+    &:hover:not(:disabled) { background: var(--slate-a3); }
+    &.in { background: var(--indigo-a3); }
+    &.start, &.end { background: var(--indigo-9); color: #fff; }
+    &:disabled { color: var(--slate-a7); cursor: default; }
+    &:focus-visible { @extend %focus; position: relative; }
+  }
+  &__sum { margin: 0; font-size: 0.75rem; color: var(--sub); min-height: 1.125rem; }
+  &__actions { display: flex; justify-content: flex-end; gap: $sp-2; }
+}
+
+// 「작업 정보 편집」 창 — 칸은 만들기 설정의 작업 기록과 같다 (JobInfoFields)
+.jobinfo {
+  &__form { display: grid; gap: $sp-3; }
+  &__fields { margin: 0; padding: 0; border: 0; min-width: 0; row-gap: $sp-3; }
+}
+
+// 「이미지 서버에서 지우기」 확인 창 내용
+.imgdel {
+  &__wait { display: flex; align-items: center; gap: $sp-2; margin: 0; color: var(--sub); }
+  &__path { margin: 0; code { font: 0.75rem/1.5 $mono; color: var(--ink2); word-break: break-all; } }
+  &__sum { margin: 0; padding-left: 1.125rem; display: grid; gap: $sp-1; b { color: var(--ink); } }
+  &__warn { display: grid; gap: $sp-1; padding: $sp-3 $sp-4; @include callout(red); span { font-size: 0.8125rem; } }
+  &__done { display: grid; gap: $sp-2; p { margin: 0; } b { color: var(--ink); } }
+}
+
+.jobs__copy-arrow { margin-left: auto; padding-left: 0.5rem; opacity: 0.6; }
+.jobs__copy {
+  width: 16rem;
+  &-head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.25rem 0.75rem;
+    b { font-size: 0.875rem; color: var(--slate-12); }
+    span { font-size: 0.75rem; color: var(--sub); line-height: 1.4; white-space: normal; }
+  }
+  &-group { padding: 0.25rem 0.75rem; color: var(--sub); font-size: 0.75rem; font-weight: 600; }
+  &-has { color: var(--sub); font-style: normal; font-size: 0.75rem; }
+  &-free, &-cost { font-size: 0.75rem; }
+  &-free { color: var(--green-11); }
+  &-cost { color: var(--sub); }
 }

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Button } from './components/Button';
 import type { Session } from '@supabase/supabase-js';
 import { type GenerateMeta, type HealthInfo, type PlanBundle, type PsdSummary, type SectionRequest, type UsageInfo, imageBaseUrl } from '../shared/types';
 import { CLOUD, collect, fetchHealth, uploadCheck, uploadFiles, uploadRemove, uploadVerify, type UploadedItem, type UploadTarget } from './lib/api';
 import { canUse, fetchRole, supabase, type Role } from './lib/supabase';
 import { bitmapToUrl, cutImages, localizeHtml, type CutImage } from './lib/images';
-import { checkOutput, parsePlanOutput, parseSectionOutput, type Check, type ParsedOutput } from './lib/output';
+import { checkOutput, copySection, parsePlanOutput, parseSectionOutput, type Check, type ParsedOutput } from './lib/output';
 import { fixRequest, fixScore, fmtScore, improved } from './lib/autofix';
 import { assembleHtml, assembleReport, type SectionOut } from './lib/assemble';
 import { generateMarkup, keepMap } from './lib/codegen';
@@ -12,9 +13,11 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, filterOn, fileKeyOf, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, sameFile, sameGroup, sameMeta, saveFile, savesToAccount, touchRunning, type Job, type JobFilter } from './lib/jobs';
+import { busyJobIds, deleteJob, filterOn, fileKeyOf, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform } from './lib/jobs';
 import Header, { type View } from './components/Header';
 import HelpPanel from './components/HelpPanel';
+import TesterPanel, { type TesterSource } from './components/TesterPanel';
+import { editorFor } from './lib/editorSim';
 import AdminPanel from './components/AdminPanel';
 import { BUDGET_WARN_RATIO } from '../shared/ops';
 import { CHANNEL_LABEL } from '../shared/types';
@@ -102,8 +105,8 @@ function readRoute(): Route {
   const q = new URLSearchParams(window.location.search);
   return { markup: q.get('markup') || undefined, rev: q.get('rev') || undefined, job: q.get('job') || undefined, html: q.get('view') === 'html', trash: q.has('trash') };
 }
-/** 메뉴 화면 (#jobs · #help · #admin) — 작업 주소(?markup=…)와 따로 움직인다 */
-const VIEW_OF_HASH: Record<string, View> = { '#jobs': 'jobs', '#help': 'help', '#admin': 'admin' };
+/** 메뉴 화면 (#jobs · #tester · #help · #admin) — 작업 주소(?markup=…)와 따로 움직인다 */
+const VIEW_OF_HASH: Record<string, View> = { '#jobs': 'jobs', '#tester': 'tester', '#help': 'help', '#admin': 'admin' };
 const viewOfHash = (): View => VIEW_OF_HASH[window.location.hash] ?? 'work';
 function routeUrl(r: Route) {
   const view = r.html ? '&view=html' : '';
@@ -189,6 +192,8 @@ export default function App() {
   // 로그인 (배포 모드에서만 — 광고 인사이트 계정)
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(!CLOUD);
+  /** 만든 사람 — 작업에 남기는 이름 (광고 인사이트 계정 이름, 없으면 이메일 앞부분). 로컬 개발은 확인용 이름 */
+  const me = CLOUD ? (session ? session.user.user_metadata?.name || session.user.email?.split('@')[0] : undefined) : LOCAL_USER.name;
   const [role, setRole] = useState<Role | null>(CLOUD ? null : 'admin');
 
   const [health, setHealth] = useState<HealthInfo | null>(null);
@@ -206,6 +211,8 @@ export default function App() {
     publicRoot: readLocal('pagefy.publicRoot', DEFAULT_PUBLIC_ROOT),
     extra: '',
   }));
+  /** 지금 작업의 기록 (담당자·메모·테스트) — 설정과 따로 작업의 note 에 저장. 담당자는 다음 PSD 에도 이어 쓴다 (같은 사람 일을 몰아서 하는 경우가 많음) */
+  const [note, setNote] = useState<JobNote>({});
   const [run, setRun] = useState<RunState>(emptyRun);
   const [result, setResult] = useState<Result | null>(null);
   /** PSD 원본 없이 보는 저장된 결과 */
@@ -391,6 +398,7 @@ export default function App() {
     writeLocal('pagefy.market', settings.market);
     writeLocal('pagefy.publicRoot', settings.publicRoot);
   }, [settings.channel, settings.market, settings.publicRoot]);
+  useEffect(() => writeLocal('pagefy.assignee', note.assignee ?? ''), [note.assignee]);
 
   // 작업 목록 불러오기 — 새로고침으로 끊긴 작업은 "중단됨"
   useEffect(() => {
@@ -408,12 +416,20 @@ export default function App() {
     );
   }, [allowed]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 설정을 바꾸면 작업에도 저장 (입력 중엔 잠깐 기다렸다가)
+  // 설정을 바꾸면 작업에도 저장 (입력 중엔 잠깐 기다렸다가) — 판매처는 작업의 고정 값이라 그대로 둔다 (settingsToSave, lib/jobs.ts)
   useEffect(() => {
-    if (!jobRef.current || jobRef.current.id !== jobId) return;
-    const t = setTimeout(() => updateJob({ settings }), 500);
+    const j = jobRef.current;
+    if (!j || j.id !== jobId) return;
+    const t = setTimeout(() => updateJob((cur) => ({ settings: settingsToSave(cur, settings) })), 500);
     return () => clearTimeout(t);
   }, [settings, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 작업 기록도 따로 저장 — 이미 같은 값이면 쓰지 않는다 (작업을 열 때마다 수정 시각이 바뀌지 않게)
+  useEffect(() => {
+    const j = jobRef.current;
+    if (!j || j.id !== jobId || sameNote(j.note, note)) return;
+    const t = setTimeout(() => updateJob({ note }), 500);
+    return () => clearTimeout(t);
+  }, [note, jobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const running = run.phase === 'running';
   // 생성이 끝날 때마다 이번 달 사용액(상한 경고)을 다시 읽는다
@@ -469,6 +485,52 @@ export default function App() {
       file = picked;
     }
     await openPsd(file, job);
+  }
+
+  /** 변환 내역 「⋯ → 작업 정보 편집」 저장 (담당자·메모·테스트) — 어느 작업이든 같은 저장. 지금 열린 작업이면 화면의 작업 기록 칸도 맞춘다 */
+  async function editJobNote(job: Job, n: JobNote) {
+    const open = jobRef.current?.id === job.id;
+    const saved = await saveJobNote(open ? jobRef.current! : job, n);
+    if (open && jobRef.current?.id === job.id) {
+      jobRef.current = saved;
+      setNote(n);
+    }
+    refreshJobs(true);
+  }
+
+  /** 변환 내역의 「복제」: 같은 PSD 로 다른 판매처용 새 작업을 만들어 연다 (원래 작업은 그대로) */
+  async function copyToPlatform(job: Job, to: Platform) {
+    if (loading || running) return;
+    let src: Job;
+    try {
+      src = await fullJob(job);
+    } catch (e) {
+      setLoadError((e as Error).message);
+      return;
+    }
+    const settings: Settings = { ...src.settings, channel: to.channel, market: to.channel === 'openmarket' ? normMarket(to.market) : normMarket(src.settings.market) };
+    // 같은 묶음이면 계획을 옮기고 설정만 새 판매처로 → 열자마자 비용 없이 그 판매처 마크업이 계산된다
+    const planMeta: GenerateMeta | undefined = src.meta && { ...src.meta, channel: to.channel, market: to.channel === 'openmarket' ? settings.market : undefined };
+    const nj = forkJob(src, settings, { keepPlan: true, planMeta, creator: me });
+    await putJob(nj).catch((e) => console.warn('[jobs]', e));
+    refreshJobs(true);
+    // 같은 PSD 가 이미 열려 있으면 다시 읽지 않는다 (수십~수백 MB PSD 를 또 풀고 문서 크기 비트맵을 새로 만드는 데 몇 초) — 결과만 비우고 새 작업으로 바꿔 끼운다
+    const L = loadedRef.current;
+    if (L && sameFile(nj, L.file)) {
+      setViewJob(null);
+      setLoadError(null);
+      setResult(null);
+      setRevisionCount(0);
+      setAutoFix(null);
+      setRun(emptyRun());
+      jobRef.current = nj;
+      setJobId(nj.id);
+      setSettings({ ...nj.settings, market: normMarket(nj.settings.market) });
+      setNote(nj.note ?? {});
+      await restoreJob(nj);
+      return;
+    }
+    await openJob(nj);
   }
 
   async function showSaved(job: Job) {
@@ -532,10 +594,11 @@ export default function App() {
     }
   }
 
-  /** 새 작업으로 저장 (PSD 원본은 뒤에서 천천히) */
-  function newJob(file: File, s: Settings) {
+  /** 새 작업으로 저장 (PSD 원본은 뒤에서 천천히). 기록은 n — 없으면 담당자만 이어 쓰고 메모·테스트 표시는 비운다 */
+  function newJob(file: File, s: Settings, n: JobNote = { assignee: readLocal('pagefy.assignee', '') }) {
     const now = Date.now();
-    const nj: Job = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, fileKey: fileKeyOf(file), fileName: file.name, fileSize: file.size, settings: s, state: 'ready', sections: {}, failed: {}, revisionCount: 0 };
+    const nj: Job = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, fileKey: fileKeyOf(file), fileName: file.name, fileSize: file.size, settings: s, creator: me, note: n, state: 'ready', sections: {}, failed: {}, revisionCount: 0 };
+    setNote(n);
     jobRef.current = nj;
     setJobId(nj.id);
     putJob(nj)
@@ -751,6 +814,7 @@ export default function App() {
         jobRef.current = job;
         setJobId(job.id);
         setSettings({ ...job.settings, market: normMarket(job.settings.market) }); // 예전 작업엔 market 이 없다
+        setNote(job.note ?? {});
         await restoreJob(job);
         return;
       }
@@ -887,16 +951,26 @@ export default function App() {
     const L = loadedRef.current;
     if (!L || !workerRef.current) return;
     // 지금 열린 작업을 목록에서 지운 뒤에도 버튼이 먹히게 새 작업으로 다시 저장
-    if (!jobRef.current) newJob(L.file, settings);
+    if (!jobRef.current) newJob(L.file, settings, note);
     if (!jobRef.current) return;
     // 같은 작업을 두 탭에서 만들면 같은 섹션을 두 번 요청(비용 2배)하고 서로 결과를 덮어쓴다
     if ((await busyJobIds()).has(jobRef.current.id)) {
       setRun({ ...emptyRun(), phase: 'error', error: BUSY_MSG });
       return;
     }
+    const m = meta;
+    // 이미 만든 작업을 다른 판매처로 만들면 새 작업으로 갈라 저장한다 (같은 PSD 를 고도몰·스마트스토어·쿠팡에 모두 올리는 경우 — 원래 결과를 덮어쓰지 않게)
+    // 같은 묶음이면 계획을 옮겨 비용 없이 다시 계산, 묶음이 다르면 새 작업에서 계획부터 (Claude 1회)
+    const src = jobRef.current;
+    if (platformMoved(src, m)) {
+      const nj = forkJob({ ...src, note }, settings, { keepPlan: !fresh && !!resume?.code, creator: me });
+      jobRef.current = nj;
+      setJobId(nj.id);
+      // 기다리지 않는다 — 곧 생성 상태로 다시 저장하므로 계정 쓰기 한 번을 생성 시작 앞에 두지 않는다
+      putJob(nj).then(() => refreshJobs(true), (e) => console.warn('[jobs]', e));
+    }
     const ac = new AbortController();
     abortRef.current = ac;
-    const m = meta;
     const base = baseUrl;
     const saved = !fresh && resume ? jobRef.current : null;
     // 처음부터 다시 만들 때 실패해도 이전 결과·계획이 남게 (새 계획을 받기 전까지는 작업 기록을 지우지 않는다)
@@ -1191,8 +1265,8 @@ export default function App() {
       const big = r.images.find((im) => im.blob.size > 5 * 1024 * 1024);
       if (big) throw new Error(`${big.file} 이(가) 5MB 를 넘어 올릴 수 없습니다 (규칙 6절 목표 1MB). 그 섹션을 나누거나 사진을 줄여 다시 만드세요.`);
       const target = uploadTargetOf(r);
-      // HTML 이 가리키는 주소와 올릴 곳이 같아야 한다 (예전 날짜 폴더 방식으로 만든 결과는 다시 만들어야 함)
-      if (r.baseUrl !== imageBaseUrl(r.meta)) throw new Error('예전 방식(날짜 폴더) 주소로 만든 결과입니다. 「다시 만들기」로 새 주소의 HTML 을 만든 뒤 올려 주세요.');
+      // HTML 이 가리키는 주소와 올릴 곳이 같아야 한다 (예전 주소 규칙 — 날짜 폴더·플랫폼 폴더 없는 오픈마켓 — 으로 만든 결과는 다시 만들어야 함)
+      if (r.baseUrl !== imageBaseUrl(r.meta)) throw new Error('예전 주소 규칙(날짜 폴더, 플랫폼 폴더 없는 오픈마켓 등)으로 만든 결과입니다. 「다시 만들기」로 지금 규칙의 주소로 HTML 을 만든 뒤 올려 주세요.');
       set({ phase: 'checking', done: 0, total });
       const want = await Promise.all(r.images.map(async (im) => ({ file: im.file, size: im.blob.size, sha256: await sha256Hex(im.blob) })));
       const remote = await uploadCheck(target, ac.signal);
@@ -1393,9 +1467,21 @@ export default function App() {
   // 토큰 갱신 중(role 확인 중)이라도 이미 로그인돼 있으면 작업 화면을 유지한다
   const showLogin = CLOUD && authReady && !allowed && !(session && (role === null || role === 'guest'));
 
+  // 에디터 테스트(#tester)의 「지금 결과 불러오기」 — 복사 구간 + 채널에 맞는 에디터, 업로드 전 이미지는 미리보기에서만 브라우저 안 그림으로
+  const resultTester = useMemo<TesterSource | null>(
+    () => (result?.parsed.html ? testerSourceOf(result.parsed.html, result.meta, result.images.map((im) => [`${result.baseUrl}/${im.file}`, im.url] as [string, string])) : null),
+    [result],
+  );
+  // 「에디터 미리보기」로 넘어갈 때 에디터 테스트가 이것으로 시작한다 (지금 결과 또는 PSD 없이 연 저장된 결과). 에디터 테스트가 받으면 비운다 → 메뉴로 다시 들어오면 임시 저장본
+  const [testerStart, setTesterStart] = useState<TesterSource | null>(null);
+  const openTester = (src: TesterSource) => {
+    setTesterStart(src);
+    setView('tester');
+  };
+
   // 변환 내역 — 머리말 메뉴 「변환 내역」(#jobs) 전용 화면 + 만들기 첫 화면의 「최근 작업」(최근 5건, 2026-11-24)
-  const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash };
-  const recentJobs = showJobs && <JobsPanel {...jobsProps} mode="recent" onOpen={openJob} onView={showSaved} onShowAll={() => setView('jobs')} />;
+  const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash, imageServer: !!health?.upload, onEditInfo: editJobNote };
+  const recentJobs = showJobs && <JobsPanel {...jobsProps} mode="recent" onOpen={openJob} onView={showSaved} onCopy={copyToPlatform} onShowAll={() => setView('jobs')} />;
   // 변환 내역 화면에서 열면 만들기 화면으로 넘어가 연다 (PSD·결과는 만들기 화면에 그려진다)
   const jobsPage = (
     <JobsPanel
@@ -1409,6 +1495,10 @@ export default function App() {
       onOpen={(j, f) => {
         setView('work');
         openJob(j, f);
+      }}
+      onCopy={(j, to) => {
+        setView('work');
+        copyToPlatform(j, to);
       }}
       onView={(j) => {
         setView('work');
@@ -1469,6 +1559,7 @@ export default function App() {
               </p>
             )}
             {view === 'jobs' && allowed && jobsPage}
+            {view === 'tester' && allowed && <TesterPanel current={resultTester} start={testerStart} onStarted={() => setTesterStart(null)} />}
             {view === 'help' && <HelpPanel />}
             {view === 'admin' && role === 'admin' && <AdminPanel onChanged={() => fetchHealth().then(setHealth, () => {})} />}
             {view === 'admin' && role !== 'admin' && <p className="msg msg--error">관리 화면은 관리자만 볼 수 있습니다.</p>}
@@ -1481,13 +1572,27 @@ export default function App() {
               disabled={running}
               file={loaded ? { name: loaded.file.name, size: loaded.file.size, width: loaded.summary.width, height: loaded.summary.height, thumbUrl: loaded.compositeUrl } : null}
             />
-            {viewJob && <SavedView job={viewJob} onClose={() => setViewJob(null)} />}
+            {viewJob && (
+              <SavedView
+                job={viewJob}
+                onClose={() => setViewJob(null)}
+                imageServer={!!health?.upload}
+                godo={!!health?.godo && viewJob.meta?.channel === 'itket'}
+                onOpenTester={
+                  viewJob.html && viewJob.meta ? () => openTester(testerSourceOf(viewJob.html!, viewJob.meta!, [])) : undefined
+                }
+                onPickPsd={(f) => openJob(viewJob, f)}
+              />
+            )}
             {!loaded && allowed && recentJobs}
             {loaded && !hasResult && <SummaryPanel loaded={loaded} />}
             {loaded && (
               <SettingsPanel
                 collapsed={hasResult && run.phase !== 'error'}
                 blockers={blockers}
+                note={note}
+                onNoteChange={setNote}
+                me={jobRef.current?.creator ?? me}
                 settings={settings}
                 onChange={setSettings}
                 baseUrl={baseUrl}
@@ -1504,18 +1609,19 @@ export default function App() {
             {metaDiff.length > 0 && result && (
               <div className="metadiff" role="alert">
                 <b>설정이 결과와 다릅니다 — 아래 결과는 바뀌기 전 설정({CHANNEL_LABEL[result.meta.channel]}{result.meta.market ? ` · ${MARKETS[result.meta.market].label}` : ''})으로 만든 것입니다.</b>
-                <span>바뀐 것: {metaDiff.join(' · ')}. {resume?.code ? '같은 묶음 안에서 바꿔 저장된 구조 계획으로 비용 없이 다시 계산할 수 있습니다.' : '고도몰과 오픈마켓은 HTML 방식이 달라 구조 계획부터 다시 만들어야 합니다 (Claude 1회).'}</span>
+                <span>바뀐 것: {metaDiff.join(' · ')}. {resume?.code ? '같은 묶음 안에서 바꿔 저장된 구조 계획으로 비용 없이 다시 계산할 수 있습니다.' : '고도몰과 오픈마켓은 HTML 방식이 달라 구조 계획부터 다시 만들어야 합니다 (Claude 1회).'}
+                  {!samePlatform(result.meta, meta) && ' 판매처가 바뀌어 새 작업으로 저장되고, 원래 작업은 변환 내역에 그대로 남습니다.'}</span>
                 <span className="metadiff__actions">
-                  <button
+                  <Button
                     type="button"
-                    className="btn btn--sm"
+                    size="sm"
                     onClick={() => setSettings((s) => ({ ...s, productName: result.meta.productName, channel: result.meta.channel, ...(result.meta.market ? { market: result.meta.market } : {}), slug: result.meta.slug, rev: result.meta.rev, publicRoot: result.meta.publicRoot }))}
                   >
                     설정을 결과대로 되돌리기
-                  </button>
-                  <button type="button" className="btn btn--sm btn--primary" disabled={!canGenerate} onClick={() => generate()}>
+                  </Button>
+                  <Button type="button" size="sm" variant="primary" disabled={!canGenerate} onClick={() => generate()}>
                     {resume?.code ? '지금 설정으로 다시 계산 (비용 없음)' : '지금 설정으로 다시 만들기'}
-                  </button>
+                  </Button>
                 </span>
                 {/* 다시 만들기가 막힌 이유 — 설정 칸은 결과가 있으면 접혀 있어 거기 안내가 안 보인다 */}
                 {!canGenerate && blockers[0] && <small className="metadiff__why">다시 만들 수 없는 이유: {blockers[0]}</small>}
@@ -1542,6 +1648,9 @@ export default function App() {
                   setUpload({ phase: 'idle', done: 0, total: 0 });
                 }}
                 onUndoUpload={undoUpload}
+                onOpenTester={
+                  resultTester ? () => openTester(resultTester) : undefined
+                }
                 resumeLabel={resume ? (resume.code ? (resume.changed ? '지금 설정으로 다시 계산 (비용 없음)' : '저장된 계획으로 마무리 (비용 없음)') : `이어서 만들기 (남은 섹션 ${resume.missing}개)`) : undefined}
               />
               </div>
@@ -1566,9 +1675,17 @@ async function sha256Hex(b: Blob): Promise<string> {
   return [...new Uint8Array(h)].map((x) => x.toString(16).padStart(2, '0')).join('');
 }
 
-/** 업로드할 곳: <채널>/<슬러그>/ (규칙 6-1, 날짜 폴더 없음) */
+/**
+ * 에디터 테스트(#tester)에 넘길 HTML — 복사 구간 + 채널에 맞는 에디터.
+ * images = [이미지 서버 주소, 미리보기 주소] (업로드 전 이미지는 브라우저 안 그림으로 보이게. 저장된 결과는 서버 주소 그대로라 빈 목록)
+ */
+function testerSourceOf(html: string, m: GenerateMeta, images: [string, string][]): TesterSource {
+  return { html: copySection(html), label: `${m.productName} · ${platformLabel(m)}`, editor: editorFor(m), images };
+}
+
+/** 업로드할 곳: <채널>/<슬러그>/, 오픈마켓은 openmarket/<플랫폼>/<슬러그>/ (규칙 6-1 — shared/types.ts imageFolder 와 같은 규칙) */
 function uploadTargetOf(r: { meta: GenerateMeta }): UploadTarget {
-  return { channel: r.meta.channel, slug: r.meta.slug, publicRoot: r.meta.publicRoot };
+  return { channel: r.meta.channel, slug: r.meta.slug, ...(r.meta.channel === 'openmarket' ? { market: normMarket(r.meta.market) } : {}), publicRoot: r.meta.publicRoot };
 }
 
 /** 이미 서버에 있는 그림의 크기 (덮어쓰기 안내에서 크기가 바뀌는지 보려고). 열리지 않으면 null */

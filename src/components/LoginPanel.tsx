@@ -1,5 +1,6 @@
 // 로그인 — 회사 계정(광고 인사이트와 같은 계정). 가입·승인 요청·비밀번호 찾기는 광고 인사이트 화면에서 한다
 import { useState } from 'react';
+import { Button } from './Button';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, toLoginEmail, type Role } from '../lib/supabase';
 import { LockIcon } from './icons';
@@ -45,7 +46,7 @@ export default function LoginPanel({ session, role }: { session: Session | null;
         <div className="gate__actions">
           <span className="gate__account">{session.user.email}</span>
           {m.go && <a className="btn btn--primary" href={ACCOUNT_URL}>{m.go}</a>}
-          <button className="btn" onClick={() => supabase.auth.signOut()}>로그아웃</button>
+          <Button  onClick={() => supabase.auth.signOut()}>로그아웃</Button>
         </div>
       </GateShell>
     );
@@ -57,7 +58,7 @@ export default function LoginPanel({ session, role }: { session: Session | null;
         <input className={`gate__input${err ? ' is-err' : ''}`} name="username" placeholder="이메일" value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" autoFocus required />
         <input className={`gate__input${err ? ' is-err' : ''}`} type="password" name="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required />
         {err && <p className="gate__error" role="alert">{err}</p>}
-        <button className="btn btn--primary gate__submit" disabled={busy}>{busy ? '확인 중...' : '로그인'}</button>
+        <Button variant="primary" className="gate__submit" disabled={busy}>{busy ? '확인 중...' : '로그인'}</Button>
       </form>
       {/* 비밀번호 찾기·가입은 광고 인사이트 접속 화면에서 (?reset=1 = 비밀번호 찾기로 바로 열림) */}
       <p className="gate__method">
