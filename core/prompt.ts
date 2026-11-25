@@ -42,7 +42,7 @@ export function buildSystem(rulesText: string): Anthropic.Beta.BetaTextBlockPara
 }
 
 
-const channelFolder = (m: GenerateMeta) => ({ itket: '아이티켓', oncore: '온코어', openmarket: '오픈마켓' })[m.channel];
+const channelFolder = (m: GenerateMeta) => ({ itket: '아이티켓', oncore: '온코어', zbyhp: 'zbyhp', cadkorea: 'cadkorea', openmarket: '오픈마켓' })[m.channel];
 const htmlMode = (m: GenerateMeta) => (m.channel === 'openmarket' ? '7-3 오픈마켓 공용 (인라인 전용)' : '7-2 고도몰용 (<style> + 고유 접두사)');
 
 function jobBlock(meta: GenerateMeta) {

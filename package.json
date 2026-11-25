@@ -12,6 +12,7 @@
     "ag-psd": "^34.2.2",
     "express": "^5.3.0",
     "jszip": "^3.10.2",
+    "lucide-react": "^1.80.0",
     "modern-screenshot": "4",
     "radix-ui": "^1.8.1",
     "react": "^19.3.1",

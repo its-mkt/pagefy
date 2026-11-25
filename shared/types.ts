@@ -1,11 +1,15 @@
 // 화면(브라우저)과 서버가 함께 쓰는 데이터 모양
 import { normMarket } from './markets.ts';
 
-export type Channel = 'itket' | 'oncore' | 'openmarket';
+/** 고도몰 쇼핑몰 4곳 (2026-11-25: zbyhp·cadkorea 추가 — 같은 고도몰 상세 에디터) */
+export type GodoChannel = 'itket' | 'oncore' | 'zbyhp' | 'cadkorea';
+export type Channel = GodoChannel | 'openmarket';
 
 export const CHANNEL_LABEL: Record<Channel, string> = {
   itket: '아이티켓 (고도몰)',
   oncore: '온코어 (고도몰)',
+  zbyhp: 'zbyhp (고도몰)',
+  cadkorea: 'cadkorea (고도몰)',
   openmarket: '오픈마켓 (인라인 전용)',
 };
 

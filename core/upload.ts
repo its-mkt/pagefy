@@ -8,7 +8,7 @@
 //  - 화면 설정의 이미지 공개 주소 루트가 서버 설정(PUBLIC_BASE)과 같을 때만 (HTML 주소와 실제 올린 곳이 어긋나지 않게)
 //  - 함수 150초 제한: 마감 시각이 가까우면 남은 파일은 다음 요청으로 넘긴다 (화면이 이어서 보냄)
 import { type Dial, FtpClient } from './ftp.ts';
-import { imageFolder } from '../shared/types.ts';
+import { type Channel, imageFolder } from '../shared/types.ts';
 import { MARKETS } from '../shared/markets.ts';
 
 export interface FtpConfig {
@@ -74,7 +74,7 @@ export function ftpConfigFrom(get: (k: string) => string | undefined): FtpConfig
 /** 요청 값 확인. 문제가 있으면 문구, 없으면 null */
 export function checkTarget(cfg: FtpConfig, t: UploadTarget): string | null {
   if (!t || typeof t !== 'object') return '요청 값이 없습니다.';
-  if (!/^(itket|oncore|openmarket)$/.test(t.channel || '')) return '채널 값이 올바르지 않습니다.';
+  if (!/^(itket|oncore|zbyhp|cadkorea|openmarket)$/.test(t.channel || '')) return '채널 값이 올바르지 않습니다.';
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(t.slug || '') || t.slug.length > 80) return '서버 폴더 이름(제품슬러그)은 영문 소문자·숫자·하이픈만 됩니다.';
   // 오픈마켓은 플랫폼 폴더가 꼭 있어야 한다 — 없거나 모르는 값을 기본 플랫폼으로 바꿔 올리면 다른 플랫폼 파일을 덮을 수 있다
   if (t.channel === 'openmarket' && !(typeof t.market === 'string' && Object.hasOwn(MARKETS, t.market))) return '오픈마켓 플랫폼 값이 없거나 올바르지 않습니다.';
@@ -84,7 +84,7 @@ export function checkTarget(cfg: FtpConfig, t: UploadTarget): string | null {
 }
 
 /** 제품 폴더 (루트 아래 경로는 화면의 이미지 주소와 같은 규칙 — shared/types.ts imageFolder) */
-const pathOf = (t: UploadTarget) => imageFolder({ channel: t.channel as 'itket' | 'oncore' | 'openmarket', slug: t.slug, market: t.market });
+const pathOf = (t: UploadTarget) => imageFolder({ channel: t.channel as Channel, slug: t.slug, market: t.market });
 const folderOf = (cfg: FtpConfig, t: UploadTarget) => `${cfg.root}/${pathOf(t)}`;
 export const publicUrlOf = (cfg: FtpConfig, t: UploadTarget, file: string) => `${cfg.publicBase}/${pathOf(t)}/${file}`;
 

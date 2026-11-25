@@ -23,8 +23,8 @@ PSD를 원본으로 삼아 **HTML 마크업**으로 바꾼다. 담당자는 완�
 
 ```
 A_상세페이지/
-  detail_to_markup.md           ← 이 파일 (규칙 본문)
-  CLAUDE.md                     ← `@detail_to_markup.md` 한 줄 (Claude Code 가 자동으로 읽게 연결)
+  pagefy.md                     ← 이 파일 (규칙 본문, 2026-11-25 detail_to_markup.md 에서 이름 바꿈)
+  CLAUDE.md                     ← `@pagefy.md` 한 줄 (Claude Code 가 자동으로 읽게 연결)
   아이티켓/                       ← 채널 묶음 (고도몰)
     <제품명>/                     ← 폴더명 = 제품명 = PSD 파일명 (확장자 뺀 것)
       <제품명>.psd                원본 (수정 금지)

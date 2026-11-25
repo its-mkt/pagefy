@@ -9,7 +9,7 @@
 |---|---|---|
 | 화면 | GitHub `its-mkt/pagefy` → Pages (`main` push 하면 1~2분 뒤 반영) | 담당자 |
 | 생성 서버 | Supabase 프로젝트 `ad-insight DB`(tqxljgmygvanysqnhiar) 함수 `pagefy` | 담당자 |
-| 마크업 규칙 원본 | `\\192.168.1.254\마케팅팀\A_상세페이지\detail_to_markup.md` | 담당자·부담당자 |
+| 마크업 규칙 원본 | `\\192.168.1.254\마케팅팀\A_상세페이지\pagefy.md` | 담당자·부담당자 |
 | 로그인·권한 | 광고 인사이트 계정 (역할 admin·manager·member 만 생성 가능, admin 은 「관리」 화면도) | 광고 인사이트 관리자 |
 | 운영 기록 | DB 표 `pagefy_runs`(생성 기록) · `pagefy_feedback`(결과 평가 — 2026-11-24 화면에서 평가 막대를 빼서 더 쌓이지 않음) · `pagefy_settings`(월 상한) | 함수가 씀 |
 | 이미지 서버 | 고도몰 FTP — 함수 비밀값 `PAGEFY_FTP_*` | 담당자 |

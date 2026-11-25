@@ -2,7 +2,7 @@
 // - 로그인: 광고 인사이트(ad-insight) 계정을 그대로 쓴다. 승인 여부는 광고 인사이트 수집기 웹앱의 whoami 로 확인
 // - Claude API 키: Supabase 함수 비밀값 ANTHROPIC_API_KEY (코드·저장소에 없음)
 // - 무료 플랜 150초 제한 → 생성은 계획(/plan)과 섹션별(/section)로 나눠 부른다. 한 번에 140초가 넘으면 끊고 알린다
-// - 규칙: 저장소의 rules/detail_to_markup.md (공유 폴더 원본을 yarn sync:rules 로 복사해 push) 를 읽어 10분간 기억한다
+// - 규칙: 저장소의 rules/pagefy.md (공유 폴더 원본을 yarn sync:rules 로 복사해 push, 옛 이름 detail_to_markup.md 도 읽음) 를 읽어 10분간 기억한다
 // - core/·shared/ 는 저장소의 같은 폴더를 yarn build:function 으로 복사한 것 (직접 고치지 않는다)
 import Anthropic from '@anthropic-ai/sdk';
 import { buildPlanMessages, buildSectionMessages, buildSystem } from './core/prompt.ts';
@@ -56,26 +56,37 @@ const ALLOWED_ORIGINS = ['https://its.itket.com', 'http://localhost:1100', 'http
 /** 광고 인사이트 수집기 웹앱 (권한 판정: admins·members 명단) */
 const ROLE_URL = 'https://script.google.com/macros/s/AKfycbzQS9yMlp9L_eRaH77QWLsY6GOY7L5hyRk1fkuaAHg8GvJmHHwhPRgr2zWldgbX5-cNcg/exec';
 const ALLOWED_ROLES = new Set(['admin', 'manager', 'member']);
-const RULES_URL = 'https://raw.githubusercontent.com/its-mkt/pagefy/main/rules/detail_to_markup.md';
+/** 규칙 사본 (저장소 main) — 2026-11-25 detail_to_markup.md → pagefy.md 로 이름 바꿈. main 에 아직 옛 이름만 있으면 옛 이름으로 읽는다 */
+const RULES_PATHS = ['rules/pagefy.md', 'rules/detail_to_markup.md'];
+const RULES_URL = (p: string) => `https://raw.githubusercontent.com/its-mkt/pagefy/main/${p}`;
 
 let rulesCache: { text: string; at: number; updatedAt: string | null } | null = null;
 async function loadRules() {
   if (rulesCache && Date.now() - rulesCache.at < 10 * 60_000) return rulesCache;
   try {
-    const r = await fetch(RULES_URL, { cache: 'no-store', signal: AbortSignal.timeout(8_000) });
-    if (!r.ok) throw new Error(`${r.status}`);
-    const text = await r.text();
+    let found: { text: string; path: string } | null = null;
+    let status = '';
+    for (const p of RULES_PATHS) {
+      const r = await fetch(RULES_URL(p), { cache: 'no-store', signal: AbortSignal.timeout(8_000) });
+      if (r.ok) {
+        found = { text: await r.text(), path: p };
+        break;
+      }
+      status = `${r.status}`;
+    }
+    if (!found) throw new Error(status || '없음');
+    const { text } = found;
     // 마지막 커밋 시각 (규칙을 언제 반영했는지 화면에 표시)
     let updatedAt: string | null = null;
     try {
-      const c = await fetch('https://api.github.com/repos/its-mkt/pagefy/commits?path=rules/detail_to_markup.md&per_page=1', { headers: { 'User-Agent': 'pagefy' }, signal: AbortSignal.timeout(5_000) });
+      const c = await fetch(`https://api.github.com/repos/its-mkt/pagefy/commits?path=${found.path}&per_page=1`, { headers: { 'User-Agent': 'pagefy' }, signal: AbortSignal.timeout(5_000) });
       updatedAt = ((await c.json()) as { commit?: { committer?: { date?: string } } }[])[0]?.commit?.committer?.date ?? null;
     } catch {
       // 시각을 못 읽어도 규칙은 쓴다
     }
     rulesCache = { text, at: Date.now(), updatedAt };
   } catch (err) {
-    if (!rulesCache) throw new Error(`규칙 파일을 읽지 못했습니다 (${RULES_URL}): ${(err as Error).message}`);
+    if (!rulesCache) throw new Error(`규칙 파일을 읽지 못했습니다 (${RULES_URL(RULES_PATHS[0])}): ${(err as Error).message}`);
     // 예전 규칙으로 계속 쓰되, 매 요청마다 다시 읽느라 느려지지 않게 1분 뒤에 다시 시도
     rulesCache.at = Date.now() - 9 * 60_000;
   }
@@ -225,7 +236,7 @@ Deno.serve(async (req) => {
       model: MODEL,
       effort: EFFORT,
       planEffort: PLAN_RUN.effort,
-      rules: await loadRules().then((r) => ({ source: 'GitHub its-mkt/pagefy rules/detail_to_markup.md', updatedAt: r.updatedAt, fallback: false })).catch(() => ({ source: '(규칙 읽기 실패)', updatedAt: null, fallback: true })),
+      rules: await loadRules().then((r) => ({ source: 'GitHub its-mkt/pagefy rules/pagefy.md', updatedAt: r.updatedAt, fallback: false })).catch(() => ({ source: '(규칙 읽기 실패)', updatedAt: null, fallback: true })),
       role,
       upload: !!ftpCfg(),
       godo: !!godoCfg(),
