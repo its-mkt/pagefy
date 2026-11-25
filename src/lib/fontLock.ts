@@ -8,7 +8,9 @@ import type { PsdSummary } from '../../shared/types';
 import { PRETENDARD_FILES, PRETENDARD_RANGES, PRETENDARD_SUBSET_BASE, PRETENDARD_VERSION } from './fonts/pretendardSubsets';
 
 export const FONT_FAMILY = 'dp-pretendard';
-const FALLBACK_IMPORT = `@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v${PRETENDARD_VERSION}/dist/web/static/pretendard.min.css");`;
+/** Pretendard 전체 CSS ('Pretendard' 이름) — 고도몰 대체 @import 와 오픈마켓 위치 대조에서 쓴다 */
+export const PRETENDARD_CSS_URL = `https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v${PRETENDARD_VERSION}/dist/web/static/pretendard.min.css`;
+const FALLBACK_IMPORT = `@import url("${PRETENDARD_CSS_URL}");`;
 
 type Range = [number, number];
 let parsed: Range[][] | null = null;

@@ -13,7 +13,7 @@ import type { Dial } from './core/ftp.ts';
 import { adminStats, budgetBlock, checkFeedback, getBudget, opsConfigFrom, saveFeedback, saveSettings, trackRun } from './core/ops.ts';
 import type { AdminSettingsRequest, FeedbackRequest } from './shared/ops.ts';
 import { checkGoodsNo, fetchGoods, godoConfigFrom } from './core/godo.ts';
-import { type UploadFile, type UploadTarget, checkFolder, checkTarget, ftpConfigFrom, putFiles, undoUpload, verifyFiles, type UploadedItem } from './core/upload.ts';
+import { type UploadFile, type UploadTarget, checkFolder, checkTarget, deleteFiles, ftpConfigFrom, putFiles, undoUpload, verifyFiles, type UploadedItem } from './core/upload.ts';
 
 // 이미지 호스팅 업로드 (규칙 6절): 접속 정보는 함수 비밀값 PAGEFY_FTP_HOST·USER·PASS·ROOT·PUBLIC_BASE(·PORT) 에만 둔다.
 // 없으면 업로드 기능을 끈다 (화면에 버튼 없음). 같은 이름 파일은 화면이 확인받은 것만 덮어쓴다 — 옛 파일은 숨김 백업 (core/upload.ts)
@@ -189,6 +189,8 @@ Deno.serve(async (req) => {
               ? 'upload-verify'
               : path.endsWith('/upload/remove')
                 ? 'upload-remove'
+                : path.endsWith('/upload/delete')
+                ? 'upload-delete'
                 : path.endsWith('/godo/goods')
                 ? 'godo-goods'
                 : path.endsWith('/feedback')
@@ -311,6 +313,12 @@ Deno.serve(async (req) => {
       if (action === 'upload-remove') {
         const out = await undoUpload(cfg, denoDial, t, ub.items as UploadedItem[], t0 + 130_000);
         console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug} 되돌림 — 복원 ${out.restored.length}개 · 지움 ${out.removed.length}개${out.failed.length ? ` · 실패 ${out.failed.length}개` : ''}`);
+        return json(req, 200, out);
+      }
+      // 변환 내역 「이미지 서버에서 지우기」 — 화면이 고른 파일과 그 숨김 백업을 지운다 (core/upload.ts deleteFiles)
+      if (action === 'upload-delete') {
+        const out = await deleteFiles(cfg, denoDial, t, ub.files as string[], t0 + 130_000);
+        console.log(`[upload] ${emailOf(token)} ${t.channel}/${t.slug} 지움 ${out.removed.length}개 (백업 ${out.backups}개${out.missing.length ? ` · 이미 없음 ${out.missing.length}개` : ''}${out.failed.length ? ` · 실패 ${out.failed.length}개` : ''})`);
         return json(req, 200, out);
       }
       return json(req, 200, { results: await verifyFiles(cfg, t, (ub.files as { file: string; size: number; sha256?: string }[]) || [], t0 + 130_000) });

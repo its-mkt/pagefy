@@ -5,6 +5,8 @@
 import type { PsdSummary, TextInfo } from '../../shared/types';
 import type { Check } from './output';
 import { GODO_MAX_W } from '../../shared/width';
+import { PRETENDARD_CSS_URL } from './fontLock';
+import { OM_FIXED_PX_NOTE } from './checkNotes';
 
 export const TOL_Y = 3;
 export const TOL_X = 6;
@@ -37,6 +39,26 @@ function waitLoad(f: HTMLIFrameElement) {
     if (f.contentDocument?.readyState === 'complete' && f.contentDocument.body?.childNodes.length) res();
     else f.addEventListener('load', () => res(), { once: true });
   });
+}
+
+/**
+ * 오픈마켓 HTML 은 <style>·웹폰트를 넣지 못해(규칙 7-3) 그대로 그리면 검사하는 PC 에 깔린 글꼴에 따라 결과가 달라진다
+ * (Pretendard 가 없는 PC 에서 한글 제목이 6px 내려가 모두 「어긋남」이 됨, 2026-11-25) → 대조 화면에서만 PSD 와 같은 Pretendard 를 불러온다.
+ * 실패하면 false (네트워크 차단 등)
+ */
+async function loadCheckFont(doc: Document): Promise<boolean> {
+  const link = doc.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = PRETENDARD_CSS_URL;
+  const ok = await new Promise<boolean>((resolve) => {
+    const t = window.setTimeout(() => resolve(false), 8000);
+    link.onload = () => (window.clearTimeout(t), resolve(true));
+    link.onerror = () => (window.clearTimeout(t), resolve(false));
+    doc.head.appendChild(link);
+  });
+  // 글꼴 파일은 레이아웃이 글자를 쓸 때 받기 시작한다 → 한 번 배치시켜 두면 settle 의 fonts.ready 가 기다린다
+  void doc.body.offsetHeight;
+  return ok;
 }
 
 async function settle(doc: Document) {
@@ -103,6 +125,8 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
     const hide = doc.createElement('style');
     hide.textContent = 'html{scrollbar-width:none}html::-webkit-scrollbar{display:none}';
     doc.head.appendChild(hide);
+    const openmarket = !isGoodomall(html);
+    const checkFont = openmarket ? await loadCheckFont(doc) : true;
     await settle(doc);
 
     const { str, pos } = charMap(doc);
@@ -223,10 +247,11 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
     const bad = found.filter((i) => !i.ok).sort((a, b) => Math.abs(b.dy ?? 0) + Math.abs(b.dx ?? 99) - (Math.abs(a.dy ?? 0) + Math.abs(a.dx ?? 99)));
     const notFound = items.length - found.length;
     const checks: Check[] = [];
+    if (!checkFont) checks.push({ level: 'warn', message: '위치 대조용 글꼴(Pretendard)을 불러오지 못해 이 PC 글꼴로 대조했습니다 — 어긋남 표시가 부정확할 수 있습니다.' });
     if (found.length) {
       checks.push({
         level: pass === found.length ? 'ok' : pass / found.length >= 0.8 ? 'warn' : 'error',
-        message: `PSD 위치 대조: ${pass}/${found.length} 통과 (기준선 세로 ±${TOL_Y}px·가로 ±${TOL_X}px${k !== 1 ? `, PSD ${W}px → ${VW}px 로 렌더해 PSD px 로 환산` : ""})${bad.length ? ` — 어긋남 큰 순: ${bad.slice(0, 4).map((i) => `"${i.text}" ${fmt(i)}`).join(', ')}` : ''}`,
+        message: `PSD 위치 대조: ${pass}/${found.length} 통과 (기준선 세로 ±${TOL_Y}px·가로 ±${TOL_X}px${k !== 1 ? `, PSD ${W}px → ${VW}px 로 렌더해 PSD px 로 환산` : ""}${openmarket ? ', Pretendard 로 대조 — 오픈마켓 실제 화면은 대체 글꼴이라 몇 px 다를 수 있음' : ''})${bad.length ? ` — 어긋남 큰 순: ${bad.slice(0, 4).map((i) => `"${i.text}" ${fmt(i)}`).join(', ')}` : ''}`,
       });
     }
     if (notFound) checks.push({ level: 'warn', message: `HTML 에서 찾지 못한 글자 ${notFound}개 — 빠졌거나 이미지로 들어갔을 수 있으니 미리보기에서 확인`, fix: 'plan' });
@@ -235,10 +260,10 @@ export async function checkLayout(html: string, summary: PsdSummary, skip: Reado
     if (hPc > 0)
       checks.push(
         offScale.length
-          ? { level: 'warn', message: `모바일 비율 축소 아님 (7-5): ${offScale.map((g) => `${g.width}px 폭에서 높이가 비율보다 ${g.gap > 0 ? '+' : ''}${g.gap}px`).join(', ')} — 글자·여백이 폭 비율대로 줄지 않는 곳이 있음` }
+          ? { level: 'warn', message: `모바일 비율 축소 아님 (7-5): ${offScale.map((g) => `${g.width}px 폭에서 높이가 비율보다 ${g.gap > 0 ? '+' : ''}${g.gap}px`).join(', ')} — 글자·여백이 폭 비율대로 줄지 않는 곳이 있음${openmarket ? ` — ${OM_FIXED_PX_NOTE}` : ''}` }
           : { level: 'ok', message: `모바일 비율 축소 확인 (360·323px 폭 높이 = PC 높이 × 비율)` },
       );
-    checks.push(overflow360 > 0 ? { level: 'error', message: `모바일 360px 에서 가로 스크롤 ${overflow360}px 생김 (9절 5항)` } : { level: 'ok', message: '모바일 360px 가로 스크롤 없음' });
+    checks.push(overflow360 > 0 ? { level: 'error', message: `모바일 360px 에서 가로 스크롤 ${overflow360}px 생김 (9절 5항)${openmarket ? ` — ${OM_FIXED_PX_NOTE}` : ''}` } : { level: 'ok', message: '모바일 360px 가로 스크롤 없음' });
     if (minFont) {
       const px = Math.round(minFont.px * 10) / 10;
       // 규칙 7-5 는 모바일 작은 글자를 허용한다(최소 글자 크기 없음) → 오류·확인이 아니라 참고로만 보여 준다

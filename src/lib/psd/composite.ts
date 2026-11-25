@@ -4,6 +4,7 @@
 import type { Layer, PixelData, Psd } from 'ag-psd';
 import { groupBounds, isUsable } from './extract';
 import { hasRenderableEffects, renderEffects } from './effects';
+import { drawManual, MANUAL_BLEND, type ManualBlend } from './blend';
 
 type Ctx = OffscreenCanvasRenderingContext2D;
 
@@ -107,14 +108,15 @@ interface Rendered {
   opacity: number;
   /** 레이어 불투명도만 (칠 불투명도 제외) — 클리핑된 레이어에 곱한다 (포토샵은 기준 레이어의 칠 불투명도를 클리핑에 적용하지 않음) */
   baseOpacity: number;
-  blend: GlobalCompositeOperation;
+  blend: GlobalCompositeOperation | ManualBlend;
 }
 
 const globalAngleOf = (psd: Psd) => psd.imageResources?.globalAngle ?? 120;
 
 /** 레이어 하나(그룹 포함)를 캔버스로. 그릴 것이 없으면 null */
 function renderLayer(psd: Psd, layer: Layer, opt: RenderOptions): Rendered | null {
-  const blend = layer.blendMode === 'pass through' ? 'source-over' : BLEND[layer.blendMode || 'normal'] || 'source-over';
+  const mode = layer.blendMode || 'normal';
+  const blend: Rendered['blend'] = mode === 'pass through' ? 'source-over' : mode in MANUAL_BLEND ? (mode as ManualBlend) : BLEND[mode] || 'source-over';
   const fx = hasRenderableEffects(layer);
 
   if (layer.children) {
@@ -170,6 +172,16 @@ function renderLayer(psd: Psd, layer: Layer, opt: RenderOptions): Rendered | nul
   return { img: lc, x: x0, y: y0, alpha: lc, ax: x0, ay: y0, opacity: (layer.opacity ?? 1) * (layer.fillOpacity ?? 1), baseOpacity: layer.opacity ?? 1, blend };
 }
 
+/** 혼합 모드·불투명도를 적용해 그린다 (캔버스에 없는 모드는 픽셀 계산) */
+function paint(ctx: Ctx, img: OffscreenCanvas, x: number, y: number, alpha: number, blend: Rendered['blend']) {
+  if (blend in MANUAL_BLEND) return drawManual(ctx, img, x, y, alpha, blend as ManualBlend);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.globalCompositeOperation = blend as GlobalCompositeOperation;
+  ctx.drawImage(img, x, y);
+  ctx.restore();
+}
+
 function drawLayer(psd: Psd, layer: Layer, clipped: Layer[], ctx: Ctx, opt: RenderOptions) {
   if (layer.children) {
     const direct = (layer.blendMode === 'pass through' || !layer.blendMode) && (layer.opacity ?? 1) >= 1 && !(layer.mask && !layer.mask.disabled) && !clipped.length && !hasRenderableEffects(layer);
@@ -180,11 +192,7 @@ function drawLayer(psd: Psd, layer: Layer, clipped: Layer[], ctx: Ctx, opt: Rend
   }
   const r = renderLayer(psd, layer, opt);
   if (!r) return;
-  ctx.save();
-  ctx.globalAlpha = r.opacity;
-  ctx.globalCompositeOperation = r.blend;
-  ctx.drawImage(r.img, r.x, r.y);
-  ctx.restore();
+  paint(ctx, r.img, r.x, r.y, r.opacity, r.blend);
 
   // 클리핑 마스크: 위 레이어를 지금까지의 합성 위에 자기 혼합모드로 섞되, 기준 레이어 알파 안에서만 (포토샵 방식)
   for (const c of clipped) {
@@ -196,11 +204,7 @@ function drawLayer(psd: Psd, layer: Layer, clipped: Layer[], ctx: Ctx, opt: Rend
     t.drawImage(cr.img, cr.x - r.ax, cr.y - r.ay);
     t.globalCompositeOperation = 'destination-in';
     t.drawImage(r.alpha, 0, 0);
-    ctx.save();
-    ctx.globalAlpha = cr.opacity * r.baseOpacity;
-    ctx.globalCompositeOperation = cr.blend;
-    ctx.drawImage(tmp, r.ax, r.ay);
-    ctx.restore();
+    paint(ctx, tmp, r.ax, r.ay, cr.opacity * r.baseOpacity, cr.blend);
   }
 }
 

@@ -24,7 +24,7 @@ export function ago(t: number) {
 export const dayStart = (t: number) => new Date(t).setHours(0, 0, 0, 0);
 
 /** 날짜 묶음 머리 — 오늘 / 어제 / 11월 20일 (목) (올해가 아니면 연도도) */
-export function dayLabel(t: number) {
+export function dayHeading(t: number) {
   const diff = Math.round((dayStart(Date.now()) - dayStart(t)) / 86_400_000);
   if (diff === 0) return '오늘';
   if (diff === 1) return '어제';
@@ -35,9 +35,6 @@ export function dayLabel(t: number) {
 
 /** 시각 — 14:05 */
 export const clock = (t: number) => new Date(t).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false });
-
-/** 날짜 머리 아래 시간 칸 — 오늘은 「n분 전」, 그 전은 시각만 */
-export const timeOf = (t: number) => (dayStart(t) === dayStart(Date.now()) ? ago(t) : clock(t));
 
 /** 표에 쓰는 날짜·시각 — 11. 20. 14:05 */
 export const when = (t: number | string) => new Date(t).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });

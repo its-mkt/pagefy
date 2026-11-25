@@ -7,6 +7,7 @@
 // 상자 텍스트는 포토샵이 상자 폭에서 자동으로 줄을 바꾼다(텍스트 값에는 강제 줄바꿈만 있음) → 같은 폰트로 재서 줄바꿈 위치를 정한다.
 import type { PsdSummary, TextInfo, TextRun } from '../../shared/types';
 import { fontFaces, pretendardChars } from './fontLock';
+import { tabbedWidth, tabStopPx } from './tabs';
 
 const MEASURE_FAMILY = 'pf-measure';
 /** 이보다 작은 차이는 고치지 않는다 (px) */
@@ -155,9 +156,15 @@ export async function measureTexts(summary: PsdSummary, skip: Set<number>): Prom
     ctx.font = `${t.weight} ${t.size}px '${MEASURE_FAMILY}'`;
     let best = { w: -1, n: 0 };
     for (const line of linesWith(t, w)) {
-      const m = ctx.measureText(line);
-      const n = [...line].length;
-      const ink = m.actualBoundingBoxLeft + m.actualBoundingBoxRight + t.ls * t.size * (n - 1);
+      // 탭이 있으면 탭 위치만큼 건너뛴 폭 — 자간은 마지막 탭 뒤 글자만 폭을 바꾼다
+      const tail = line.slice(line.lastIndexOf('	') + 1);
+      const n = [...tail].length;
+      let ink: number;
+      if (line.includes('	')) ink = tabbedWidth(line, tabStopPx(summary.dpi), (s) => ctx.measureText(s).width) + t.ls * t.size * Math.max(0, n - 1);
+      else {
+        const m = ctx.measureText(line);
+        ink = m.actualBoundingBoxLeft + m.actualBoundingBoxRight + t.ls * t.size * (n - 1);
+      }
       if (ink > best.w) best = { w: ink, n };
     }
     if (best.n < 3) continue;
