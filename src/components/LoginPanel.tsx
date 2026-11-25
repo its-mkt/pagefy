@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Button } from './Button';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, toLoginEmail, type Role } from '../lib/supabase';
-import { LockIcon } from './icons';
+import { Lock } from 'lucide-react';
 
 /** 계정 관리(가입·승인 요청·비밀번호 찾기)를 하는 곳 */
 const ACCOUNT_URL = '/ad-insight/';
@@ -35,14 +35,14 @@ export default function LoginPanel({ session, role }: { session: Session | null;
   if (session) {
     if (role === null) {
       return (
-        <GateShell icon={<LockIcon />} title="권한 확인 중" desc="잠시만 기다려 주세요.">
+        <GateShell icon={<Lock />} title="권한 확인 중" desc="잠시만 기다려 주세요.">
           <p className="gate__wait"><span className="spinner" /> 권한 확인 중…</p>
         </GateShell>
       );
     }
     const m = ROLE_MSG[role] ?? { msg: '승인된 회사 계정만 쓸 수 있습니다.', next: '계정 상태는 계정 관리 화면에서 확인할 수 있습니다.', go: '계정 관리로 가기' };
     return (
-      <GateShell icon={<LockIcon />} title={m.msg} desc={m.next}>
+      <GateShell icon={<Lock />} title={m.msg} desc={m.next}>
         <div className="gate__actions">
           <span className="gate__account">{session.user.email}</span>
           {m.go && <a className="btn btn--primary" href={ACCOUNT_URL}>{m.go}</a>}
@@ -53,7 +53,7 @@ export default function LoginPanel({ session, role }: { session: Session | null;
   }
 
   return (
-    <GateShell icon={<LockIcon />} title="로그인하면 사용할 수 있습니다" desc="광고 인사이트와 같은 계정으로 로그인합니다.">
+    <GateShell icon={<Lock />} title="로그인하면 사용할 수 있습니다" desc="광고 인사이트와 같은 계정으로 로그인합니다.">
       <form className="gate__form" onSubmit={login}>
         <input className={`gate__input${err ? ' is-err' : ''}`} name="username" placeholder="이메일" value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" autoFocus required />
         <input className={`gate__input${err ? ' is-err' : ''}`} type="password" name="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required />

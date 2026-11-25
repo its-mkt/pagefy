@@ -4,8 +4,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-export const DEFAULT_RULES_FILE = '\\\\192.168.1.254\\마케팅팀\\A_상세페이지\\detail_to_markup.md';
-const LOCAL_COPY = path.join(HERE, '..', 'rules', 'detail_to_markup.md');
+export const DEFAULT_RULES_FILE = '\\\\192.168.1.254\\마케팅팀\\A_상세페이지\\pagefy.md';
+/** 2026-11-25 이름 바꿈(detail_to_markup.md → pagefy.md) — 새 이름이 없을 때만 읽는 옛 이름 (다른 PC 가 아직 옛 이름을 쓰는 동안) */
+const OLD_RULES_FILE = DEFAULT_RULES_FILE.replace(/pagefy\.md$/, 'detail_to_markup.md');
+const LOCAL_COPY = path.join(HERE, '..', 'rules', 'pagefy.md');
 
 export interface Rules {
   text: string;
@@ -18,6 +20,7 @@ export function loadRules(): Rules {
   const primary = process.env.RULES_FILE || DEFAULT_RULES_FILE;
   for (const [file, fallback] of [
     [primary, false],
+    [OLD_RULES_FILE, false],
     [LOCAL_COPY, true],
   ] as const) {
     try {

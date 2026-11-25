@@ -10,3 +10,4 @@ supabase/functions/pagefy/shared/
 
 # Playwright MCP 작업 기록
 .playwright-mcp/
+supabase/.temp/

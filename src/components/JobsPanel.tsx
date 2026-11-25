@@ -9,7 +9,7 @@ import { SHARED_ROOT } from '../lib/sharedFolder';
 import Select from './Select';
 import PeriodPicker from './PeriodPicker';
 import { Tip, TipWrap } from './ui';
-import { CopyIcon, ImageOffIcon, MoreIcon, PencilIcon, TrashIcon } from './icons';
+import { ArrowDown, ArrowUp, ArrowUpDown, CopyPlus, Ellipsis, ImageOff, Pencil, Trash2 } from 'lucide-react';
 import ImageDeleteDialog from './ImageDeleteDialog';
 import JobInfoDialog from './JobInfoDialog';
 import { ago, clock, dayHeading, when } from '../lib/time';
@@ -73,13 +73,10 @@ const SORT_COLS: [SortKey, string, string][] = [
   ['state', '상태', 'jtable__c-state'],
   ['time', '날짜', 'jtable__c-time'],
 ];
-/** 정렬 방향 화살표 (오름차순 위 · 내림차순 아래) — 정렬하지 않은 칸은 ↕ 글자 그대로 */
-function SortArrow({ up }: { up: boolean }) {
-  return (
-    <svg className="jtable__dir" viewBox="0 0 12 12" aria-hidden="true">
-      <path d={up ? 'M6 10V2.5M2.5 6L6 2.5L9.5 6' : 'M6 2v7.5M2.5 6L6 9.5L9.5 6'} fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+/** 정렬 방향 화살표 (오름차순 위 · 내림차순 아래 · 정렬 안 한 칸은 위아래) — lucide 아이콘 */
+function SortArrow({ dir }: { dir: 1 | -1 | 0 }) {
+  const Icon = dir === 1 ? ArrowUp : dir === -1 ? ArrowDown : ArrowUpDown;
+  return <Icon className="jtable__dir" />;
 }
 /** 표 날짜 칸 — 오늘 14:05 · 어제 09:12 · 그 전은 11. 20. 14:05 */
 function dateCell(t: number) {
@@ -148,7 +145,7 @@ function NameLine({ j }: { j: Job }) {
 }
 
 /** 「복제」에서 고를 판매처 (고도몰 2 + 오픈마켓 플랫폼) */
-const PLATFORMS: { to: Platform; label: string }[] = ([{ channel: 'itket' }, { channel: 'oncore' }, ...(Object.keys(MARKETS) as Market[]).map((market) => ({ channel: 'openmarket', market }))] as Platform[]).map((to) => ({ to, label: platformLabel(to) }));
+const PLATFORMS: { to: Platform; label: string }[] = ([{ channel: 'itket' }, { channel: 'zbyhp' }, { channel: 'cadkorea' }, { channel: 'oncore' }, ...(Object.keys(MARKETS) as Market[]).map((market) => ({ channel: 'openmarket', market }))] as Platform[]).map((to) => ({ to, label: platformLabel(to) }));
 
 /** 같은 PSD(이름·크기)·같은 제품의 작업 — 「복제」 메뉴에 이미 만든 판매처를 표시 */
 const sibling = (a: Job, b: Job) => a.fileName === b.fileName && a.fileSize === b.fileSize && (a.settings.productName ?? '') === (b.settings.productName ?? '');
@@ -166,7 +163,7 @@ function CopySub({ job, all, busy, onCopy }: { job: Job; all: Job[]; busy: boole
     <DropdownMenu.Sub>
       <DropdownMenu.SubTrigger className="profile__item" disabled={busy} aria-label={`「${job.settings.productName || job.fileName}」 다른 판매처용으로 복제`}>
         <span className="jobs__rowmenu-ico">
-          <CopyIcon className="btn__ico" />
+          <CopyPlus className="btn__ico" />
           다른 판매처용으로 복제
         </span>
         <span aria-hidden="true" className="jobs__copy-arrow">›</span>
@@ -214,7 +211,7 @@ function RowMenu({ job, locked, canDeleteImages, onEdit, onDeleteImages, onTrash
     <DropdownMenu.Root modal={false}>
       <TipWrap content={locked ? '만드는 중인 작업은 고치거나 지울 수 없습니다' : '더 보기 — 작업 정보 편집 · 이미지 지우기 · 휴지통으로'} disabled={locked}>
         <DropdownMenu.Trigger className="btn btn--sm btn--icon btn--more" disabled={locked} aria-label={`「${name}」 더 보기`}>
-          <MoreIcon className="btn__ico" />
+          <Ellipsis className="btn__ico" />
         </DropdownMenu.Trigger>
       </TipWrap>
       <DropdownMenu.Portal>
@@ -229,7 +226,7 @@ function RowMenu({ job, locked, canDeleteImages, onEdit, onDeleteImages, onTrash
             <>
               <DropdownMenu.Item className="profile__item" onSelect={onEdit}>
                 <span className="jobs__rowmenu-ico">
-                  <PencilIcon className="btn__ico" />
+                  <Pencil className="btn__ico" />
                   작업 정보 편집…
                 </span>
                 <small className="jobs__rowmenu-sub">담당 · 메모 · 테스트</small>
@@ -241,7 +238,7 @@ function RowMenu({ job, locked, canDeleteImages, onEdit, onDeleteImages, onTrash
             <>
               <DropdownMenu.Item className="profile__item profile__item--out" onSelect={onDeleteImages}>
                 <span className="jobs__rowmenu-ico">
-                  <ImageOffIcon className="btn__ico" />
+                  <ImageOff className="btn__ico" />
                   이미지 서버에서 지우기…
                 </span>
               </DropdownMenu.Item>
@@ -250,7 +247,7 @@ function RowMenu({ job, locked, canDeleteImages, onEdit, onDeleteImages, onTrash
           )}
           <DropdownMenu.Item className="profile__item" onSelect={onTrash}>
             <span className="jobs__rowmenu-ico">
-              <TrashIcon className="btn__ico" />
+              <Trash2 className="btn__ico" />
               휴지통으로 옮기기
             </span>
             <small className="jobs__rowmenu-sub">{TRASH_DAYS}일 안에 복원</small>
@@ -296,6 +293,8 @@ function FilterBar({ filter: f, onFilter, count, more }: { filter: JobFilter; on
             options: [
               { value: 'godo', label: '고도몰 전체' },
               { value: 'itket', label: '아이티켓' },
+              { value: 'zbyhp', label: 'zbyhp' },
+              { value: 'cadkorea', label: 'cadkorea' },
               { value: 'oncore', label: '온코어' },
             ],
           },
@@ -474,7 +473,7 @@ export default function JobsPanel(props: Props) {
         {!recent && trashN > 0 && (
           <Tip content={`지운 작업 — ${TRASH_DAYS}일 안에 복원할 수 있습니다`}>
           <Button type="button" size="sm" className="jobs__trash" onClick={onTrashOpen}>
-            <TrashIcon className="jobs__ico" /> 휴지통 {trashN}
+            <Trash2 className="jobs__ico" /> 휴지통 {trashN}
           </Button>
           </Tip>
         )}
@@ -567,7 +566,7 @@ export default function JobsPanel(props: Props) {
                       onClick={() => setSort((v) => (v.key === key ? { key, dir: v.dir === 1 ? -1 : 1 } : { key, dir: key === 'time' ? -1 : 1 }))}
                     >
                       {label}
-                      <span className="jtable__arrow" aria-hidden="true">{sort.key === key ? <SortArrow up={sort.dir === 1} /> : '↕'}</span>
+                      <span className="jtable__arrow" aria-hidden="true"><SortArrow dir={sort.key === key ? sort.dir : 0} /></span>
                     </button>
                   </th>
                 ))}
@@ -664,7 +663,7 @@ function TrashView({ trash, trashLoading, busy, onTrashClose, onRestore, onPurge
     <section className="panel jobs jobs--trash">
       <div className="jobs__head">
         <h2 className="panel__title">
-          <TrashIcon className="jobs__ico" /> 휴지통 <small>{TRASH_DAYS}일 지나면 자동으로 영구 삭제됩니다</small>
+          <Trash2 className="jobs__ico" /> 휴지통 <small>{TRASH_DAYS}일 지나면 자동으로 영구 삭제됩니다</small>
           {trashLoading && (
             <span className="jobs__loading" role="status">
               <span className="spinner" aria-hidden="true" /> 불러오는 중…

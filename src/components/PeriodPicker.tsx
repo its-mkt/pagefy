@@ -5,7 +5,7 @@
 import { useMemo, useState } from 'react';
 import { Button } from './Button';
 import { Popover } from 'radix-ui';
-import { Chevron } from './icons';
+import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react';
 import { WEEKDAY_LABELS, dayLabel, daysOfMonth, fromDayKey, orderedRange, rangeDays, rangeLabel, toDayKey, type DayRange } from '../lib/dayRange';
 import { nextMonth } from '../../shared/ops';
 
@@ -75,7 +75,7 @@ export default function PeriodPicker({ value, onChange }: { value: Period; onCha
       <Popover.Trigger className={`sel sel--md period${on ? ' is-on' : ''}`} aria-label={`기간: ${periodLabel(value)}`}>
         <span className="sel__value">{periodLabel(value)}</span>
         <span className="sel__chev">
-          <Chevron dir="down" />
+          <ChevronDown />
         </span>
       </Popover.Trigger>
       <Popover.Portal>
@@ -95,13 +95,13 @@ export default function PeriodPicker({ value, onChange }: { value: Period; onCha
           <div className="period__cal">
             <div className="period__head">
               <button type="button" className="period__nav" aria-label="이전 달" onClick={() => setView(prev)}>
-                <Chevron className="period__prev" />
+                <ChevronLeft />
               </button>
               <b className="period__title" aria-live="polite">
                 {vy}년 {vm}월
               </b>
               <button type="button" className="period__nav" aria-label="다음 달" disabled={next > today.slice(0, 7)} onClick={() => setView(next)}>
-                <Chevron />
+                <ChevronRight />
               </button>
             </div>
             <div className="period__grid" role="grid" onMouseLeave={() => setHover(null)}>

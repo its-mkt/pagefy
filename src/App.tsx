@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './components/Button';
 import type { Session } from '@supabase/supabase-js';
 import { type GenerateMeta, type HealthInfo, type PlanBundle, type PsdSummary, type SectionRequest, type UsageInfo, imageBaseUrl } from '../shared/types';
-import { CLOUD, collect, fetchHealth, uploadCheck, uploadFiles, uploadRemove, uploadVerify, type UploadedItem, type UploadTarget } from './lib/api';
+import { AUTH, CLOUD, collect, fetchHealth, isNoResponse, uploadCheck, uploadFiles, uploadRemove, uploadVerify, type UploadedItem, type UploadTarget } from './lib/api';
 import { canUse, fetchRole, supabase, type Role } from './lib/supabase';
 import { bitmapToUrl, cutImages, localizeHtml, type CutImage } from './lib/images';
 import { checkOutput, copySection, parsePlanOutput, parseSectionOutput, type Check, type ParsedOutput } from './lib/output';
@@ -13,9 +13,11 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, filterOn, fileKeyOf, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform } from './lib/jobs';
+import { busyJobIds, deleteJob, editBase, filterOn, fileKeyOf, findJobsWithHtml, savedEditFor, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform } from './lib/jobs';
 import Header, { type View } from './components/Header';
 import HelpPanel from './components/HelpPanel';
+import Tour from './components/Tour';
+import { resetTour, type TourStage } from './lib/tour';
 import TesterPanel, { type TesterSource } from './components/TesterPanel';
 import { editorFor } from './lib/editorSim';
 import AdminPanel from './components/AdminPanel';
@@ -26,7 +28,7 @@ import JobsPanel from './components/JobsPanel';
 import SavedView from './components/SavedView';
 import LoginPanel from './components/LoginPanel';
 import UploadPanel from './components/UploadPanel';
-import DropOverlay from './components/DropOverlay';
+import DropGuard from './components/DropGuard';
 import SummaryPanel from './components/SummaryPanel';
 import SettingsPanel, { type Settings } from './components/SettingsPanel';
 import ResultPanel, { type UploadState } from './components/ResultPanel';
@@ -62,6 +64,8 @@ export interface RunState {
   planChars: number;
   sections: SectionProgress[];
   error?: string;
+  /** 서버가 응답을 시작하지 못하고 끊김 (Claude 미실행·비용 없음) — 결과 화면이 「다시 시도」를 보여 준다 */
+  noResponse?: boolean;
   usage?: UsageInfo;
   model?: string;
   /** 이번 만들기·수정 요청을 시작한 시각 (Date.now) — 소요 시간 표시용. 저장된 작업을 불러온 것엔 없음 */
@@ -189,17 +193,19 @@ async function poolWarm<T>(items: T[], n: number, fn: (item: T, onStart: () => v
 const BUSY_MSG = '다른 탭(창)이나 다른 PC에서 이 작업을 만들고 있습니다. 그곳에서 이어서 보거나, 끝난 뒤 다시 시도하세요. (그쪽 창을 닫았다면 3분 뒤 다시 할 수 있습니다)';
 
 export default function App() {
-  // 로그인 (배포 모드에서만 — 광고 인사이트 계정)
+  // 로그인 (배포, 또는 개발 중 VITE_PAGEFY_LOGIN=1 — 광고 인사이트 계정)
   const [session, setSession] = useState<Session | null>(null);
-  const [authReady, setAuthReady] = useState(!CLOUD);
+  const [authReady, setAuthReady] = useState(!AUTH);
   /** 만든 사람 — 작업에 남기는 이름 (광고 인사이트 계정 이름, 없으면 이메일 앞부분). 로컬 개발은 확인용 이름 */
-  const me = CLOUD ? (session ? session.user.user_metadata?.name || session.user.email?.split('@')[0] : undefined) : LOCAL_USER.name;
-  const [role, setRole] = useState<Role | null>(CLOUD ? null : 'admin');
+  const me = AUTH ? (session ? session.user.user_metadata?.name || session.user.email?.split('@')[0] : undefined) : LOCAL_USER.name;
+  const [role, setRole] = useState<Role | null>(AUTH ? null : 'admin');
 
   const [health, setHealth] = useState<HealthInfo | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
   const workerRef = useRef<PsdWorker | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  /** 저장된 작업을 여는 중 — ② 화면에서 설정 칸 대신 파일 카드의 불러오기 진행만 보인다 (열자마자 설정이 펼쳐졌다 사라지지 않게) */
+  const [restoring, setRestoring] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [settings, setSettings] = useState<Settings>(() => ({
@@ -359,7 +365,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (!CLOUD) return;
+    if (!AUTH) return;
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setAuthReady(true);
@@ -370,7 +376,7 @@ export default function App() {
 
   useEffect(() => {
     // 로그인 상태를 읽기 전(authReady 전)에는 판정하지 않는다 — 안 그러면 첫 화면에 몇 초간 "승인된 계정만" 안내가 잘못 뜬다
-    if (!CLOUD || !authReady) return;
+    if (!AUTH || !authReady) return;
     // 약 1시간마다 토큰이 갱신될 때 role 을 null 로 비우면 작업 화면이 로그인 화면으로 바뀌어 결과가 사라진다 → 확인이 끝날 때까지 이전 역할 유지
     // 확인 요청이 잠깐 실패(null)하면, 이미 승인된 역할이 있었을 때는 그대로 둔다 (처음 확인일 때만 invalid)
     // 권한 확인(구글 Apps Script)은 1~3초 걸린다 → 이 계정이 지난번에 승인돼 있었으면 그 역할로 먼저 화면을 열고, 확인 결과로 바로잡는다
@@ -454,6 +460,15 @@ export default function App() {
   // picked: 다른 PC 등 이 브라우저에 PSD 원본이 없을 때 사용자가 고른 PSD
   async function openJob(job: Job, picked?: File) {
     if (loading || running) return;
+    // 여는 동안(②)은 설정 칸을 펼치지 않고 파일 카드의 불러오기 진행만 — 단계 표시는 실제 진행대로 ②→③→④ (2026-11-25 의견)
+    setRestoring(true);
+    try {
+      await openJobInner(job, picked);
+    } finally {
+      setRestoring(false);
+    }
+  }
+  async function openJobInner(job: Job, picked?: File) {
     // 계정에서 작업 전체를 받는 동안에도 다른 버튼을 막는다 (두 번 눌러 둘이 동시에 열리지 않게)
     setLoading('작업 불러오는 중…');
     try {
@@ -527,7 +542,13 @@ export default function App() {
       setJobId(nj.id);
       setSettings({ ...nj.settings, market: normMarket(nj.settings.market) });
       setNote(nj.note ?? {});
-      await restoreJob(nj);
+      // 여는 동안 설정 칸을 펼치지 않는다 (openJob 과 같게)
+      setRestoring(true);
+      try {
+        await restoreJob(nj);
+      } finally {
+        setRestoring(false);
+      }
       return;
     }
     await openJob(nj);
@@ -594,8 +615,11 @@ export default function App() {
     }
   }
 
-  /** 새 작업으로 저장 (PSD 원본은 뒤에서 천천히). 기록은 n — 없으면 담당자만 이어 쓰고 메모·테스트 표시는 비운다 */
-  function newJob(file: File, s: Settings, n: JobNote = { assignee: readLocal('pagefy.assignee', '') }) {
+  /**
+   * 새 작업으로 저장 (PSD 원본은 뒤에서 천천히). 기록은 n — 없으면 담당자만 이어 쓰고 메모는 비운다.
+   * 로컬에서 로그인해 MOCK(가짜 결과)으로 만든 작업은 배포 화면과 같은 계정 표에 쌓이므로 「테스트」로 표시해 둔다 (변환 내역 「테스트 제외」로 걸러짐)
+   */
+  function newJob(file: File, s: Settings, n: JobNote = { assignee: readLocal('pagefy.assignee', ''), ...(AUTH && !CLOUD && health?.mock ? { test: true, memo: '로컬 MOCK' } : {}) }) {
     const now = Date.now();
     const nj: Job = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, fileKey: fileKeyOf(file), fileName: file.name, fileSize: file.size, settings: s, creator: me, note: n, state: 'ready', sections: {}, failed: {}, revisionCount: 0 };
     setNote(n);
@@ -1072,15 +1096,16 @@ export default function App() {
       // 생성 중에 다른 PSD 를 열어 멈춘 경우: 이 오류를 새로 연 작업에 적지 않는다
       if (loadedRef.current !== L) return;
       const msg = ac.signal.aborted ? '취소했습니다.' : (e as Error).message;
+      const noResp = !ac.signal.aborted && isNoResponse(e);
       // 새 계획을 받기 전에 실패했으면 이전 결과를 그대로 보여 주고 작업도 완료 상태로 둔다 (다시 만들기·수정 요청 가능)
       if (!planReady && prevResult) {
         setResult(prevResult);
         setRevisionCount(prevRevisions);
-        setRun((r) => ({ ...r, phase: 'error', error: `${msg} — 이전 결과는 그대로 남아 있습니다.`, sections: stopRunning(r.sections) }));
+        setRun((r) => ({ ...r, phase: 'error', error: `${msg} — 이전 결과는 그대로 남아 있습니다.`, noResponse: noResp, sections: stopRunning(r.sections) }));
         updateJob({ state: 'done', error: undefined });
         return;
       }
-      setRun((r) => ({ ...r, phase: 'error', error: msg, sections: stopRunning(r.sections) }));
+      setRun((r) => ({ ...r, phase: 'error', error: msg, noResponse: noResp, sections: stopRunning(r.sections) }));
       updateJob({ state: ac.signal.aborted ? 'stopped' : 'error', error: msg });
     } finally {
       abortRef.current = null;
@@ -1458,6 +1483,25 @@ export default function App() {
   const canGenerate = !!loaded?.notext && !blockers.length && run.phase !== 'running';
   const hasResult = run.phase !== 'idle' || !!result;
   const step = !loaded ? 1 : result && !running ? 4 : hasResult ? 3 : 2;
+  // 단계 표시에서 고른 지난 단계 (완료한 ② 를 눌러 설정을 다시 볼 때) — 진행 단계가 바뀌면 지금 단계로 돌아온다
+  const [pickedStep, setPickedStep] = useState<number | null>(null);
+  useEffect(() => setPickedStep(null), [step]);
+  const shown = pickedStep ?? step;
+  // 단계마다 그 단계의 칸만 (2026-11-25 의견 — 여러 단계 칸이 한꺼번에 쌓였다 접히며 화면이 흔들리지 않게). 파일 카드는 ②~④ 머리로 늘 둔다
+  //  ② 확인·설정: PSD 요약 + 설정 (저장된 작업을 여는 중이면 둘 다 숨기고 파일 카드의 불러오기 진행만)
+  //  ③ 마크업 만들기: 진행 상황 (오류로 멈췄으면 다시 만들 수 있게 설정도)
+  //  ④ 복사해 붙여넣기: 결과 — 설정을 바꾸려면 단계 표시의 ② 를 누른다
+  const showSettings = !!loaded && !restoring && (shown === 2 || (shown === 3 && run.phase === 'error'));
+  const showResultPanel = hasResult && !!loaded && !restoring && shown >= 3;
+  // 처음 안내를 띄울 단계 — 만들기 화면에서, 읽는 중·저장된 결과 보기 중이 아닐 때만 (만드는 중(3단계)에는 띄우지 않는다)
+  const tourStage: TourStage | null = view !== 'work' || !allowed || loading || restoring || viewJob ? null : step === 1 ? 'upload' : step === 2 && loaded?.notext ? 'settings' : step === 4 ? 'result' : null;
+  // 도움말의 「처음 안내 다시 보기」 — 본 기록을 지우고 만들기 화면으로 (key 를 바꿔 지금 단계 안내를 다시 고르게)
+  const [tourKey, setTourKey] = useState(0);
+  const restartTour = () => {
+    resetTour();
+    setTourKey((k) => k + 1);
+    setView('work');
+  };
 
   // 생성을 시작하면 진행 상황이 보이게 결과 칸으로 내린다
   useEffect(() => {
@@ -1465,13 +1509,31 @@ export default function App() {
   }, [running]);
 
   // 토큰 갱신 중(role 확인 중)이라도 이미 로그인돼 있으면 작업 화면을 유지한다
-  const showLogin = CLOUD && authReady && !allowed && !(session && (role === null || role === 'guest'));
+  const showLogin = AUTH && authReady && !allowed && !(session && (role === null || role === 'guest'));
 
   // 에디터 테스트(#tester)의 「지금 결과 불러오기」 — 복사 구간 + 채널에 맞는 에디터, 업로드 전 이미지는 미리보기에서만 브라우저 안 그림으로
+  // 결과 화면 「손보기」에서 저장한 고침 — 작업(job.edited)에 남기고, 결과가 다시 만들어져 원본이 바뀌면 버린다 (savedEditFor)
+  const [savedEdit, setSavedEdit] = useState<string | null>(null);
+  useEffect(() => {
+    setSavedEdit(result?.parsed.html ? savedEditFor(jobRef.current, copySection(result.parsed.html)) : null);
+  }, [result?.parsed.html]); // eslint-disable-line react-hooks/exhaustive-deps
+  const saveEdit = (html: string | null) => {
+    if (!result) return;
+    setSavedEdit(html);
+    updateJob({ edited: html ? { html, base: editBase(copySection(result.parsed.html)), at: Date.now() } : undefined });
+  };
   const resultTester = useMemo<TesterSource | null>(
-    () => (result?.parsed.html ? testerSourceOf(result.parsed.html, result.meta, result.images.map((im) => [`${result.baseUrl}/${im.file}`, im.url] as [string, string])) : null),
-    [result],
+    // 손보기에서 저장한 고침이 있으면 에디터 미리보기도 그것으로 (복사할 HTML 과 같게)
+    () => (result?.parsed.html ? testerSourceOf(savedEdit ?? result.parsed.html, result.meta, result.images.map((im) => [`${result.baseUrl}/${im.file}`, im.url] as [string, string])) : null),
+    [result, savedEdit],
   );
+  // 에디터 테스트의 「변환 내역에서 불러오기」 — 계정에서 바로 찾는다(findJobsWithHtml, 검색·더 보기). 고르면 그 작업의 HTML 로
+  const pickForTester = async (j: Job): Promise<TesterSource | null> => {
+    // 지금 열린 작업이면 지금 결과 그대로 (아직 안 올린 그림도 미리보기에 보이게)
+    if (j.id === jobId && resultTester) return resultTester;
+    const full = await fullJob(j);
+    return full.html && full.meta ? testerSourceOf(full.html, full.meta, []) : null;
+  };
   // 「에디터 미리보기」로 넘어갈 때 에디터 테스트가 이것으로 시작한다 (지금 결과 또는 PSD 없이 연 저장된 결과). 에디터 테스트가 받으면 비운다 → 메뉴로 다시 들어오면 임시 저장본
   const [testerStart, setTesterStart] = useState<TesterSource | null>(null);
   const openTester = (src: TesterSource) => {
@@ -1513,14 +1575,14 @@ export default function App() {
         health={health}
         error={healthError}
         user={
-          CLOUD && session
+          AUTH && session
             ? { email: session.user.email ?? '', name: session.user.user_metadata?.name, avatarUrl: session.user.user_metadata?.avatar_url || undefined }
-            : !CLOUD
+            : !AUTH
               ? LOCAL_USER
               : undefined
         }
         // 로컬은 로그인이 없어 로그아웃해도 아무 일도 없다 (메뉴 모양 확인용으로 항목만 보인다)
-        onLogout={CLOUD && session ? () => supabase.auth.signOut() : !CLOUD ? () => console.info('[로컬] 로그인이 없어 로그아웃할 것이 없습니다') : undefined}
+        onLogout={AUTH && session ? () => supabase.auth.signOut() : !AUTH ? () => console.info('[로컬] 로그인이 없어 로그아웃할 것이 없습니다') : undefined}
         // 첫 화면(PSD 올리기 칸이 크게 보임)에선 숨기고, PSD 를 연 뒤·저장된 결과를 볼 때만
         onNewPsd={allowed && (loaded || viewJob) ? (f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f)) : undefined}
         newPsdDisabled={running || !!loading}
@@ -1531,13 +1593,8 @@ export default function App() {
         showAdmin={role === 'admin'}
         budgetAlert={!!budget && budget.spentUsd >= budget.capUsd * BUDGET_WARN_RATIO}
       />
-      {/* 화면 어디에 PSD 를 놓아도 연다 — PSD 를 연 뒤엔 끌고 있는 동안만 화면 전체 안내판 */}
-      <DropOverlay
-        enabled={allowed && !showLogin && view === 'work'}
-        cover={!!loaded}
-        disabled={running || !!loading}
-        onFile={(f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f))}
-      />
+      {/* 파일은 놓는 칸에서만 받는다 — 그 밖에 떨어뜨리면 무시 (실수로 다른 PSD 가 열리지 않게). PSD 를 연 뒤 다른 PSD 는 머리의 「새 PSD」로 */}
+      <DropGuard />
       <main className="app__main">
         {showLogin ? (
           <LoginPanel session={session} role={role} />
@@ -1559,12 +1616,14 @@ export default function App() {
               </p>
             )}
             {view === 'jobs' && allowed && jobsPage}
-            {view === 'tester' && allowed && <TesterPanel current={resultTester} start={testerStart} onStarted={() => setTesterStart(null)} />}
-            {view === 'help' && <HelpPanel />}
+            {view === 'tester' && allowed && <TesterPanel current={resultTester} start={testerStart} onStarted={() => setTesterStart(null)} findJobs={findJobsWithHtml} onPick={pickForTester} />}
+            {view === 'help' && <HelpPanel onRestartTour={restartTour} />}
             {view === 'admin' && role === 'admin' && <AdminPanel onChanged={() => fetchHealth().then(setHealth, () => {})} />}
             {view === 'admin' && role !== 'admin' && <p className="msg msg--error">관리 화면은 관리자만 볼 수 있습니다.</p>}
             <div className="app__view" hidden={view !== 'work'}>
-            <Stepper step={step} />
+            <Stepper step={step} shown={shown} onPick={(n) => setPickedStep(n === step ? null : n)} />
+            {/* 처음 쓰는 사람 안내 — 단계마다 처음 한 번 (PSD 올리기 · 설정 · 결과). 내용은 lib/tour.ts */}
+            <Tour key={tourKey} stage={tourStage} />
             <UploadPanel
               onFile={(f) => openPsd(f)}
               loading={loading}
@@ -1584,11 +1643,11 @@ export default function App() {
                 onPickPsd={(f) => openJob(viewJob, f)}
               />
             )}
-            {!loaded && allowed && recentJobs}
-            {loaded && !hasResult && <SummaryPanel loaded={loaded} />}
-            {loaded && (
+            {!loaded && !restoring && allowed && recentJobs}
+            {loaded && shown === 2 && !restoring && <SummaryPanel loaded={loaded} />}
+            {showSettings && loaded && (
               <SettingsPanel
-                collapsed={hasResult && run.phase !== 'error'}
+                collapsed={false}
                 blockers={blockers}
                 note={note}
                 onNoteChange={setNote}
@@ -1606,7 +1665,7 @@ export default function App() {
                 tileCount={Math.ceil(loaded.summary.height / Math.floor(1560 / Math.min(1, 1000 / loaded.summary.width)))}
               />
             )}
-            {metaDiff.length > 0 && result && (
+            {metaDiff.length > 0 && result && !restoring && shown === 4 && (
               <div className="metadiff" role="alert">
                 <b>설정이 결과와 다릅니다 — 아래 결과는 바뀌기 전 설정({CHANNEL_LABEL[result.meta.channel]}{result.meta.market ? ` · ${MARKETS[result.meta.market].label}` : ''})으로 만든 것입니다.</b>
                 <span>바뀐 것: {metaDiff.join(' · ')}. {resume?.code ? '같은 묶음 안에서 바꿔 저장된 구조 계획으로 비용 없이 다시 계산할 수 있습니다.' : '고도몰과 오픈마켓은 HTML 방식이 달라 구조 계획부터 다시 만들어야 합니다 (Claude 1회).'}
@@ -1627,7 +1686,7 @@ export default function App() {
                 {!canGenerate && blockers[0] && <small className="metadiff__why">다시 만들 수 없는 이유: {blockers[0]}</small>}
               </div>
             )}
-            {hasResult && loaded && (
+            {showResultPanel && loaded && (
               <div id="result" className="app__anchor">
               <ResultPanel
                 run={run}
@@ -1639,8 +1698,11 @@ export default function App() {
                 autoFix={autoFix}
                 onCancel={() => abortRef.current?.abort()}
                 onResume={resume && canGenerate ? () => generate() : undefined}
+                onRetry={canGenerate ? () => generate() : undefined}
                 upload={health?.upload && result?.bundle.plan.engine === 'code' ? upload : undefined}
                 godo={!!health?.godo && result?.meta.channel === 'itket'}
+                savedEdit={savedEdit}
+                onSaveEdit={saveEdit}
                 onUpload={uploadImages}
                 onUploadReset={() => {
                   ++uploadRunRef.current;

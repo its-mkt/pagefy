@@ -73,7 +73,7 @@
     &[data-side='top'] { animation-name: rx-in-up; }
   }
   &__viewport { padding: 0.25rem; }
-  &__scroll { display: flex; justify-content: center; height: 1.25rem; color: var(--slate-a11); svg { width: 0.875rem; height: 0.875rem; } &:first-child svg { transform: rotate(180deg); } }
+  &__scroll { display: flex; justify-content: center; height: 1.25rem; color: var(--slate-a11); svg { width: 0.875rem; height: 0.875rem; } }
   &__sep { height: 1px; margin: 0.5rem 0.75rem; background: var(--slate-a6); }
   &__ghead { display: flex; align-items: center; height: 2rem; padding: 0 0.75rem; font-size: 0.75rem; color: var(--slate-a10); }
   // 고른 항목: 남색 글자 + 오른쪽 체크 (왼쪽에 체크 자리를 비워 두지 않아 글자가 선택 상자와 같은 줄에서 시작)
@@ -179,7 +179,10 @@
   &[data-state='active'] { color: var(--slate-12); font-weight: 500; }
   &:disabled { color: var(--slate-a8); cursor: not-allowed; }
   &[data-state='active']::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--indigo-10); }
-  &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: -2px; }
+  // 포커스: 마우스 클릭에는 아무것도 안 보이고, 키보드로 이동했을 때만 밑줄 색이 바뀐다 (선택된 탭의 파란 밑줄과 구분)
+  &:focus { outline: none; }
+  &:focus-visible::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--slate-a8); }
+  &[data-state='active']:focus-visible::after { background: var(--indigo-10); }
 }
 
 // ---- 판매처 고르기 (RadioGroup) — Radix Themes RadioCards (모양 바탕은 _setup.scss 의 .chopt) ----

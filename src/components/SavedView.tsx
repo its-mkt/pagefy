@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from './Button';
-import type { Job } from '../lib/jobs';
+import { savedEditFor, type Job } from '../lib/jobs';
 import { download } from '../lib/util';
 import { useCopy } from '../lib/clipboard';
 import { useFrameHeight } from '../lib/useFrameHeight';
@@ -105,7 +105,7 @@ export default function SavedView({ job, onClose, godo, onOpenTester, onPickPsd,
 
   const blocked = img.state === 'missing' || img.state === 'checking';
   const copyBtn = (
-    <button className={`btn${img.state === 'ok' ? ' btn--primary' : ''}`} disabled={blocked || !html} onClick={() => copy('html', copySection(html))}>
+    <button className={`btn${img.state === 'ok' ? ' btn--primary' : ''}`} disabled={blocked || !html} onClick={() => copy('html', savedEditFor(job, copySection(html)) ?? copySection(html))}>
       {copied === 'html' ? '복사됨' : 'HTML 복사'}
     </button>
   );
@@ -138,6 +138,8 @@ export default function SavedView({ job, onClose, godo, onOpenTester, onPickPsd,
         )}
         {img.state === 'unknown' && <span>이 HTML은 이미지 서버 주소를 쓰지 않아 확인할 이미지가 없습니다.</span>}
       </div>
+      {/* 결과 화면 「손보기」에서 저장한 고침이 있으면 그것을 복사한다 — 무엇이 복사되는지 밝혀 둔다 */}
+      {savedEditFor(job, copySection(html)) !== null && <p className="hint saved__edited">「손보기」에서 저장한 고침이 들어간 HTML을 복사합니다 ({when(job.edited!.at)} 저장).</p>}
 
       <div className="actions saved__acts">
         <TipWrap disabled={blocked} content={blocked ? (img.state === 'checking' ? '이미지 서버 확인이 끝나면 누를 수 있습니다' : '서버에 없는 이미지가 있어 복사를 막았습니다') : undefined}>

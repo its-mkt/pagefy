@@ -8,6 +8,10 @@ import { readLocal, writeLocal } from '../lib/util';
 import { useCopy } from '../lib/clipboard';
 import { useFrameHeight } from '../lib/useFrameHeight';
 import { CheckField, Fold, Seg, Tip } from './ui';
+import { SeEditorView, SeToolbar, type SeApi } from './SeEditor';
+import Select from './Select';
+import TesterJobPicker from './TesterJobPicker';
+import type { Job } from '../lib/jobs';
 
 /** 지금 결과를 바로 불러올 때 — 업로드 전 이미지는 미리보기에서만 브라우저 안 그림으로 바꿔 보여 준다 */
 export interface TesterSource {
@@ -65,10 +69,27 @@ const SAMPLE = `<style>.dp-x .t{color:#2b59ff;font-size:28px}</style>
  * start = 결과 화면·저장된 결과의 「에디터 미리보기」로 들어옴 → 임시 저장본 대신 이것으로 시작한다.
  * 받으면 onStarted 로 알려 비우게 한다 (메뉴로 다시 들어올 때는 임시 저장본으로)
  */
-export default function TesterPanel({ current, start, onStarted }: { current?: TesterSource | null; start?: TesterSource | null; onStarted?: () => void }) {
+/**
+ * findJobs · onPick = 「변환 내역에서 불러오기」 — 저장된 HTML 이 있는 작업을 검색·더 보기로 골라 불러온다 (2026-11-25 사용자, 20개 넘어도). 테스트 뷰어라 저장하지 않는다
+ */
+export default function TesterPanel({
+  current,
+  start,
+  onStarted,
+  findJobs,
+  onPick,
+}: {
+  current?: TesterSource | null;
+  start?: TesterSource | null;
+  onStarted?: () => void;
+  findJobs?: (q: string, offset: number, limit: number) => Promise<{ jobs: Job[]; more: boolean }>;
+  onPick?: (job: Job) => Promise<TesterSource | null>;
+}) {
   const [editorId, setEditorId] = useState<EditorId>(() => (start ? start.editor : editorOf(readLocal(STORE_KEY, '')).id));
   const p = editorOf(editorId);
   const godo = p.group === '고도몰';
+  // 오픈마켓은 마지막으로 고른 플랫폼을 기억 (고도몰↔오픈마켓 전환 때 되살린다)
+  const [marketId, setMarketId] = useState<EditorId>(p.group === '오픈마켓' ? editorId : 'smartstore');
   const [input, setInput] = useState(() => (start ? start.html : (sessionStorage.getItem(DRAFT_KEY) ?? '')));
   const [source, setSource] = useState<TesterSource | null>(start ?? null);
   useEffect(() => {
@@ -108,6 +129,10 @@ export default function TesterPanel({ current, start, onStarted }: { current?: T
   const sim = useMemo(() => (text.trim() ? simulate(text, p, { strict: !godo && strict, designMode: godo && designMode }) : null), [text, p, godo, strict, designMode]);
   // 불러온 결과의 이미지가 아직 서버에 없으면 미리보기에서만 브라우저 안 그림으로
   const localize = (h: string) => (source ? source.images.reduce((acc, [from, to]) => acc.split(from).join(to), h) : h);
+  // Editor 탭에서 고친 HTML 은 미리보기용 그림 주소를 원래 서버 주소로 되돌려 입력 칸에 넣는다 (불러온 결과는 그대로 이어서 씀)
+  const unlocalize = (h: string) => (source ? source.images.reduce((acc, [from, to]) => acc.split(to).join(from), h) : h);
+  const seApi = useRef<SeApi>(null);
+  const [seActive, setSeActive] = useState<Record<string, boolean>>({});
   const capture = sim?.mobile.mode === 'capture';
   // 그림 수만큼 전체 HTML 을 나눴다 붙이므로 결과가 바뀔 때만 (입력·마우스 올림으로 다시 그릴 때마다 하지 않게)
   const shown = useMemo(() => (sim ? localize(marks ? sim.annotated : sim.html) : ''), [sim, marks, source]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -119,6 +144,25 @@ export default function TesterPanel({ current, start, onStarted }: { current?: T
     setInput(current.html);
     setSource(current);
     setEditorId(current.editor);
+  };
+  // 변환 내역의 다른 작업 불러오기 — 지금 결과 불러오기와 같게 그 작업의 채널·플랫폼 에디터로 맞춘다
+  const [picking, setPicking] = useState(false);
+  const [pickError, setPickError] = useState('');
+  const loadPick = async (job: Job) => {
+    if (!onPick) return;
+    setPicking(true);
+    setPickError('');
+    try {
+      const src = await onPick(job);
+      if (!src) throw new Error('저장된 HTML이 없는 작업입니다.');
+      setInput(src.html);
+      setSource(src);
+      setEditorId(src.editor);
+    } catch (e) {
+      setPickError(`불러오지 못했습니다: ${(e as Error).message}`);
+    } finally {
+      setPicking(false);
+    }
   };
   const openFile = async (f: File) => {
     const t = await f.text();
@@ -141,26 +185,40 @@ export default function TesterPanel({ current, start, onStarted }: { current?: T
         </h2>
       </div>
 
-      {/* 플랫폼 고르기 — 고도몰 · 오픈마켓 묶음 */}
-      <div className="tester__platforms" role="radiogroup" aria-label="플랫폼">
-        {(['고도몰', '오픈마켓'] as const).map((g) => (
-          <div key={g} className="tester__group">
-            {/* 고도몰처럼 칩이 하나뿐이면 칩 이름이 곧 묶음 이름 */}
-            {EDITORS.filter((e) => e.group === g).length > 1 && <span className="tester__glabel">{g}</span>}
-            {EDITORS.filter((e) => e.group === g).map((e) => (
-              <button
-                key={e.id}
-                type="button"
-                role="radio"
-                aria-checked={e.id === editorId}
-                className={`tester__chip${e.id === editorId ? ' is-on' : ''}`}
-                onClick={() => setEditorId(e.id)}
-              >
-                {e.label}
-              </button>
-            ))}
+      {/* 플랫폼 고르기 (2026-11-25 개편): 고도몰 · 오픈마켓 세그먼트 → 고도몰은 사이트 체크박스(여러 곳), 오픈마켓은 드롭다운. 높이 2rem 맞춤 */}
+      <div className="tester__pickers">
+        {/* 변환 내역의 다른 작업 불러오기 — 플랫폼 고르기 왼쪽 (한 줄, 좁으면 두 줄) (고르면 그 작업의 판매처로 플랫폼도 바뀜, 2026-11-25) */}
+        {findJobs && onPick && (
+          <div className="tester__from">
+            <span className="tester__glabel">변환 내역</span>
+            <TesterJobPicker search={findJobs} onPick={loadPick} busy={picking} value={source?.label} />
+            {pickError && <p className="msg msg--error" role="alert">{pickError}</p>}
           </div>
-        ))}
+        )}
+        <div className="tester__platforms">
+          <span className="tester__glabel">플랫폼</span>
+          <Seg
+            aria-label="판매처 종류"
+            value={godo ? 'godo' : 'openmarket'}
+            onChange={(v) => setEditorId(v === 'godo' ? 'godo' : marketId)}
+            items={[
+              { value: 'godo', label: '고도몰' },
+              { value: 'openmarket', label: '오픈마켓' },
+            ]}
+          />
+          {!godo && (
+            <Select
+              size="sm"
+              aria-label="오픈마켓 플랫폼"
+              value={editorId}
+              onChange={(id) => {
+                setMarketId(id);
+                setEditorId(id);
+              }}
+              options={EDITORS.filter((e) => e.group === '오픈마켓').map((e) => ({ value: e.id, label: e.label }))}
+            />
+          )}
+        </div>
       </div>
 
       <Spec p={p} />
@@ -173,16 +231,22 @@ export default function TesterPanel({ current, start, onStarted }: { current?: T
               <b>상세설명</b>
               <span>{p.editor}</span>
             </div>
-            {/* 모양만 흉내 낸 도구 막대 (누르지 않음) */}
-            <div className="edsim__tools" aria-hidden="true">
-              {godo ? (
-                <>
-                  <span>글꼴</span><span>크기</span><i /><b>B</b><em>I</em><u>U</u><s>S</s><i /><span>정렬</span><span>사진</span><span>링크</span><span>표</span>
-                </>
-              ) : (
+            {/* 고도몰: SmartEditor 2 도구 막대 — Editor 탭에서 실제로 꾸며 볼 수 있다 (저장 없음, SeEditor.tsx). 오픈마켓은 HTML 직접 입력만 */}
+            {godo ? (
+              <SeToolbar
+                api={seApi}
+                enabled={tab === 'editor'}
+                active={seActive}
+                onGoEditor={() => {
+                  setTab('editor');
+                  if (input.trim()) setDesignMode(true); // 아래 Editor 탭 단추와 같게 (저장 때 URL 자동 링크 표시)
+                }}
+              />
+            ) : (
+              <div className="edsim__tools" aria-hidden="true">
                 <span>HTML 직접 입력 — 에디터 꾸미기 기능과 섞어 쓰지 않음</span>
-              )}
-            </div>
+              </div>
+            )}
             <div className="edsim__body">
               {tab === 'html' && (
                 <textarea
@@ -197,7 +261,7 @@ export default function TesterPanel({ current, start, onStarted }: { current?: T
                   aria-label="붙여넣을 HTML"
                 />
               )}
-              {tab === 'editor' && <EditorView html={localize(input)} p={p} />}
+              {tab === 'editor' && <SeEditorView ref={seApi} html={localize(input)} p={p} onEdit={(h) => setInput(unlocalize(h))} onActive={setSeActive} />}
               {tab === 'text' && <pre className="edsim__text">{textOnly(input) || '(글자 없음)'}</pre>}
             </div>
             {godo && (
@@ -329,6 +393,12 @@ export default function TesterPanel({ current, start, onStarted }: { current?: T
             ]}
           />
         </div>
+        {/* 불러온 결과의 판매처 묶음과 고른 에디터가 다르면 알린다 — 고도몰 결과(<style>·글꼴 블록)를 오픈마켓 에디터로 보면 CSS 가 글자로 쏟아지는 게 정상 흉내라 헷갈린다 */}
+        {source && editorOf(source.editor).group !== p.group && (
+          <p className="tester__mismatch" role="note">
+            불러온 결과는 <b>{editorOf(source.editor).group}</b>용인데 <b>{p.group}</b> 에디터({p.label})로 보고 있습니다. {p.group}에 올리려면 변환 내역의 「⋯ → 다른 판매처용으로 복제」로 {p.group}용 결과를 만들어 불러오세요.
+          </p>
+        )}
         {sim ? (
           screen === 'pc' ? (
             <Frame key={`pc-${p.id}`} doc={pcDoc} width={p.pcWidth} p={p} mobile={false} />
@@ -385,22 +455,6 @@ function Spec({ p }: { p: EditorProfile }) {
   );
 }
 
-/** 고도몰 Editor 탭 — 붙여넣은 HTML 을 에디터 안에서 보이는 모양으로 (고도몰은 태그 필터를 빼고 써서 <style> 이 남는다 [소스]) */
-function EditorView({ html, p }: { html: string; p: EditorProfile }) {
-  const doc = useMemo(() => {
-    const t = document.createElement('template');
-    t.innerHTML = html;
-    t.content.querySelectorAll('script').forEach((e) => e.remove());
-    return previewDoc(t.innerHTML, p, { mobile: false, marks: false });
-  }, [html, p]);
-  return (
-    <div className="edsim__design">
-      <p className="edsim__warn">Editor 탭입니다 — 고도몰은 &lt;style&gt; 을 지우지 않지만, 여기서 저장하면 www.·http:// 글자가 자동 링크가 됩니다. HTML 탭에서 붙여넣고 바로 저장하세요.</p>
-      <iframe title="에디터 디자인 모드" sandbox="allow-same-origin" srcDoc={doc} />
-    </div>
-  );
-}
-
 interface Measure {
   overflow: number;
   broken: string[];
@@ -411,16 +465,59 @@ interface Measure {
 }
 
 /** 상품 페이지 미리보기 + 화면에서 잰 문제 (가로 넘침 · 안 뜬 이미지 · 너무 긴 이미지) */
+/**
+ * 상세 영역(.pf-shell) 안에서 실제로 그려지는 것의 가로 범위 — 그림·캔버스·영상, 바탕색·바탕 그림이 있는 상자, 글자.
+ * 바탕 없는 감싸개(폭 100% div 등)는 넓어도 빈칸이라 빼고 잰다. 아무것도 없으면 null (자르지 않음)
+ */
+function paintedSpan(d: Document, shell: HTMLElement): { x: number; w: number } | null {
+  const box = shell.getBoundingClientRect();
+  let l = Infinity;
+  let r = -Infinity;
+  const add = (rc: DOMRect) => {
+    if (rc.width < 1 || rc.height < 1) return;
+    l = Math.min(l, rc.left);
+    r = Math.max(r, rc.right);
+  };
+  const win = d.defaultView;
+  for (const e of shell.querySelectorAll<HTMLElement>('*')) {
+    if (/^(IMG|CANVAS|VIDEO|SVG|IFRAME|TABLE|HR|INPUT|BUTTON)$/i.test(e.tagName)) {
+      add(e.getBoundingClientRect());
+      continue;
+    }
+    const cs = win?.getComputedStyle(e);
+    if (!cs) continue;
+    const bg = cs.backgroundColor;
+    // 투명 바탕(rgba(…, 0))은 빈칸 — 「흰색」 바탕을 칠한 칸은 상세페이지의 일부라 남긴다
+    const clear = !bg || bg === 'transparent' || /rgba\([^)]*,\s*0\)$/.test(bg);
+    const painted = !clear || cs.backgroundImage !== 'none' || parseFloat(cs.borderLeftWidth) > 0 || parseFloat(cs.borderRightWidth) > 0;
+    if (painted) add(e.getBoundingClientRect());
+  }
+  // 글자 (바탕 없는 칸 위의 글자도 보이는 것)
+  const walk = d.createTreeWalker(shell, NodeFilter.SHOW_TEXT);
+  const range = d.createRange();
+  for (let n = walk.nextNode(), i = 0; n && i < 4000; n = walk.nextNode(), i++) {
+    if (!n.textContent?.trim()) continue;
+    range.selectNodeContents(n);
+    add(range.getBoundingClientRect());
+  }
+  if (!Number.isFinite(l) || r <= l) return null;
+  const x = Math.max(0, Math.floor(l - box.left));
+  return { x, w: Math.ceil(r - box.left) - x };
+}
+
 function Frame({ doc, width, scaleTo, p, mobile, freezeGif }: { doc: string; width: number; scaleTo?: number; p: EditorProfile; mobile: boolean; freezeGif?: boolean }) {
   const ref = useRef<HTMLIFrameElement>(null);
   const height = useFrameHeight(ref, 400, [doc, width]);
   const [m, setM] = useState<Measure | null>(null);
+  // PC 미리보기에서 상세페이지 양옆의 빈 쇼핑몰 바탕(흰 여백)을 잘라 보이지 않게 — 배치는 그대로 상세 영역 폭으로 하고 보이는 칸만 줄인다 (2026-11-25 사용자: 보기 쉽게)
+  const [crop, setCrop] = useState<{ x: number; w: number } | null>(null);
   const esm = p.id === 'gmarket' || p.id === 'auction';
 
   useEffect(() => {
     const f = ref.current;
     if (!f) return;
     setM(null);
+    setCrop(null);
     const run = () => {
       const d = f.contentDocument;
       if (!d?.body) return;
@@ -445,6 +542,7 @@ function Frame({ doc, width, scaleTo, p, mobile, freezeGif }: { doc: string; wid
       const shell = d.querySelector<HTMLElement>('.pf-shell') ?? d.documentElement;
       const box = shell.getBoundingClientRect();
       const right = Math.max(...[...shell.querySelectorAll('*')].map((e) => e.getBoundingClientRect().right), box.right);
+      if (!mobile) setCrop(paintedSpan(d, shell));
       setM({
         overflow: Math.max(0, Math.round(right - box.right)),
         broken: ims.filter((i) => i.complete && !i.naturalWidth && !/^blob:/.test(i.src)).map(name),
@@ -459,26 +557,32 @@ function Frame({ doc, width, scaleTo, p, mobile, freezeGif }: { doc: string; wid
       timers.forEach(window.clearTimeout);
       f.removeEventListener('load', run);
     };
-  }, [doc, esm]);
+  }, [doc, esm, mobile]);
 
   const scale = scaleTo ? scaleTo / width : 1;
+  const cut = !mobile && crop && crop.w < width - 1 ? crop : null;
   const tooTall = !!m && !!p.maxHeight && m.height >= p.maxHeight.px;
   // 접힘: PC 기준 길이로 정한 플랫폼(스마트스토어)은 PC 값, 모바일만 접히는 곳(컴퓨존)은 모바일 화면에서만
   const folded = !!m && !!p.fold && m.height > ((mobile && p.fold.mobileOver) || p.fold.over) && (mobile ? p.fold.mobile != null : p.fold.pc != null);
   return (
     <>
       <div className="tester__stage">
-        <div className="tester__device" style={{ width: width * scale, height: height * scale }}>
+        <div className="tester__device" style={{ width: (cut ? cut.w : width) * scale, height: height * scale }}>
           <iframe
             ref={ref}
             title="상품 페이지 미리보기"
             sandbox="allow-same-origin"
             scrolling="no"
             srcDoc={doc}
-            style={{ width, height, transform: scale !== 1 ? `scale(${scale})` : undefined, transformOrigin: '0 0' }}
+            style={{ width, height, marginLeft: cut ? -cut.x : undefined, transform: scale !== 1 ? `scale(${scale})` : undefined, transformOrigin: '0 0' }}
           />
         </div>
       </div>
+      {cut && (
+        <p className="hint tester__cut">
+          쇼핑몰 상세 영역 {width}px 중 상세페이지 바깥의 흰 여백 {Math.round(width - cut.w)}px 는 보기 쉽게 숨겼습니다 (실제 쇼핑몰에서는 양옆이 흰 바탕으로 보입니다).
+        </p>
+      )}
       {m && (m.overflow > 0 || m.broken.length > 0 || m.tall.length > 0 || m.wide.length > 0 || tooTall || folded) && (
         <ul className="tester__measure">
           {m.overflow > 0 && <li><span className="badge badge--error">가로 넘침</span> 상세 영역보다 {m.overflow}px 넓어 가로 스크롤이 생기거나 잘립니다 — 고정 폭(width:…px)이 상세 폭보다 큰 곳을 줄이세요.</li>}

@@ -1,5 +1,5 @@
 // ag-psd 로 읽은 PSD → Claude 에게 넘길 레이어·텍스트 요약 (순수 함수: 브라우저 워커와 Node 점검 스크립트가 같이 씀)
-// 규칙 원본: \\192.168.1.254\마케팅팀\A_상세페이지\detail_to_markup.md (3절 사용 레이어 판정, 4절·4-1 텍스트 환산)
+// 규칙 원본: \\192.168.1.254\마케팅팀\A_상세페이지\pagefy.md (3절 사용 레이어 판정, 4절·4-1 텍스트 환산)
 import type { Color, Layer, Psd, TextStyle } from 'ag-psd';
 import type { LayerInfo, PsdSummary, TextInfo, TextRun } from '../../../shared/types';
 
