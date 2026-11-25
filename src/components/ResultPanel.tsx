@@ -9,12 +9,15 @@ import { keepMap } from '../lib/codegen';
 import { isPlanFixable } from '../lib/autofix';
 import { plainCheck } from '../lib/plainCheck';
 import GodoCheckBox from './GodoCheckBox';
+import { SeEditBox } from './SeEditor';
+import { imageKind, imageUse } from '../lib/imageUse';
+import { editorOf } from '../lib/editorSim';
 import Select from './Select';
 import { buildZip, download, fmtBytes } from '../lib/util';
 import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, saveZipToShared, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
 import { CheckField, Fold, Seg, Tip, TipWrap } from './ui';
 import Elapsed from './Elapsed';
-import { CheckIcon, EyeIcon } from './icons';
+import { Check as CheckMark, Eye, RotateCw } from 'lucide-react';
 import { copyText, useCopy } from '../lib/clipboard';
 import { fmtDur, secMs } from '../lib/time';
 import { useFrameHeight } from '../lib/useFrameHeight';
@@ -29,6 +32,8 @@ interface Props {
   onCancel: () => void;
   /** 중단된 작업의 남은 섹션 만들기 */
   onResume?: () => void;
+  /** 서버 연결 실패(run.noResponse) 때 「다시 시도」 — 같은 설정으로 다시 만든다 */
+  onRetry?: () => void;
   resumeLabel?: string;
   /** 이미지 서버 업로드 (서버에 접속 정보가 있을 때만) */
   upload?: UploadState;
@@ -46,6 +51,10 @@ interface Props {
   autoFix?: { ok: boolean; text: string } | null;
   /** 고도몰 등록 확인 상자 (서버에 아이티켓 고도몰 API 키가 있고 채널이 아이티켓일 때) */
   godo?: boolean;
+  /** 「수정」에서 저장해 둔 복사 구간 HTML (이 결과에 맞을 때만, 없으면 null) — 「HTML 복사」가 이것을 쓴다 */
+  savedEdit?: string | null;
+  /** 수정 저장(html) · 원래대로(null) — 작업에 남긴다 */
+  onSaveEdit?: (html: string | null) => void;
 }
 
 export interface UploadState {
@@ -70,7 +79,7 @@ export interface UploadState {
   restored?: boolean;
 }
 
-type Tab = 'preview' | 'code' | 'images' | 'report';
+type Tab = 'preview' | 'edit' | 'images' | 'report';
 
 const STATE_LABEL = { wait: '대기', run: '작성 중', done: '완료', error: '실패' } as const;
 
@@ -133,8 +142,20 @@ function diagnostics(result: Result, loaded: Loaded, run: RunState) {
   ].join('\n');
 }
 
-export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo }: Props) {
+export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, onRetry, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo, savedEdit = null, onSaveEdit }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
+  // 「수정」 — 실수 방지로 「저장」해야만 복사에 들어간다 (2026-11-25 사용자).
+  //  draft = 저장하지 않은 고침 (있으면 「HTML 복사」를 막는다) · savedEdit = 저장한 고침 (작업에 남음, 결과가 다시 만들어지면 App 이 버림)
+  // 「이미지」 탭 — 그림마다 HTML 에서 <img> 로 쓰였는지(alt 포함) CSS 배경으로 쓰였는지
+  const use = useMemo(() => imageUse(result?.parsed.html ?? ''), [result?.parsed.html]);
+  const [draft, setDraft] = useState<string | null>(null);
+  useEffect(() => setDraft(null), [result?.parsed.html]);
+  // 버리기·되돌리기 때 편집 화면을 새로 그리게 (SeEditBox resetKey)
+  const [editKey, setEditKey] = useState(0);
+  const dropDraft = () => (setDraft(null), setEditKey((k) => k + 1));
+  const original = result ? copySection(result.parsed.html) : '';
+  const edited = savedEdit;
+  const dirty = draft !== null;
   const [feedback, setFeedback] = useState('');
   const [target, setTarget] = useState('all');
   const [copied, copy, copyLater] = useCopy();
@@ -181,7 +202,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
   /** HTML 복사 (자동 업로드면 이미지를 먼저 올린다). confirmOverwrite = 덮어쓰기 안내에서 확인함 */
   const copyHtml = (confirmOverwrite = false) => {
     if (!result) return;
-    const html = copySection(result.parsed.html);
+    if (dirty) return; // 저장하지 않은 고침이 있으면 복사하지 않는다 (단추도 막혀 있음)
+    const html = edited ?? copySection(result.parsed.html);
     // HTML 이 가리키는 이미지가 결과에 다 있는지 (자르기에 실패한 이미지가 있으면 붙여넣은 페이지에 빈칸이 생긴다)
     const have = new Set(result.images.map((im) => im.file));
     // 이미지 주소 = baseUrl/파일명 — 주소 뒤 따옴표·괄호·공백 앞까지가 파일명
@@ -262,10 +284,21 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
       {run.phase === 'error' && (
         <div className="progress-error">
           <p className="msg msg--error progress-error__msg">{run.error || '만드는 중 문제가 생겼습니다.'}</p>
-          {onResume && (
+          {/* 이어서 만들 수 있으면 그게 먼저 (끝난 섹션을 살림). 서버 연결 실패면 같은 설정으로 「다시 시도」 */}
+          {onResume ? (
             <div className="actions">
               <Button variant="primary" onClick={onResume}>{resumeLabel}</Button>
             </div>
+          ) : (
+            run.noResponse &&
+            onRetry && (
+              <div className="actions">
+                <Button variant="primary" onClick={onRetry}>
+                  <RotateCw className="btn__ico" />
+                  다시 시도
+                </Button>
+              </div>
+            )
           )}
         </div>
       )}
@@ -322,7 +355,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               <div className="getit__btns">
               <button
                 className={`btn ${autoUpload || imgReady ? 'btn--primary' : ''} getit__copy`}
-                disabled={!result.parsed.html || upBusy || (!autoUpload && !imgReady)}
+                data-tour="copy"
+                disabled={!result.parsed.html || upBusy || (!autoUpload && !imgReady) || dirty}
                 onClick={() => copyHtml()}
               >
                 {upBusy ? (
@@ -340,8 +374,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   예전엔 안내 글 아래 글자 링크라 설명처럼 묻혀서(2026-11-25 의견) 복사 버튼 옆 보조 버튼으로. 복사가 막혀 있어도(이미지 올리기 전) 미리 볼 수 있다 */}
               {onOpenTester && (
                 <TipWrap disabled={!result.parsed.html} content="붙여넣기 전에, 쇼핑몰 에디터가 저장하면서 이 HTML을 어떻게 바꾸는지 미리 봅니다">
-                  <Button type="button" className="getit__tester" disabled={!result.parsed.html} onClick={onOpenTester}>
-                    <EyeIcon className="btn__ico" />
+                  <Button type="button" className="getit__tester" data-tour="tester" disabled={!result.parsed.html} onClick={onOpenTester}>
+                    <Eye className="btn__ico" />
                     에디터 미리보기
                   </Button>
                 </TipWrap>
@@ -352,6 +386,23 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   <b>{openmarket ? '오픈마켓 상세 편집기의 HTML 입력' : '고도몰 상품 상세설명 (HTML 모드)'}</b>
                   {autoUpload ? '에 붙여넣으면 끝입니다.' : '에 붙여넣습니다 — 그 전에 아래 3단계로 이미지를 먼저 올려 주세요.'}
                 </span>
+                {dirty ? (
+                  <span className="getit__note getit__unsaved" role="alert">
+                    「수정」에 저장하지 않은 고침이 있어 복사를 막았습니다 — 저장하거나 되돌린 뒤 복사하세요.
+                    <button type="button" className="link-btn" onClick={() => setTab('edit')}>
+                      수정으로 가기
+                    </button>
+                  </span>
+                ) : (
+                  edited !== null && (
+                    <span className="getit__note getit__edited">
+                      「수정」에서 저장한 HTML을 복사합니다.
+                      <button type="button" className="link-btn" onClick={() => setTab('edit')}>
+                        손본 내용 보기
+                      </button>
+                    </span>
+                  )
+                )}
                 {!autoUpload && !imgReady && <span className="getit__note">아래 3단계를 마치고 「올렸습니다」를 체크하면 「HTML 복사」가 눌립니다.</span>}
                 {autoUpload && upload!.phase !== 'done' && <span className="getit__note">이미지 {result.images.length}장은 복사할 때 이미지 서버에 자동으로 올라갑니다.</span>}
                 {autoUpload && upload!.phase === 'done' && (
@@ -513,9 +564,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
             {(
               [
                 ['preview', '미리보기'],
-                ['code', 'HTML'],
+                ['edit', dirty ? '수정 · 저장 안 함' : edited !== null ? '수정 · 저장됨' : '수정'],
                 ['images', `이미지 ${result.images.length}`],
-                ['report', '완료 보고'],
+                ['report', '로그'],
               ] as [Tab, string][]
             ).map(([k, label]) => (
               <Tabs.Trigger key={k} value={k} className="tabs__tab">{label}</Tabs.Trigger>
@@ -523,7 +574,42 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
           </Tabs.List>
 
           <Tabs.Content value="preview"><Preview result={result} loaded={loaded} /></Tabs.Content>
-          <Tabs.Content value="code"><Code html={result.parsed.html} /></Tabs.Content>
+          <Tabs.Content value="edit">
+            <div className="fixit">
+              <p className="hint fixit__note">
+                복사하기 전에 글자를 고치거나 글꼴·크기·정렬·링크를 손볼 수 있습니다. 「저장」해야 「HTML 복사」에 들어가고 작업에도 남습니다. 다시 만들기·수정 요청으로 결과가 새로 만들어지면 저장한 고침은 사라집니다.
+              </p>
+              {/* 저장 막대 — 지금 상태를 말로 보여 주고, 저장·되돌리기·원래대로 */}
+              <div className={`fixit__bar${dirty ? ' is-dirty' : ''}`} role="status">
+                <span className="fixit__state">{dirty ? '저장하지 않은 고침이 있습니다' : edited !== null ? '저장한 고침이 복사에 쓰입니다' : '고친 내용 없음 — 만든 결과 그대로 복사합니다'}</span>
+                {dirty && (
+                  <>
+                    <Button type="button" size="sm" variant="primary" disabled={!onSaveEdit} onClick={() => (onSaveEdit?.(draft === original ? null : draft), setDraft(null))}>
+                      저장
+                    </Button>
+                    <Button type="button" size="sm" onClick={dropDraft}>
+                      변경점 되돌리기
+                    </Button>
+                  </>
+                )}
+                {!dirty && edited !== null && (
+                  <Button type="button" size="sm" onClick={() => (onSaveEdit?.(null), dropDraft())}>
+                    원래 결과로 되돌리기
+                  </Button>
+                )}
+              </div>
+              <SeEditBox
+                title="복사 전에 수정"
+                resetKey={editKey}
+                note={openmarket ? '오픈마켓 HTML' : '고도몰 상세설명'}
+                html={draft ?? edited ?? original}
+                onChange={(h) => setDraft(h === (edited ?? original) ? null : h)}
+                p={editorOf(editorIdOf(result.meta))}
+                images={result.images.map((im) => [`${result.baseUrl}/${im.file}`, im.url] as [string, string])}
+                warn="고친 뒤 위의 「저장」을 눌러야 복사할 HTML에 들어갑니다. 그림·표는 바꿀 수 없습니다."
+              />
+            </div>
+          </Tabs.Content>
           <Tabs.Content value="report">
               {run.usage && (
                 <p className="usage">
@@ -537,16 +623,24 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               </Fold>
           </Tabs.Content>
           <Tabs.Content value="images">
+            <p className="hint images__legend">
+              alt 는 그림이 HTML 에서 쓰이는 방식에 따라 정해집니다 (규칙 8-2): 사진은 설명, 구운 글자는 원문, 글자 뺀 배경은 CSS 배경이라 alt 가 없고 그 위 문구는 HTML 글자로 들어갑니다.
+            </p>
             <div className="images">
-              {result.images.map((im) => (
-                <figure key={im.file} className={im.blob.size > 1024 * 1024 ? 'is-big' : ''}>
-                  <img src={im.url} alt={im.alt || ''} />
-                  <figcaption>
-                    <b>{im.file}</b> {im.width}×{im.height} · {fmtBytes(im.blob.size)}
-                    {im.alt && <span>alt: {im.alt}</span>}
-                  </figcaption>
-                </figure>
-              ))}
+              {result.images.map((im) => {
+                const k = imageKind(im.file, use.get(im.file));
+                const alt = use.get(im.file)?.alt ?? im.alt;
+                return (
+                  <figure key={im.file} className={`images__item${im.blob.size > 1024 * 1024 ? ' is-big' : ''}`}>
+                    <img className="images__thumb" src={im.url} alt={alt || ''} />
+                    <figcaption className="images__cap">
+                      <em className={`images__kind images__kind--${k.tone}`}>{k.label}</em>
+                      <b>{im.file}</b> {im.width}×{im.height} · {fmtBytes(im.blob.size)}
+                      {alt ? <span>alt: {alt}</span> : <span className="images__noalt">{k.noAlt}</span>}
+                    </figcaption>
+                  </figure>
+                );
+              })}
             </div>
           </Tabs.Content>
           </Tabs.Root>
@@ -715,35 +809,6 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
           </figure>
         )}
       </div>
-    </div>
-  );
-}
-
-function Code({ html }: { html: string }) {
-  const [which, setWhich] = useState<'copy' | 'full'>('copy');
-  const [copied, copy] = useCopy();
-  const text = which === 'copy' ? copySection(html) : html;
-  return (
-    <div className="code">
-      <div className="preview__bar">
-        <Seg
-          aria-label="HTML 보기 범위"
-          value={which}
-          onChange={setWhich}
-          items={[
-            { value: 'copy', label: '복사 구간만 (채널 등록용)' },
-            { value: 'full', label: '전체 문서' },
-          ]}
-        />
-        <Button
-          size="sm"
-          onClick={() => copy('code', text)}
-        >
-          {copied === 'code' ? '복사됨' : copied === 'fail:code' ? '복사 실패 — 아래 글을 직접 선택하세요' : '복사'}
-        </Button>
-        <span className="hint">{text.length.toLocaleString()}자 · 이미지 주소는 업로드 후 실제로 열리는지 확인하세요 (9절 6항)</span>
-      </div>
-      <pre className="pre pre--code">{text}</pre>
     </div>
   );
 }
@@ -918,7 +983,7 @@ function ManualSteps(p: {
   const Num = ({ n }: { n: number }) => (
     <span className="msteps__num" aria-hidden="true">
       {state(n) === 'done' ? (
-        <CheckIcon />
+        <CheckMark />
       ) : (
         n
       )}
@@ -1013,3 +1078,9 @@ function ManualSteps(p: {
     </section>
   );
 }
+
+/** 결과의 채널·플랫폼에 맞는 에디터 흉내 (수정 상자의 쇼핑몰 폭·스킨) — 고도몰은 godo, 오픈마켓은 플랫폼, 모르면 스마트스토어 */
+function editorIdOf(m: { channel: string; market?: string }) {
+  return m.channel !== 'openmarket' ? 'godo' : m.market && m.market !== 'other' ? m.market : 'smartstore';
+}
+

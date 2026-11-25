@@ -2,7 +2,7 @@
 // 동작(키보드·포커스·접근성 속성·바깥 클릭)은 Radix 가 맡고, 여기서는 모양과 쓰기 쉬운 props 만 정한다
 import type { ReactNode } from 'react';
 import { Checkbox, Collapsible, ToggleGroup, Tooltip } from 'radix-ui';
-import { CheckIcon, Chevron } from './icons';
+import { Check, ChevronRight } from 'lucide-react';
 
 /**
  * 접어 두는 영역 (예전 <details>/<summary>). className 은 바깥 묶음에 그대로 붙어 기존 여백 규칙(.fold · .more · .raw …)을 쓴다.
@@ -12,7 +12,7 @@ export function Fold({ summary, className, defaultOpen, children }: { summary: R
   return (
     <Collapsible.Root className={className} defaultOpen={defaultOpen}>
       <Collapsible.Trigger className="sum">
-        <Chevron className="sum__chev" />
+        <ChevronRight className="sum__chev" aria-hidden="true" />
         <span>{summary}</span>
       </Collapsible.Trigger>
       <Collapsible.Content className="sum-body">{children}</Collapsible.Content>
@@ -26,7 +26,7 @@ export function CheckField({ checked, onChange, children, className, disabled }:
     <label className={`ck${className ? ` ${className}` : ''}${disabled ? ' is-off' : ''}`}>
       <Checkbox.Root className="ck__box" checked={checked} onCheckedChange={(v) => onChange(v === true)} disabled={disabled}>
         <Checkbox.Indicator className="ck__mark">
-          <CheckIcon />
+          <Check />
         </Checkbox.Indicator>
       </Checkbox.Root>
       <span className="ck__text">{children}</span>

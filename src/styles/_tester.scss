@@ -8,9 +8,13 @@
   &__head .panel__title { margin-bottom: $sp-4; }
 
   // 플랫폼 칩 — 고도몰 · 오픈마켓 두 묶음
-  &__platforms { display: flex; flex-wrap: wrap; gap: $sp-3 $sp-5; margin-bottom: $sp-4; }
+  // 변환 내역 불러오기 · 플랫폼 고르기를 한 줄로 (2026-11-25 의견 — 「무엇을 → 어느 에디터로」 왼쪽에서 오른쪽). 좁으면 두 줄로
+  &__pickers { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-3 $sp-6; margin-bottom: $sp-5; }
+  &__platforms { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-3 $sp-4; .seg { margin-bottom: 0; } }
+  // 변환 내역 불러오기 — 플랫폼 고르기 왼쪽, 같은 이름표 모양
+  &__from { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-2; margin: 0; .msg { flex-basis: 100%; margin: 0; } }
   &__group { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-1; }
-  &__glabel { margin-right: $sp-2; color: var(--sub); font-size: 0.75rem; font-weight: 600; }
+  &__glabel { margin-right: $sp-2; color: var(--sub); font-size: 0.875rem; font-weight: 600; }
   &__chip {
     height: 2rem;
     padding: 0 0.75rem;
@@ -42,6 +46,8 @@
   &__preview { min-width: 0; display: grid; gap: $sp-3; margin-top: $sp-5; }
 
   &__actions { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-2; }
+  // 「변환 내역에서 불러오기」 — 작업 이름이 길어도 줄이 넘치지 않게 (목록 안에서는 전체 이름)
+  &__pick { max-width: 22rem; }
   &__len { margin-left: auto; color: var(--sub); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
   &__opts { display: grid; gap: $sp-row; .hint { font-size: 0.75rem; } }
 
@@ -140,6 +146,30 @@
     > span, > b, > em, > u, > s { display: inline-grid; place-items: center; min-width: 1.5rem; height: 1.5rem; padding: 0 $sp-1; border: 1px solid transparent; }
     > i { width: 1px; height: 1rem; margin: 0 $sp-1; background: var(--line); }
   }
+  // SmartEditor 2 도구 (SeEditor.tsx) — Editor 탭에서만 누를 수 있다. 실제 에디터처럼 테두리 없는 작은 칸, 올리면 회색 면, 켜진 것(굵게 등)은 진한 면
+  &__tool {
+    display: inline-grid;
+    place-items: center;
+    min-width: 1.75rem;
+    height: 1.75rem;
+    padding: 0 $sp-2;
+    border: 0;
+    background: transparent;
+    color: var(--slate-12);
+    font: inherit;
+    cursor: pointer;
+    &:hover:not(:disabled) { background: var(--slate-a3); }
+    &.is-on { background: var(--slate-a5); }
+    &:disabled, &.is-na { color: var(--slate-a8); cursor: not-allowed; }
+    &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: -2px; }
+  }
+  &__pick { min-width: 6.5rem; }
+  &__link {
+    display: inline-flex;
+    gap: 2px;
+    margin-left: $sp-1;
+    input { width: 14rem; height: 1.75rem; padding: 0 $sp-2; border: 1px solid var(--slate-a7); background: var(--card); font: inherit; color: var(--slate-12); }
+  }
   &__body { min-height: 16rem; display: grid; }
   &__src {
     width: 100%;
@@ -158,7 +188,7 @@
     grid-template-rows: auto 1fr;
     iframe { width: 100%; height: 26rem; border: 0; background: #fff; }
   }
-  &__warn { margin: 0; padding: $sp-2 $sp-3; @include callout(amber); font-size: 0.75rem; }
+  &__warn { margin: 0; padding: $sp-2 $sp-3; background: var(--red-a4); color: var(--red-a11); font-size: 0.75rem; }
   &__modes {
     display: flex;
     justify-content: flex-end;
@@ -177,3 +207,64 @@
     }
   }
 }
+
+// 「변환 내역에서 불러오기」 고르기 상자 (TesterJobPicker.tsx) — 검색칸 + 스크롤 목록 + 「더 보기」. 떠 있는 상자 모양은 선택 목록과 같게
+.jpick {
+  z-index: 50;
+  display: grid;
+  gap: $sp-2;
+  width: min(26rem, calc(100vw - 2rem));
+  padding: $sp-2;
+  background: var(--card);
+  box-shadow: var(--shadow-float);
+  animation: rx-in 0.1s ease-out;
+  &:focus-visible { outline: none; }
+  &__q { width: 100%; height: 2rem; padding: 0 $sp-3; border: 1px solid var(--slate-a7); background: var(--card); color: var(--slate-12); font: inherit; font-size: 0.8125rem; }
+  &__q:focus { outline: 2px solid var(--indigo-8); outline-offset: -1px; }
+  // 20개씩 늘어나도 상자가 화면을 넘지 않게 목록만 스크롤
+  &__list { max-height: min(20rem, 50vh); overflow: auto; margin: 0; padding: 0; list-style: none; }
+  &__item {
+    display: grid;
+    width: 100%;
+    padding: $sp-2 $sp-3;
+    border: 0;
+    background: none;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    b { font-size: 0.8125rem; font-weight: 600; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    small { font-size: 0.75rem; color: var(--sub); }
+    &:hover, &:focus-visible { background: var(--slate-a3); outline: none; }
+  }
+  &__empty { margin: 0; padding: $sp-3; color: var(--sub); font-size: 0.8125rem; }
+  &__foot { display: flex; align-items: center; justify-content: space-between; gap: $sp-2; padding: 0 $sp-1; color: var(--sub); font-size: 0.75rem; }
+  .msg { margin: 0; }
+}
+
+// SmartEditor 도구 막대가 막혔을 때(HTML·TEXT 탭) 오른쪽 끝 안내 — 왜 안 눌리는지 바로 보이게
+.edsim__off {
+  display: inline-flex;
+  align-items: center;
+  gap: $sp-2;
+  margin-left: auto;
+  padding-right: $sp-1;
+  color: var(--sub);
+  font-size: 0.75rem;
+  white-space: nowrap; // 줄이 좁으면 안내 전체가 다음 줄로 (「Editor 탭으로」만 잘려 내려가지 않게)
+  .link-btn { font-size: 0.75rem; }
+}
+
+// 불러온 결과의 판매처 묶음 ≠ 고른 에디터 (TesterPanel) — 노란 안내 상자
+.tester__mismatch {
+  margin: 0 0 $sp-3;
+  padding: $sp-2 $sp-3;
+  @include callout(amber);
+  font-size: 0.8125rem;
+  b { font-weight: 600; }
+}
+
+// 「변환 내역에서 불러오기」 단추 — 불러온 결과가 있으면 그 이름을 진하게 (길면 줄임표, 전체는 마우스 올림 글)
+.tester__pick.is-on .sel__value { color: var(--ink); font-weight: 600; }
+
+// 「플랫폼」 이름표 — 묶음 간격(gap)이 이미 있어 이름표 오른쪽 여백은 빼고, 「변환 내역」 이름표와 같은 거리로
+.tester__platforms .tester__glabel { margin-right: 0; }

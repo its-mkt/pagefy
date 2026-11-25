@@ -9,7 +9,7 @@ import type { CutImage } from './images';
 export const SHARED_ROOT = String.raw`\\192.168.1.254\마케팅팀\A_상세페이지`;
 
 /** 채널 → 공유 폴더 안 채널 폴더 이름 */
-export const CHANNEL_DIR: Record<Channel, string> = { itket: '아이티켓', oncore: '온코어', openmarket: '오픈마켓' };
+export const CHANNEL_DIR: Record<Channel, string> = { itket: '아이티켓', oncore: '온코어', zbyhp: 'zbyhp', cadkorea: 'cadkorea', openmarket: '오픈마켓' };
 
 type Perm = 'granted' | 'denied' | 'prompt';
 interface DirHandle extends FileSystemDirectoryHandle {

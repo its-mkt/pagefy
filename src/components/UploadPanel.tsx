@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent } from 'react';
 import { fmtBytes } from '../lib/util';
-import { UploadIcon } from './icons';
+import { Upload } from 'lucide-react';
 import { useElapsed } from '../lib/time';
 
 /** PSD 열기 단계 — 워커·App 이 보내는 진행 문구의 앞부분으로 몇 번째 단계인지 안다 (psd.worker.ts · App.openPsd) */
@@ -60,7 +60,8 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
 
   const dnd = {
     onDragOver: (e: DragEvent) => {
-      e.preventDefault();
+      e.preventDefault(); // 여기서 받았다는 표시 — 화면 나머지(DropGuard)는 「놓을 수 없음」
+      e.dataTransfer.dropEffect = blocked ? 'none' : 'copy';
       if (!blocked) setOver(true);
     },
     onDragLeave: () => setOver(false),
@@ -89,7 +90,7 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
   if (file) {
     return (
       <section className="panel panel--tight">
-        {/* 다른 PSD 는 머리의 「새 PSD」 버튼이나 화면 어디에 끌어다 놓기로 연다 (DropOverlay) */}
+        {/* 다른 PSD 는 머리의 「새 PSD」 버튼으로 연다 — 화면에 끌어다 놓기는 실수 방지로 받지 않음 (DropGuard, 2026-11-25) */}
         <div className={`filecard ${blocked ? 'is-busy' : ''}`}>
           <img className="filecard__thumb" src={file.thumbUrl} alt="" />
           <div className="filecard__info">
@@ -97,8 +98,8 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
             <small>{fmtBytes(file.size)} · {file.width}×{file.height} px</small>
             {busy}
           </div>
-          {/* 끌어다 놓기는 눈에 안 보이는 기능이라 예전 버튼 자리에서 알려 준다 (만드는 중엔 받지 않으므로 숨김) */}
-          {!blocked && <p className="filecard__hint">다른 PSD 는 화면에 끌어다 놓아도 열립니다</p>}
+          {/* 다른 PSD 를 여는 길 안내 (만드는 중엔 열 수 없으므로 숨김) */}
+          {!blocked && <p className="filecard__hint">다른 PSD 는 위의 「새 PSD」로 엽니다</p>}
         </div>
         {error && <p className="msg msg--error">{error}</p>}
       </section>
@@ -111,6 +112,7 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
       <div
         className={`drop ${over ? 'is-over' : ''} ${blocked ? 'is-busy' : ''}`}
         role="button"
+        data-tour="upload"
         tabIndex={blocked ? -1 : 0}
         aria-disabled={blocked}
         onClick={open}
@@ -126,7 +128,7 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
           busy
         ) : (
           <>
-            <UploadIcon className="drop__icon" />
+            <Upload className="drop__icon" />
             <p className="drop__msg">PSD 파일을 여기에 끌어다 놓으세요</p>
             <p className="drop__sub">또는 클릭해서 고르기</p>
             <p className="drop__hint">파일은 이 PC 브라우저 안에서만 읽습니다. 서버로는 레이어 정보와 축소 렌더 이미지만 보냅니다.</p>

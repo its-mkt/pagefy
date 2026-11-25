@@ -3,21 +3,29 @@ import { useEffect, useState } from 'react';
 import { Button } from './Button';
 import { Dialog } from 'radix-ui';
 import type { Job, JobNote } from '../lib/jobs';
-import JobInfoFields from './JobInfoFields';
+import JobInfoFields, { hasAssignee } from './JobInfoFields';
 
 export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | null; onClose: () => void; onSave: (job: Job, note: JobNote) => Promise<void> }) {
   const [info, setInfo] = useState<JobNote>({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 담당자는 필수 — 비운 채 저장하면 저장하지 않고 빨간 테두리·안내 (만들기 설정과 같게)
+  const [tried, setTried] = useState(false);
   useEffect(() => {
     if (!job) return;
     setInfo({ assignee: job.note?.assignee ?? '', memo: job.note?.memo ?? '', test: !!job.note?.test });
     setSaving(false);
     setError(null);
+    setTried(false);
   }, [job]);
 
   const save = async () => {
     if (!job) return;
+    if (!hasAssignee(info)) {
+      setTried(true);
+      document.querySelector<HTMLElement>('.jobinfo [data-field="assignee"]')?.focus();
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -30,7 +38,7 @@ export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | nul
   };
 
   const name = job ? job.settings?.productName || job.fileName : '';
-  // 담당자 칸을 비우면 「만든 사람」이 담당 (예전 작업은 만든 사람 기록이 없다)
+  // 만든 사람 (예전 작업은 기록이 없다) — 제목 아래 안내에만
   const creator = job?.creator;
   return (
     <Dialog.Root open={!!job} onOpenChange={(o) => !o && !saving && onClose()}>
@@ -50,7 +58,7 @@ export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | nul
             }}
           >
             <fieldset className="form jobinfo__fields" disabled={saving}>
-              <JobInfoFields value={info} onChange={setInfo} me={creator} />
+              <JobInfoFields value={info} onChange={setInfo} showError={tried} />
             </fieldset>
             {error && (
               <p className="msg msg--error" role="alert">

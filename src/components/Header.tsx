@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { Plus } from 'lucide-react';
 import { Button } from './Button';
 import type { HealthInfo } from '../../shared/types';
 import { BUDGET_WARN_RATIO, type BudgetInfo } from '../../shared/ops';
@@ -114,9 +115,7 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
           <>
             <TipWrap disabled={newPsdDisabled} content={newPsdDisabled ? '만드는 중에는 다른 PSD 를 열 수 없습니다' : '다른 PSD 를 골라 새로 마크업합니다 — 화면에 끌어다 놓아도 됩니다 (지금 작업은 「변환 내역」에 저장돼 있음)'}>
             <Button type="button" size="sm" className="header__new" disabled={newPsdDisabled} onClick={() => pick.current?.click()}>
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="square" />
-              </svg>
+              <Plus />
               새 PSD
             </Button>
             </TipWrap>

@@ -753,6 +753,8 @@ export interface SimResult {
 }
 
 const MARK = 'data-pf-sim';
+/** Lucy 가 글자로 바꾼 태그를 표시 화면에서 이만큼만 보이고 뒤는 접는다 (글자 수) */
+const LUCY_FOLD = 300;
 const sample = (el: Element) => {
   const s = el.outerHTML.replace(/\s+/g, ' ');
   return s.length > 140 ? `${s.slice(0, 140)}…` : s;
@@ -791,7 +793,17 @@ export function simulate(input: string, p: EditorProfile, o: EditorOptions): Sim
         const ph = doc.createElement('span');
         ph.setAttribute(MARK, `${el.tagName.toLowerCase()} 걸러짐 (글자로 보임)`);
         ph.setAttribute('data-pf-wrap', '');
-        ph.append(doc.createComment(' Not Allowed Tag Filtered '), doc.createTextNode(el.outerHTML));
+        const code = el.outerHTML;
+        ph.append(doc.createComment(' Not Allowed Tag Filtered '), doc.createTextNode(code.slice(0, LUCY_FOLD)));
+        // 긴 블록(고도몰 결과의 글꼴 <style> 은 수만 자)은 표시 화면에서 뒷부분을 접는다 — 안 그러면 CSS 글자가 수천 px 를 채워 이미지가 화면 밖으로 밀린다.
+        // 저장 후 HTML(표시를 뗀 것)에는 그대로 남는다 (data-pf-wrap 이라 벗겨짐) — 실제로는 전부 글자로 보인다는 것을 접힌 자리 글로 알린다
+        if (code.length > LUCY_FOLD) {
+          const rest = doc.createElement('span');
+          rest.setAttribute('data-pf-wrap', '');
+          rest.setAttribute('data-pf-fold', `… 이어서 ${(code.length - LUCY_FOLD).toLocaleString()}자가 더 글자로 보임 (접어 둠)`);
+          rest.append(code.slice(LUCY_FOLD));
+          ph.append(rest);
+        }
         el.replaceWith(ph);
       }
     } else if (op.kind === 'attr') {
@@ -914,7 +926,9 @@ export function previewDoc(html: string, p: EditorProfile, opt: { mobile: boolea
   const area = opt.mobile ? p.mobileWidth : p.pcWidth;
   const pad = opt.mobile ? Math.max(0, (360 - area) / 2) : 0;
   const marks = opt.marks
-    ? `[${MARK}]{outline:2px dashed #e5484d!important;outline-offset:-1px}[data-pf-ph]{display:inline-block;padding:2px 6px;background:#fff0f0;color:#ce2c31;font:12px/1.4 sans-serif}`
+    ? `[${MARK}]{outline:2px dashed #e5484d!important;outline-offset:-1px}[data-pf-ph]{display:inline-block;padding:2px 6px;background:#fff0f0;color:#ce2c31;font:12px/1.4 sans-serif}` +
+      // 글자로 바뀐 긴 블록의 뒷부분 — 글자는 0 크기로 숨기고 「이어서 n자…」만 보인다
+      `[data-pf-fold]{font-size:0!important}[data-pf-fold]::after{content:attr(data-pf-fold);display:inline-block;margin-left:4px;padding:2px 6px;background:#fff0f0;color:#ce2c31;font:12px/1.4 sans-serif}`
     : '[data-pf-ph]{display:none}';
   // 모바일 글자 크기 고정(스마트스토어): 고정 크기가 공개되지 않아 인라인 font-size 를 무시한 기본 크기로 보여 준다
   const fixed = opt.fixedFont ? '.pf-area *{font-size:revert!important}' : '';

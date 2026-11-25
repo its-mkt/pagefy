@@ -4,7 +4,7 @@
 // - Radix 값은 문자열이라 숫자 값(배율 등)은 String 으로 넘기고 고를 때 원래 값으로 되돌린다 (빈 문자열은 __empty__)
 import type { ReactNode } from 'react';
 import { Select as S } from 'radix-ui';
-import { CheckIcon, Chevron } from './icons';
+import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 
 export interface SelectOption<V extends string | number> {
   value: V;
@@ -46,7 +46,7 @@ export default function Select<V extends string | number>({ value, onChange, opt
     <S.Item key={keyOf(o.value)} value={keyOf(o.value)} disabled={o.disabled} textValue={textOf(o)} className="sel__opt">
       <S.ItemText>{o.label}</S.ItemText>
       <S.ItemIndicator className="sel__check">
-        <CheckIcon />
+        <Check />
       </S.ItemIndicator>
     </S.Item>
   );
@@ -65,13 +65,13 @@ export default function Select<V extends string | number>({ value, onChange, opt
           <S.Value />
         </span>
         <S.Icon className="sel__chev">
-          <Chevron dir="down" />
+          <ChevronDown />
         </S.Icon>
       </S.Trigger>
       <S.Portal>
         <S.Content className="sel__list" position="popper" sideOffset={4} collisionPadding={8}>
           <S.ScrollUpButton className="sel__scroll">
-            <Chevron dir="down" />
+            <ChevronUp />
           </S.ScrollUpButton>
           <S.Viewport className="sel__viewport">
             {options.map((it, gi) =>
@@ -87,7 +87,7 @@ export default function Select<V extends string | number>({ value, onChange, opt
             )}
           </S.Viewport>
           <S.ScrollDownButton className="sel__scroll">
-            <Chevron dir="down" />
+            <ChevronDown />
           </S.ScrollDownButton>
         </S.Content>
       </S.Portal>

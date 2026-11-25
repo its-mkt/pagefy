@@ -571,3 +571,26 @@
 
   &.is-ready &__head { border-bottom-color: var(--green-a5); }
 }
+
+// 결과 「손보기」 탭 — 에디터 테스트와 같은 편집 상자(SeEditor.tsx). 위 안내 + 편집 상자
+.fixit {
+  display: grid;
+  gap: 0.75rem;
+  &__note { margin: 0; .link-btn { margin-left: 0.5rem; } }
+}
+// 「HTML 복사」 옆 — 손본 HTML 을 복사한다는 표시
+.getit__edited { color: var(--accink); .link-btn { margin-left: 0.5rem; } }
+// 손보기 저장 막대 — 지금 상태(저장 안 함 · 저장됨 · 고친 것 없음)와 저장·버리기·원래대로
+.fixit__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--tile);
+  font-size: 0.8125rem;
+  &.is-dirty { background: var(--red-a4); color: var(--red-a11); .btn:not(.btn--primary) { background: #fff; } }
+}
+.fixit__state { margin-right: auto; font-weight: 600; }
+// 「HTML 복사」 옆 — 저장하지 않은 고침 때문에 복사를 막았다는 안내
+.getit__unsaved { color: var(--amber-a11); font-weight: 600; .link-btn { margin-left: 0.5rem; } }

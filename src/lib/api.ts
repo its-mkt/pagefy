@@ -3,8 +3,13 @@ import type { GodoGoods, HealthInfo, PlanRequest, SectionRequest, StreamEvent } 
 import type { AdminSettingsRequest, AdminStats, BudgetInfo } from '../../shared/ops';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, currentToken } from './supabase';
 
-/** true 면 Supabase 함수 + 로그인 필요. 개발 중에도 VITE_PAGEFY_CLOUD=1 이면 함수를 쓴다 */
+/** true 면 생성 API 로 Supabase 함수를 쓴다 (배포). 개발 중에도 VITE_PAGEFY_CLOUD=1 이면 함수를 쓴다 (실제 Claude 비용) */
 export const CLOUD = import.meta.env.PROD || import.meta.env.VITE_PAGEFY_CLOUD === '1';
+/**
+ * true 면 로그인한다 — 로그인 화면·광고 인사이트 권한 확인·변환 내역 계정 저장(pagefy_jobs).
+ * 배포는 늘 켜짐. 개발(yarn dev)은 VITE_PAGEFY_LOGIN=1 이면 생성은 로컬 서버로 하면서 로그인만 실제 계정으로 (2026-11-25)
+ */
+export const AUTH = CLOUD || import.meta.env.VITE_PAGEFY_LOGIN === '1';
 const BASE = CLOUD ? `${SUPABASE_URL}/functions/v1/pagefy` : `${import.meta.env.BASE_URL}api`;
 
 async function headers(json = false): Promise<Record<string, string>> {
@@ -28,8 +33,25 @@ export async function fetchHealth(): Promise<HealthInfo> {
 }
 
 /** 요청을 보내고 서버가 보내는 SSE 이벤트를 하나씩 onEvent 로 넘긴다 */
+/**
+ * 서버(함수)가 응답을 시작하지 못하고 끊긴 경우 — 브라우저 원문은 「Failed to fetch」뿐이라 무슨 일인지 알 수 없다.
+ * 함수가 처리를 시작하지 못했으므로 Claude 도 불리지 않아 비용이 없다 (2026-11-25 Supabase 앞단 503 장애 — 함수 실행 기록 없음)
+ * noResponse 가 붙은 오류는 화면이 「다시 시도」를 크게 보여 준다
+ */
+export const NO_RESPONSE_MSG = '서버에 연결하지 못했습니다 — 서버가 응답을 시작하지 못하고 끊겼습니다. 일시적인 장애일 수 있으니 잠시 뒤 다시 시도하세요. Claude 가 실행되지 않아 비용은 나가지 않았습니다.';
+const noResponse = () => Object.assign(new Error(NO_RESPONSE_MSG), { noResponse: true });
+export const isNoResponse = (e: unknown) => !!(e && typeof e === 'object' && (e as { noResponse?: boolean }).noResponse);
+
 async function stream(path: 'plan' | 'section', body: PlanRequest | SectionRequest, onEvent: (e: StreamEvent) => void, signal: AbortSignal) {
-  const r = await fetch(`${BASE}/${path}`, { method: 'POST', headers: await headers(true), body: JSON.stringify(body), signal });
+  let r: Response;
+  try {
+    r = await fetch(`${BASE}/${path}`, { method: 'POST', headers: await headers(true), body: JSON.stringify(body), signal });
+  } catch (err) {
+    if (signal.aborted) throw err; // 사용자가 취소함
+    throw noResponse(); // 네트워크·서버 앞단에서 끊김 (CORS 없는 503 도 여기로 온다)
+  }
+  // 응답은 왔지만 함수가 아닌 앞단이 내용 없이 돌려준 오류(502·503·504) — 위와 같은 경우
+  if (!r.ok && [502, 503, 504].includes(r.status) && !(r.headers.get('content-type') ?? '').includes('json')) throw noResponse();
   if (!r.ok || !r.body) throw new Error(await errorOf(r));
   const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
   let buf = '';
@@ -124,7 +146,15 @@ export interface UploadedItem {
 }
 
 async function postJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
-  const r = await fetch(`${BASE}/${path}`, { method: 'POST', headers: await headers(true), body: JSON.stringify(body), signal });
+  let r: Response;
+  try {
+    r = await fetch(`${BASE}/${path}`, { method: 'POST', headers: await headers(true), body: JSON.stringify(body), signal });
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    // 브라우저 원문 「Failed to fetch」 대신 — 서버(함수)에 닿지 못했거나 응답 전에 끊김
+    throw new Error('서버에 연결하지 못했습니다 (일시적인 장애일 수 있음). 잠시 뒤 다시 시도하세요.');
+  }
+  if (!r.ok && [502, 503, 504].includes(r.status) && !(r.headers.get('content-type') ?? '').includes('json')) throw new Error(`서버가 응답하지 못했습니다 (${r.status} · 일시적인 장애일 수 있음). 잠시 뒤 다시 시도하세요.`);
   if (!r.ok) throw new Error(await errorOf(r));
   return r.json();
 }

@@ -9,7 +9,7 @@ import { MARKETS, normMarket, type Market } from '../../shared/markets';
 import { rangeMs, type DayRange } from './dayRange';
 import type { Settings } from '../components/SettingsPanel';
 import type { SectionOut } from './assemble';
-import { CLOUD } from './api';
+import { AUTH } from './api';
 import { supabase } from './supabase';
 
 export type JobState = 'ready' | 'running' | 'stopped' | 'error' | 'done';
@@ -51,6 +51,11 @@ export interface Job {
   failed: Record<string, string>;
   /** 마지막으로 만든 완성 HTML (이미지 서버 주소) — PSD 원본이 없는 PC 에서도 결과를 보고 받을 수 있게 */
   html?: string;
+  /**
+   * 결과 화면 「손보기」에서 저장한 복사 구간 HTML (2026-11-25). base = 손보기 전 복사 구간의 표시값(editBase) —
+   * 결과가 다시 만들어져 원본이 바뀌면 맞지 않으므로 버린다 (옛 결과 위에서 고친 것을 새 결과에 붙이지 않게)
+   */
+  edited?: { html: string; base: string; at: number };
   usage?: UsageInfo;
   model?: string;
   revisionCount: number;
@@ -140,7 +145,7 @@ const TABLE = 'pagefy_jobs';
 /** 생성 중 표시 유효 시간 — 그 안에 갱신이 없으면 끊긴 것으로 본다 */
 const RUNNING_TTL = 3 * 60_000;
 /** 표가 없거나(아직 적용 전) 권한 오류면 이 화면에서는 계정 저장을 끄고 브라우저에만 저장한다 */
-let cloudOff = !CLOUD;
+let cloudOff = !AUTH;
 
 interface Row {
   id: string;
@@ -299,7 +304,7 @@ export interface JobFilter {
 export const filterOn = (f: JobFilter) => !!(f.channel || f.state || f.days || f.range || f.test || f.q?.trim());
 const PROBLEM: JobState[] = ['error', 'stopped'];
 /** 고도몰 채널 */
-const GODO: Channel[] = ['itket', 'oncore'];
+const GODO: Channel[] = ['itket', 'oncore', 'zbyhp', 'cadkorea'];
 /** 검색어에서 PostgREST 필터 문법을 깨는 글자를 뺀다 */
 const cleanQ = (q?: string) => (q ?? '').replace(/[,()*%\\]/g, ' ').trim();
 const sinceMs = (days: number) => {
@@ -555,6 +560,26 @@ export async function jobBySlug(slug: string, rev?: string): Promise<{ job: Job 
   return { job: ids.length ? await jobById(ids[0]) : null, count: ids.length };
 }
 
+/**
+ * 저장된 HTML 이 있는 작업 찾기 (에디터 테스트 「변환 내역에서 불러오기」) — 최근 순, offset 부터 limit 개씩.
+ * 변환 내역 화면에 읽어 둔 목록(20개)과 따로, 계정에서 바로 찾는다 → 작업이 많아도 검색·더 보기로 모두 고를 수 있다.
+ * q 는 변환 내역 검색과 같은 규칙 (제품명·파일명·담당·메모). 목록 칸만 받고 HTML 은 고를 때 fullJob 으로 받는다.
+ * 목록 화면의 캐시(lastCloud)·브라우저 사본 올리기는 건드리지 않는 읽기 전용
+ */
+export async function findJobsWithHtml(q: string, offset: number, limit = 20): Promise<{ jobs: Job[]; more: boolean }> {
+  const f: JobFilter = { q };
+  const cloud = await cloudReady();
+  if (cloud) {
+    const query = filterRules(f).reduce((qq, r) => r.cloud(qq), listQuery()).not('data->>html', 'is', null);
+    const { data, error } = await query.order('updated_at', { ascending: false }).range(offset, offset + limit); // 하나 더 받아 「더 있음」 판단
+    if (error) throw new Error(`작업 목록을 읽지 못했습니다 (${error.message})`);
+    const rows = (data as unknown as LiteRow[]).map(fromLite);
+    return { jobs: rows.slice(0, limit), more: rows.length > limit };
+  }
+  const local = (await listLocal()).filter((j) => !j.deletedAt && !!j.html && matchFilter(j, f));
+  return { jobs: local.slice(offset, offset + limit), more: local.length > offset + limit };
+}
+
 /** 같은 폴더 확인에서 한 번에 받는 최대 작업 수 — 이만큼 꽉 차면 다 봤다고 할 수 없어 지우기를 막는다 */
 const FOLDER_CHECK_MAX = 200;
 
@@ -797,3 +822,13 @@ export function forkJob(src: Job, settings: Settings, opt: { keepPlan: boolean; 
 export function requestPersist() {
   navigator.storage?.persist?.().catch(() => {});
 }
+
+/** 손보기 원본 표시값 — 복사 구간 HTML 의 길이 + 간단한 해시 (같은 결과인지만 가린다, 보안 용도 아님) */
+export function editBase(copyHtml: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < copyHtml.length; i++) h = Math.imul(h ^ copyHtml.charCodeAt(i), 16777619);
+  return `${copyHtml.length}:${(h >>> 0).toString(36)}`;
+}
+
+/** 이 결과(복사 구간)에 맞는 저장된 손보기가 있으면 그 HTML, 없거나 결과가 바뀌었으면 null */
+export const savedEditFor = (job: Pick<Job, 'edited'> | null | undefined, copyHtml: string) => (job?.edited && job.edited.base === editBase(copyHtml) ? job.edited.html : null);
