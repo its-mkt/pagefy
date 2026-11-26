@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Button } from './Button';
 import { Dialog } from 'radix-ui';
-import type { Job, JobNote } from '../lib/jobs';
+import { okLink, type Job, type JobNote } from '../lib/jobs';
 import JobInfoFields, { hasAssignee } from './JobInfoFields';
 
 export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | null; onClose: () => void; onSave: (job: Job, note: JobNote) => Promise<void> }) {
@@ -13,7 +13,7 @@ export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | nul
   const [tried, setTried] = useState(false);
   useEffect(() => {
     if (!job) return;
-    setInfo({ assignee: job.note?.assignee ?? '', memo: job.note?.memo ?? '', test: !!job.note?.test });
+    setInfo({ assignee: job.note?.assignee ?? '', memo: job.note?.memo ?? '', test: !!job.note?.test, link: job.note?.link ?? '' });
     setSaving(false);
     setError(null);
     setTried(false);
@@ -26,10 +26,12 @@ export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | nul
       document.querySelector<HTMLElement>('.jobinfo [data-field="assignee"]')?.focus();
       return;
     }
+    // 등록 페이지 주소가 주소 모양이 아니면 저장하지 않는다 (칸에 빨간 안내가 이미 보임)
+    if (!okLink(info.link)) return;
     setSaving(true);
     setError(null);
     try {
-      await onSave(job, { assignee: info.assignee?.trim() ?? '', memo: info.memo?.trim() ?? '', test: !!info.test });
+      await onSave(job, { assignee: info.assignee?.trim() ?? '', memo: info.memo?.trim() ?? '', test: !!info.test, link: info.link?.trim() || undefined });
       onClose();
     } catch (e) {
       setError(`저장하지 못했습니다: ${(e as Error).message}`);

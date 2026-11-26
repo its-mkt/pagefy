@@ -1,3 +1,5 @@
+import { Check } from 'lucide-react';
+
 /** 지금 어느 단계인지 — PSD 올리기 → 확인·설정 → 만들기 → 복사해 붙여넣기 */
 const STEPS = ['PSD 올리기', '확인·설정', '마크업 만들기', '복사해 붙여넣기'] as const;
 
@@ -15,7 +17,7 @@ export default function Stepper({ step, shown = step, onPick }: { step: number; 
         const canPick = !!onPick && n >= 2 && n <= step && n !== shown;
         const body = (
           <>
-            <span className="stepper__num">{state === 'done' ? '✓' : n}</span>
+            <span className="stepper__num">{state === 'done' ? <Check className="stepper__ico" aria-hidden="true" /> : n}</span>
             <span className="stepper__label">{label}</span>
           </>
         );

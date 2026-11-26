@@ -20,13 +20,13 @@
     font-weight: 500;
     text-align: center;
 
-    // 앞 단계와 잇는 선 (동그라미 가운데 높이, 동그라미 사이만)
+    // 앞 단계와 잇는 선 (동그라미 가운데 높이). 양쪽 동그라미 가운데까지 뻗고, 동그라미(z-index 1)가 그 위를 덮어 원과 선 사이에 틈이 없다
     & + &::before {
       content: '';
       position: absolute;
       top: calc(var(--dot) / 2 - 1px);
-      right: calc(50% + var(--dot) / 2 + 0.375rem);
-      left: calc(-50% + var(--dot) / 2 + 0.375rem);
+      right: 50%;
+      left: -50%;
       height: 2px;
       background: var(--line2);
     }
@@ -38,6 +38,8 @@
     &.is-done { color: var(--ink2); }
   }
 
+  // 끝난 단계의 체크 (lucide Check) — 동그라미 한가운데에, 획을 조금 굵게 (작아 보이지 않게)
+  &__ico { display: block; width: 0.875rem; height: 0.875rem; stroke-width: 2.5; }
   &__num {
     position: relative;
     z-index: 1;
@@ -59,9 +61,10 @@
       color: #fff;
       box-shadow: 0 0 0 4px var(--accbg);
     }
+    // 끝난 단계: 옅은 강조색이 반투명이라 뒤의 선이 비쳐 보였다 → 흰 바탕을 깔고 그 위에 옅은 색을 올린다
     .is-done & {
       border-color: var(--acc);
-      background: var(--accbg);
+      background: linear-gradient(var(--accbg), var(--accbg)), var(--card);
       color: var(--accink);
     }
   }

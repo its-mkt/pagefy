@@ -8,8 +8,11 @@ import ProfileMenu, { type ProfileUser } from './ProfileMenu';
 import { Tip, TipWrap } from './ui';
 import logo from '../assets/pagefy.svg';
 
-/** 화면 (주소 #jobs · #tester · #help · #admin, 없으면 만들기) */
-export type View = 'work' | 'jobs' | 'tester' | 'help' | 'admin';
+/**
+ * 화면 (주소 #jobs · #job · #tester · #help · #admin, 없으면 만들기).
+ * job = 목록에서 연 작업 페이지 — 메뉴에 없는 별도 화면이라 어느 메뉴도 켜지지 않는다 (목록은 「변환 내역」 메뉴로)
+ */
+export type View = 'work' | 'jobs' | 'job' | 'tester' | 'help' | 'admin';
 
 interface Props {
   health: HealthInfo | null;
@@ -73,7 +76,8 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
           ).map(([v, label, hash]) => (
             <a
               key={v}
-              href={`${window.location.pathname}${v === 'work' ? window.location.search : ''}${hash}`}
+              href={`${window.location.pathname}${hash}`}
+              // 작업 페이지(job)는 메뉴에 없는 화면 — 어느 메뉴도 켜지 않는다. 목록은 「변환 내역」 메뉴를 눌러 본다 (2026-11-26 사용자)
               className={`header__tab${view === v ? ' is-on' : ''}`}
               aria-current={view === v ? 'page' : undefined}
               onClick={(e) => {

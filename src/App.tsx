@@ -12,12 +12,10 @@ import { generateMarkup, keepMap } from './lib/codegen';
 import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
-import { fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
+import { SLUG_BLOCK, fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
 import { busyJobIds, deleteJob, editBase, filterOn, fileKeyOf, findJobsWithHtml, savedEditFor, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform } from './lib/jobs';
 import Header, { type View } from './components/Header';
 import HelpPanel from './components/HelpPanel';
-import Tour from './components/Tour';
-import { resetTour, type TourStage } from './lib/tour';
 import TesterPanel, { type TesterSource } from './components/TesterPanel';
 import { editorFor } from './lib/editorSim';
 import AdminPanel from './components/AdminPanel';
@@ -95,27 +93,43 @@ export interface Result {
 //   /pagefy/                    첫 화면
 //   /pagefy/?markup=<제품 슬러그>&rev=<rev>   작업 열기 — 슬러그는 이미지 서버 폴더 이름(규칙 6-1)이라 영문이고 안 바뀐다
 //                                          (새로고침해도 다시 열림 — 저장된 계획으로 다시 만들어 Claude 비용 없음)
+//   … &ch=<채널>[&pf=<플랫폼>]               판매처 — 같은 제품을 고도몰·오픈마켓 플랫폼별로 따로 만들면 슬러그·rev 가 같아서 (2026-11-26)
+//                                          ch 없는 예전 주소는 고도몰 작업을 먼저 연다
 //   … &view=html                            PSD 없이 저장된 HTML 결과 보기
 //   /pagefy/?trash                          휴지통
 //   /pagefy/?job=<작업 id>                   슬러그가 없는 작업·예전 주소용
 interface Route {
   markup?: string;
   rev?: string;
+  /** 판매처 채널 (settings.channel) */
+  ch?: string;
+  /** 오픈마켓 플랫폼 (settings.market) — ch=openmarket 일 때만 */
+  pf?: string;
   job?: string;
   html?: boolean;
   trash?: boolean;
 }
 function readRoute(): Route {
   const q = new URLSearchParams(window.location.search);
-  return { markup: q.get('markup') || undefined, rev: q.get('rev') || undefined, job: q.get('job') || undefined, html: q.get('view') === 'html', trash: q.has('trash') };
+  return {
+    markup: q.get('markup') || undefined,
+    rev: q.get('rev') || undefined,
+    ch: q.get('ch') || undefined,
+    pf: q.get('pf') || undefined,
+    job: q.get('job') || undefined,
+    html: q.get('view') === 'html',
+    trash: q.has('trash'),
+  };
 }
 /** 메뉴 화면 (#jobs · #tester · #help · #admin) — 작업 주소(?markup=…)와 따로 움직인다 */
-const VIEW_OF_HASH: Record<string, View> = { '#jobs': 'jobs', '#tester': 'tester', '#help': 'help', '#admin': 'admin' };
+/** 변환 내역 한 페이지 작업 수 */
+const JOB_PAGE = 20;
+const VIEW_OF_HASH: Record<string, View> = { '#jobs': 'jobs', '#job': 'job', '#tester': 'tester', '#help': 'help', '#admin': 'admin' };
 const viewOfHash = (): View => VIEW_OF_HASH[window.location.hash] ?? 'work';
 function routeUrl(r: Route) {
   const view = r.html ? '&view=html' : '';
   const q = r.markup
-    ? `?markup=${encodeURIComponent(r.markup)}${r.rev ? `&rev=${encodeURIComponent(r.rev)}` : ''}${view}`
+    ? `?markup=${encodeURIComponent(r.markup)}${r.rev ? `&rev=${encodeURIComponent(r.rev)}` : ''}${r.ch ? `&ch=${encodeURIComponent(r.ch)}` : ''}${r.ch === 'openmarket' && r.pf ? `&pf=${encodeURIComponent(r.pf)}` : ''}${view}`
     : r.job
       ? `?job=${encodeURIComponent(r.job)}${view}`
       : r.trash
@@ -123,10 +137,27 @@ function routeUrl(r: Route) {
         : '';
   return window.location.pathname + q;
 }
-/** 작업 → 주소 (슬러그가 있으면 슬러그·rev, 없으면 id) */
-const routeOf = (j: Job, html = false): Route => (j.settings?.slug ? { markup: j.settings.slug, rev: j.settings.rev || undefined, html } : { job: j.id, html });
-/** 주소가 이 작업을 가리키는지 */
-const routeIs = (r: Route, j: Job | null | undefined) => !!j && (r.job ? r.job === j.id : !!r.markup && r.markup === j.settings?.slug && (!r.rev || r.rev === j.settings.rev));
+/** 작업 → 주소 (슬러그가 있으면 슬러그·rev·판매처, 없으면 id) */
+const routeOf = (j: Job, html = false): Route =>
+  j.settings?.slug
+    ? {
+        markup: j.settings.slug,
+        rev: j.settings.rev || undefined,
+        ch: j.settings.channel || undefined,
+        pf: j.settings.channel === 'openmarket' ? j.settings.market || undefined : undefined,
+        html,
+      }
+    : { job: j.id, html };
+/** 주소가 이 작업을 가리키는지 (ch·pf 가 없는 예전 주소는 판매처를 따지지 않는다) */
+const routeIs = (r: Route, j: Job | null | undefined) =>
+  !!j &&
+  (r.job
+    ? r.job === j.id
+    : !!r.markup &&
+      r.markup === j.settings?.slug &&
+      (!r.rev || r.rev === j.settings.rev) &&
+      (!r.ch || r.ch === j.settings.channel) &&
+      (r.ch !== 'openmarket' || !r.pf || r.pf === j.settings.market));
 
 /** 마지막으로 확인한 권한 (계정 id 와 함께) — 다음 접속 때 화면을 바로 열기 위함 */
 const ROLE_KEY = 'pagefy.role';
@@ -230,7 +261,14 @@ export default function App() {
   viewRef.current = view;
   const setView = (v: View) => {
     if (v === view) return;
-    window.history.pushState(null, '', window.location.pathname + window.location.search + (v === 'work' ? '' : `#${v}`));
+    // 작업 페이지(변환 내역에서 연 작업)에서 「만들기」로 가면 새 PSD 올리기 화면 — 연 작업은 닫는다 (변환 내역에 저장돼 있어 다시 열 수 있음).
+    // 만드는 중·읽는 중에는 잃지 않게 그대로 둔다 (goHome 과 같은 기준)
+    const leaveJob = view === 'job' && v === 'work' && !running && !loading;
+    if (leaveJob) {
+      closeCurrent();
+      setViewJob(null);
+    }
+    window.history.pushState(null, '', window.location.pathname + (leaveJob ? '' : window.location.search) + (v === 'work' ? '' : `#${v}`));
     setViewState(v);
     window.scrollTo({ top: 0 });
   };
@@ -280,6 +318,10 @@ export default function App() {
   // 작업 목록: 계정 저장이면 최근 20개씩 ("더 보기"로 늘림). quick = 방금 저장한 것만 반영 (계정을 다시 읽지 않음)
   const [moreJobs, setMoreJobs] = useState(false);
   const jobLimitRef = useRef(20);
+  // 변환 내역 페이지 (0부터) · 거르기에 맞는 전체 개수 — 한 페이지 JOB_PAGE 개. 만들기 화면의 「최근 작업」은 늘 첫 페이지
+  const jobPageRef = useRef(0);
+  const [jobPage, setJobPage] = useState(0);
+  const [jobsTotal, setJobsTotal] = useState<number | undefined>(undefined);
   // 계정에서 목록을 읽는 동안 (처음 열 때·더 보기) 작업 목록에 불러오는 중 표시. quick 은 브라우저 사본만 합쳐 금방 끝나 표시하지 않는다
   const [jobsLoading, setJobsLoading] = useState(true);
   // 휴지통: 열면 목록(trash), 닫혀 있으면 null. 개수는 최근 작업 머리에 표시
@@ -322,19 +364,39 @@ export default function App() {
     const seq = ++listSeq.current;
     const full = quick ? 0 : ++fullSeq.current;
     if (!quick) setJobsLoading(true);
-    const show = (p: { jobs: Job[]; more: boolean }) => {
+    const inJobs = viewRef.current === 'jobs';
+    const page = inJobs ? jobPageRef.current : 0;
+    const show = (p: { jobs: Job[]; more: boolean; total?: number }) => {
       if (seq !== listSeq.current) return;
+      // 지우거나 거른 뒤 지금 페이지가 비면 마지막 페이지로 (빈 페이지에 머물지 않게)
+      if (inJobs && page > 0 && !p.jobs.length && p.total !== undefined) {
+        const last = Math.max(0, Math.ceil(p.total / JOB_PAGE) - 1);
+        if (last < page) {
+          jobPageRef.current = last;
+          setJobPage(last);
+          refreshJobs();
+          return;
+        }
+      }
       setJobs(p.jobs);
       setMoreJobs(p.more);
+      setJobsTotal(p.total);
     };
     // 만들기 화면의 「최근 작업」은 거르기 없이 최근 것부터 (변환 내역 화면에서 걸어 둔 조건이 5건 목록에 걸리지 않게)
-    return listJobsPage(jobLimitRef.current, quick, show, viewRef.current === 'jobs' ? jobFilterRef.current : {})
+    return listJobsPage(inJobs ? JOB_PAGE : jobLimitRef.current, quick, show, inJobs ? jobFilterRef.current : {}, page * JOB_PAGE)
       .then(show, (e) => console.warn('[jobs]', e))
       .finally(() => full && full === fullSeq.current && setJobsLoading(false));
   };
   const showMoreJobs = () => {
     jobLimitRef.current += 20;
     refreshJobs();
+  };
+  /** 변환 내역 페이지 이동 — 목록 맨 위(거르기 줄)로 올린다 */
+  const goJobPage = (n: number) => {
+    jobPageRef.current = n;
+    setJobPage(n);
+    refreshJobs();
+    requestAnimationFrame(() => document.querySelector('.jobs')?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
   };
   // 변환 내역 거르기 (채널·플랫폼·상태·기간·검색) — 바꾸면 처음 20개부터 다시 읽는다
   const [jobFilter, setJobFilterState] = useState<JobFilter>({});
@@ -343,6 +405,8 @@ export default function App() {
     jobFilterRef.current = f;
     setJobFilterState(f);
     jobLimitRef.current = 20;
+    jobPageRef.current = 0;
+    setJobPage(0);
     refreshJobs();
   };
   const showJobs = jobs.length > 0 || jobsLoading || trashN > 0 || !!trash || filterOn(jobFilter);
@@ -353,13 +417,24 @@ export default function App() {
     prevView.current = view;
     if ((was === 'jobs') === (view === 'jobs') || !allowed) return;
     jobLimitRef.current = 20;
+    jobPageRef.current = 0;
+    setJobPage(0);
     refreshJobs();
   }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 화면(만들기·변환 내역 등)을 바꾸면 보던 저장 결과는 닫는다 — 두 화면에 같이 남지 않게.
+  // 작업 페이지로 들어갈 때는 닫지 않는다 (목록에서 고른 저장 결과를 그 페이지에서 연다)
+  useEffect(() => {
+    if (view !== 'job') setViewJob(null);
+  }, [view]);
   /** 지금 작업을 고쳐 저장 (섹션이 동시에 끝나도 ref 에서 이어 붙여 잃지 않는다) */
   function updateJob(patch: Partial<Job> | ((j: Job) => Partial<Job>)) {
     const cur = jobRef.current;
     if (!cur) return;
-    const next = { ...cur, ...(typeof patch === 'function' ? patch(cur) : patch), updatedAt: Date.now() };
+    const add = typeof patch === 'function' ? patch(cur) : patch;
+    // 바뀐 게 없으면 저장하지 않는다 — 작업을 열거나 설정이 그대로 다시 적힐 때 수정 시각이 올라가 목록 맨 위로 가는 것을 막는다
+    const same = Object.keys(add).every((k) => JSON.stringify((cur as unknown as Record<string, unknown>)[k]) === JSON.stringify((add as unknown as Record<string, unknown>)[k]));
+    if (same) return;
+    const next = { ...cur, ...add, updatedAt: Date.now() };
     jobRef.current = next;
     putJob(next).then(() => refreshJobs(true), (e) => console.warn('[jobs] 저장 실패', e));
   }
@@ -481,7 +556,7 @@ export default function App() {
     let file = picked ?? (await getFile(job.fileKey).catch(() => undefined));
     if (!file) {
       setLoading(null);
-      setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 고르기」로 같은 PSD를 골라 주세요.');
+      setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 선택」로 같은 PSD를 골라 주세요.');
       return;
     }
     if (picked) {
@@ -564,6 +639,14 @@ export default function App() {
     setViewJob(job);
     requestAnimationFrame(() => document.querySelector(".saved")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }
+
+  // PSD 없이 연 저장 결과의 「수정」 저장 — 작업(edited)에 남기고 화면도 바로 맞춘다 (복사 구간 기준 editBase, 결과 화면 saveEdit 과 같은 규칙)
+  const saveViewEdit = (html: string | null) => {
+    if (!viewJob) return;
+    const next: Job = { ...viewJob, edited: html ? { html, base: editBase(copySection(viewJob.html ?? '')), at: Date.now() } : undefined, updatedAt: Date.now() };
+    setViewJob(next);
+    putJob(next).then(() => refreshJobs(true), (e) => console.warn('[jobs] 저장 실패', e));
+  };
 
   async function restoreJob(job: Job) {
     if (!job.plan || !job.meta) {
@@ -681,17 +764,19 @@ export default function App() {
   function syncUrl(replace = false) {
     const want = routeUrl(currentRoute());
     if (want === window.location.pathname + window.location.search) return;
-    if (replace) window.history.replaceState(null, '', want + window.location.hash);
+    // 작업 페이지로 막 넘어온 빈 주소(#job, 작업 없음)는 그 작업 주소로 바꿔 쓴다 — 뒤로 가기 한 번에 목록으로 (빈 작업 페이지를 거치지 않게)
+    const bareJob = !window.location.search && window.location.hash === '#job';
+    if (replace || bareJob) window.history.replaceState(null, '', want + window.location.hash);
     else window.history.pushState(null, '', want + window.location.hash);
   }
   // 화면이 바뀌면 주소에 쌓는다 (뒤로 가기로 돌아올 수 있게)
   useEffect(() => {
     if (routeReady.current && !routeBusy.current) syncUrl();
   }, [viewJob, jobId, trash !== null]); // eslint-disable-line react-hooks/exhaustive-deps
-  // 같은 작업에서 슬러그·rev 만 바뀌면(「새 rev」·설정 고침) 기록을 쌓지 않고 주소만 바꾼다 — 안 바꾸면 새로고침 때 옛 rev 로 찾다 못 찾음
+  // 같은 작업에서 슬러그·rev·판매처만 바뀌면(「새 rev」·설정 고침) 기록을 쌓지 않고 주소만 바꾼다 — 안 바꾸면 새로고침 때 옛 값으로 찾다 못 찾음
   useEffect(() => {
     if (routeReady.current && !routeBusy.current && jobRef.current) syncUrl(true);
-  }, [settings.slug, settings.rev]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [settings.slug, settings.rev, settings.channel, settings.market]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 주소대로 화면 맞추기 (처음 열 때·뒤로/앞으로 가기) */
   async function applyRoute(r: Route) {
@@ -705,6 +790,11 @@ export default function App() {
     }
     routeBusy.current = true;
     try {
+      // 작업 주소(?job·?markup)는 작업 페이지에서 연다 — 예전에 공유한 주소(#job 없음)도 「변환 내역」 아래 작업 페이지로
+      if ((r.job || r.markup) && viewRef.current === 'work') {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search + '#job');
+        setViewState('job');
+      }
       if (!r.job && !r.markup) {
         if (loadedRef.current || viewJobRef.current) closeCurrent();
         if (r.trash) {
@@ -723,9 +813,9 @@ export default function App() {
       let note = '';
       if (r.job) job = await jobById(r.job);
       else {
-        const found = await jobBySlug(r.markup!, r.rev);
+        const found = await jobBySlug(r.markup!, r.rev, r.ch, r.pf);
         job = found.job;
-        if (found.count > 1) note = (`같은 제품(${r.markup}${r.rev ? ` · rev ${r.rev}` : ''})의 작업이 ${found.count}개라 가장 최근 것을 열었습니다. 다른 것은 최근 작업 목록에서 고르세요.`);
+        if (found.count > 1) note = (`같은 제품(${r.markup}${r.rev ? ` · rev ${r.rev}` : ''})의 작업이 ${found.count}개라 ${r.ch ? '' : '고도몰 작업을 우선해 '}가장 최근 것을 열었습니다. 다른 것은 최근 작업 목록에서 고르세요.`);
       }
       if (!job) {
         setLoadError('주소의 작업을 찾지 못했습니다 (지워졌거나 휴지통에 있는 작업, 또는 다른 계정의 작업).');
@@ -742,8 +832,8 @@ export default function App() {
         // 이 PC 에 PSD 원본이 없으면 저장된 결과(HTML)라도 보여 준다
         if (loadedRef.current) closeCurrent();
         await showSaved(job);
-        setLoadError('이 PC 브라우저에 PSD 원본이 없어 저장된 결과를 보여 줍니다. 고치려면 작업 목록의 「PSD 고르기」로 같은 PSD를 골라 주세요.');
-      } else setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 고르기」로 같은 PSD를 골라 주세요.');
+        setLoadError('이 PC 브라우저에 PSD 원본이 없어 저장된 결과를 보여 줍니다. 고치려면 작업 목록의 「PSD 선택」로 같은 PSD를 골라 주세요.');
+      } else setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 선택」로 같은 PSD를 골라 주세요.');
     } finally {
       routeBusy.current = false;
       // 화면이 다 바뀐 뒤 주소를 실제 화면에 맞춘다 (못 연 작업이면 첫 화면 주소로)
@@ -1468,19 +1558,21 @@ export default function App() {
         result.meta.rev !== meta.rev ? '작업 판(rev)' : '',
       ].filter(Boolean)
     : [];
-  // 만들기 버튼이 왜 안 눌리는지 담당자에게 알려 준다
+  // 만들기 버튼이 왜 안 눌리는지 담당자에게 알려 준다 — 계속 막는 이유(blockers)와 몇 초면 풀리는 상태(waiting)를 나눈다
   const blockers = [
-    loaded && !loaded.notext && '글자 뺀 배경을 합성하는 중입니다 — 몇 초 뒤 만들 수 있습니다.',
     !meta.productName && '제품명을 입력하세요.',
-    !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(meta.slug) && '서버 폴더 이름을 영문 소문자·숫자·하이픈으로 입력하세요 (PSD 이름이 한글이면 영문 모델명으로).',
+    !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(meta.slug) && SLUG_BLOCK,
     !/^https:\/\//.test(meta.publicRoot) && '이미지 공개 주소 루트는 https:// 로 시작해야 합니다.',
-    !health && !healthError && '생성 서버 연결을 확인하는 중입니다…',
     healthError && '생성 서버에 연결하지 못했습니다. 위쪽 빨간 표시를 확인하세요.',
     health && !ready && '생성 서버에 Claude API 키가 없습니다. 관리자에게 알려 주세요.',
     budget?.blocked && '이번 달 사용 한도에 도달했습니다. Pagefy 관리자에게 한도 해제를 요청하세요.',
   ].filter((b): b is string => !!b);
+  const waiting = [
+    loaded && !loaded.notext && '글자 뺀 배경을 합성하는 중입니다 — 몇 초 뒤 만들 수 있습니다.',
+    !health && !healthError && '생성 서버 연결을 확인하는 중입니다…',
+  ].filter((b): b is string => !!b);
   // PSD 를 먼저 보여 주는 동안(글자 뺀 배경 합성 중)에는 만들 수 없다 — 다 읽으면 notext 가 생긴다
-  const canGenerate = !!loaded?.notext && !blockers.length && run.phase !== 'running';
+  const canGenerate = !!loaded?.notext && !blockers.length && !waiting.length && run.phase !== 'running';
   const hasResult = run.phase !== 'idle' || !!result;
   const step = !loaded ? 1 : result && !running ? 4 : hasResult ? 3 : 2;
   // 단계 표시에서 고른 지난 단계 (완료한 ② 를 눌러 설정을 다시 볼 때) — 진행 단계가 바뀌면 지금 단계로 돌아온다
@@ -1493,16 +1585,6 @@ export default function App() {
   //  ④ 복사해 붙여넣기: 결과 — 설정을 바꾸려면 단계 표시의 ② 를 누른다
   const showSettings = !!loaded && !restoring && (shown === 2 || (shown === 3 && run.phase === 'error'));
   const showResultPanel = hasResult && !!loaded && !restoring && shown >= 3;
-  // 처음 안내를 띄울 단계 — 만들기 화면에서, 읽는 중·저장된 결과 보기 중이 아닐 때만 (만드는 중(3단계)에는 띄우지 않는다)
-  const tourStage: TourStage | null = view !== 'work' || !allowed || loading || restoring || viewJob ? null : step === 1 ? 'upload' : step === 2 && loaded?.notext ? 'settings' : step === 4 ? 'result' : null;
-  // 도움말의 「처음 안내 다시 보기」 — 본 기록을 지우고 만들기 화면으로 (key 를 바꿔 지금 단계 안내를 다시 고르게)
-  const [tourKey, setTourKey] = useState(0);
-  const restartTour = () => {
-    resetTour();
-    setTourKey((k) => k + 1);
-    setView('work');
-  };
-
   // 생성을 시작하면 진행 상황이 보이게 결과 칸으로 내린다
   useEffect(() => {
     if (running) document.getElementById('result')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1542,30 +1624,56 @@ export default function App() {
   };
 
   // 변환 내역 — 머리말 메뉴 「변환 내역」(#jobs) 전용 화면 + 만들기 첫 화면의 「최근 작업」(최근 5건, 2026-11-24)
-  const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash, imageServer: !!health?.upload, onEditInfo: editJobNote };
-  const recentJobs = showJobs && <JobsPanel {...jobsProps} mode="recent" onOpen={openJob} onView={showSaved} onCopy={copyToPlatform} onShowAll={() => setView('jobs')} />;
-  // 변환 내역 화면에서 열면 만들기 화면으로 넘어가 연다 (PSD·결과는 만들기 화면에 그려진다)
+  const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, page: jobPage, total: jobsTotal, pageSize: JOB_PAGE, onPage: goJobPage, onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash, imageServer: !!health?.upload, onEditInfo: editJobNote };
+  // 저장된 결과 보기 (PSD 없이) — 변환 내역에서 고르면 변환 내역 화면 안에서, 만들기 화면의 최근 작업에서 고르면 만들기 화면에서 연다
+  const savedView = viewJob && (
+    <SavedView
+      job={viewJob}
+      onClose={() => setViewJob(null)}
+      imageServer={!!health?.upload}
+      godo={!!health?.godo && viewJob.meta?.channel === 'itket'}
+      onOpenTester={viewJob.html && viewJob.meta ? () => openTester(testerSourceOf(viewJob.html!, viewJob.meta!, [])) : undefined}
+      // PSD 를 골라 이어서 작업 — 같은 작업 페이지에서 PSD 로 연다
+      onPickPsd={(f) => {
+        setView('job');
+        openJob(viewJob, f);
+      }}
+      onSaveEdit={saveViewEdit}
+      // 고도몰 등록 확인이 맞으면 등록 페이지 주소를 작업 기록에 남긴다 (변환 내역 「등록됨」)
+      onSaveLink={(url) => {
+        const j = viewJob;
+        const n = { ...(j.note ?? {}), link: url };
+        setViewJob((v) => (v?.id === j.id ? { ...v, note: n } : v));
+        editJobNote(j, n).catch((e) => console.warn('[jobs] 등록 페이지 저장 실패', e));
+      }}
+    />
+  );
+  // 목록(변환 내역·최근 작업)에서 작업을 열면 작업 페이지(#job)로 — 메뉴의 「만들기」가 아니라 「변환 내역」 아래 화면 (2026-11-26 사용자)
+  const openJobPage = {
+    onOpen: (j: Job, f?: File) => {
+      setView('job');
+      openJob(j, f);
+    },
+    onCopy: (j: Job, to: Platform) => {
+      setView('job');
+      copyToPlatform(j, to);
+    },
+    onView: (j: Job) => {
+      setView('job');
+      showSaved(j);
+    },
+  };
+  const recentJobs = showJobs && <JobsPanel {...jobsProps} mode="recent" {...openJobPage} onShowAll={() => setView('jobs')} />;
   const jobsPage = (
     <JobsPanel
       {...jobsProps}
       mode="page"
-      // 지금 열린 작업은 만들기 화면에 그대로 있다 → 그 화면으로 (결과가 있으면 결과 칸으로)
+      // 지금 열린 작업은 작업 페이지에 그대로 있다 → 그 페이지로 (결과가 있으면 결과 칸으로)
       onGoCurrent={() => {
-        setView('work');
+        setView('job');
         requestAnimationFrame(() => document.getElementById('result')?.scrollIntoView({ block: 'start' }));
       }}
-      onOpen={(j, f) => {
-        setView('work');
-        openJob(j, f);
-      }}
-      onCopy={(j, to) => {
-        setView('work');
-        copyToPlatform(j, to);
-      }}
-      onView={(j) => {
-        setView('work');
-        showSaved(j);
-      }}
+      {...openJobPage}
     />
   );
 
@@ -1584,10 +1692,11 @@ export default function App() {
         // 로컬은 로그인이 없어 로그아웃해도 아무 일도 없다 (메뉴 모양 확인용으로 항목만 보인다)
         onLogout={AUTH && session ? () => supabase.auth.signOut() : !AUTH ? () => console.info('[로컬] 로그인이 없어 로그아웃할 것이 없습니다') : undefined}
         // 첫 화면(PSD 올리기 칸이 크게 보임)에선 숨기고, PSD 를 연 뒤·저장된 결과를 볼 때만
-        onNewPsd={allowed && (loaded || viewJob) ? (f) => (window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f)) : undefined}
+        // 작업 페이지에서 새 PSD 를 열면 만들기 화면으로 (새 작업은 만들기에서 시작)
+        onNewPsd={allowed && (loaded || viewJob) ? (f) => (view === 'job' && setView('work'), window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f)) : undefined}
         newPsdDisabled={running || !!loading}
         onHome={goHome}
-        homeBusy={view === 'work' && (running || !!loading)}
+        homeBusy={(view === 'work' || view === 'job') && (running || !!loading)}
         view={allowed && !showLogin ? view : undefined}
         onView={setView}
         showAdmin={role === 'admin'}
@@ -1617,38 +1726,33 @@ export default function App() {
             )}
             {view === 'jobs' && allowed && jobsPage}
             {view === 'tester' && allowed && <TesterPanel current={resultTester} start={testerStart} onStarted={() => setTesterStart(null)} findJobs={findJobsWithHtml} onPick={pickForTester} />}
-            {view === 'help' && <HelpPanel onRestartTour={restartTour} />}
+            {view === 'help' && <HelpPanel />}
             {view === 'admin' && role === 'admin' && <AdminPanel onChanged={() => fetchHealth().then(setHealth, () => {})} />}
             {view === 'admin' && role !== 'admin' && <p className="msg msg--error">관리 화면은 관리자만 볼 수 있습니다.</p>}
-            <div className="app__view" hidden={view !== 'work'}>
-            <Stepper step={step} shown={shown} onPick={(n) => setPickedStep(n === step ? null : n)} />
-            {/* 처음 쓰는 사람 안내 — 단계마다 처음 한 번 (PSD 올리기 · 설정 · 결과). 내용은 lib/tour.ts */}
-            <Tour key={tourKey} stage={tourStage} />
-            <UploadPanel
-              onFile={(f) => openPsd(f)}
-              loading={loading}
-              error={loadError}
-              disabled={running}
-              file={loaded ? { name: loaded.file.name, size: loaded.file.size, width: loaded.summary.width, height: loaded.summary.height, thumbUrl: loaded.compositeUrl } : null}
-            />
-            {viewJob && (
-              <SavedView
-                job={viewJob}
-                onClose={() => setViewJob(null)}
-                imageServer={!!health?.upload}
-                godo={!!health?.godo && viewJob.meta?.channel === 'itket'}
-                onOpenTester={
-                  viewJob.html && viewJob.meta ? () => openTester(testerSourceOf(viewJob.html!, viewJob.meta!, [])) : undefined
-                }
-                onPickPsd={(f) => openJob(viewJob, f)}
+            {/* 만들기 화면 = 작업 페이지(job)와 같은 칸을 쓴다. 작업 페이지에 따로 제목은 두지 않는다 — 제품명은 저장 결과 패널 제목·PSD 파일 카드에 있다 (2026-11-26 사용자). 목록으로는 메뉴 「변환 내역」 */}
+            <div className="app__view" hidden={view !== 'work' && view !== 'job'}>
+            {/* 저장된 결과만 보는 동안은 단계 표시·PSD 올리기를 숨긴다 (만드는 흐름이 아니라 보기) */}
+            {!viewJob && <Stepper step={step} shown={shown} onPick={(n) => setPickedStep(n === step ? null : n)} />}
+            {/* PSD 파일 카드 + PSD 확인을 가로로 나란히 (넓은 화면) — 좁으면 한 줄씩 */}
+            {/* PSD 파일 카드는 결과를 보는 4단계에서 숨긴다 (단계 표시 ①을 누르면 다시 보임) · 저장 결과만 볼 때도 숨김 */}
+            <div className={`prep${loaded && shown === 2 && !restoring ? ' prep--pair' : ''}`} hidden={!!viewJob || (shown === 4 && !restoring)}>
+              <UploadPanel
+                onFile={(f) => openPsd(f)}
+                loading={loading}
+                error={loadError}
+                disabled={running}
+                file={loaded ? { name: loaded.file.name, size: loaded.file.size, width: loaded.summary.width, height: loaded.summary.height, thumbUrl: loaded.compositeUrl } : null}
               />
-            )}
-            {!loaded && !restoring && allowed && recentJobs}
-            {loaded && shown === 2 && !restoring && <SummaryPanel loaded={loaded} />}
+              {loaded && shown === 2 && !restoring && <SummaryPanel loaded={loaded} />}
+            </div>
+            {savedView}
+            {/* 최근 작업은 만들기 첫 화면에만 — 작업 상세 페이지(목록에서 연 작업)에서는 숨긴다 */}
+            {view === 'work' && !loaded && !restoring && allowed && recentJobs}
             {showSettings && loaded && (
               <SettingsPanel
                 collapsed={false}
                 blockers={blockers}
+                waiting={waiting}
                 note={note}
                 onNoteChange={setNote}
                 me={jobRef.current?.creator ?? me}
@@ -1683,7 +1787,7 @@ export default function App() {
                   </Button>
                 </span>
                 {/* 다시 만들기가 막힌 이유 — 설정 칸은 결과가 있으면 접혀 있어 거기 안내가 안 보인다 */}
-                {!canGenerate && blockers[0] && <small className="metadiff__why">다시 만들 수 없는 이유: {blockers[0]}</small>}
+                {!canGenerate && (blockers[0] ?? waiting[0]) && <small className="metadiff__why">다시 만들 수 없는 이유: {blockers[0] ?? waiting[0]}</small>}
               </div>
             )}
             {showResultPanel && loaded && (
@@ -1701,6 +1805,9 @@ export default function App() {
                 onRetry={canGenerate ? () => generate() : undefined}
                 upload={health?.upload && result?.bundle.plan.engine === 'code' ? upload : undefined}
                 godo={!!health?.godo && result?.meta.channel === 'itket'}
+                // 작업 기록(note)은 바뀌면 잠시 뒤 저장된다 — 등록 페이지 주소도 같은 길로
+                regLink={note.link}
+                onRegLink={(url) => setNote((n) => ({ ...n, link: url }))}
                 savedEdit={savedEdit}
                 onSaveEdit={saveEdit}
                 onUpload={uploadImages}
@@ -1742,7 +1849,7 @@ async function sha256Hex(b: Blob): Promise<string> {
  * images = [이미지 서버 주소, 미리보기 주소] (업로드 전 이미지는 브라우저 안 그림으로 보이게. 저장된 결과는 서버 주소 그대로라 빈 목록)
  */
 function testerSourceOf(html: string, m: GenerateMeta, images: [string, string][]): TesterSource {
-  return { html: copySection(html), label: `${m.productName} · ${platformLabel(m)}`, editor: editorFor(m), images };
+  return { html: copySection(html), label: `${m.productName} · ${platformLabel(m)}`, product: m.productName, editor: editorFor(m), images };
 }
 
 /** 업로드할 곳: <채널>/<슬러그>/, 오픈마켓은 openmarket/<플랫폼>/<슬러그>/ (규칙 6-1 — shared/types.ts imageFolder 와 같은 규칙) */

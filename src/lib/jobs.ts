@@ -22,7 +22,14 @@ export interface JobNote {
   memo?: string;
   /** 테스트용 작업 — 변환 내역에 「테스트」 표시, 거르기로 뺄 수 있다 */
   test?: boolean;
+  /** 쇼핑몰에 등록한 상품 페이지 주소 — 있으면 변환 내역에 「등록됨」 링크 (고도몰은 등록 확인이 맞으면 자동으로 채움) */
+  link?: string;
 }
+
+/** 등록 페이지 주소로 쓸 수 있는지 (비어 있으면 됨 — 선택 칸) */
+export const okLink = (v?: string) => !v?.trim() || /^https?:\/\/\S+$/i.test(v.trim());
+/** 쇼핑몰에 등록한 페이지 주소가 있는 작업 (빈 칸은 아님) — 변환 내역의 「등록」 표시·거르기 기준 */
+export const registered = (x: Pick<Job, 'note'>) => !!x.note?.link?.trim() && okLink(x.note.link);
 
 export interface Job {
   id: string;
@@ -282,7 +289,7 @@ async function getLocal(id: string) {
 
 /** 작업 목록 한 쪽 (최근 순). more = 더 있음. 계정과 브라우저를 합치고, 브라우저 쪽이 더 새로우면 계정에 올린다 */
 /** 마지막으로 계정에서 읽은 목록 — 저장할 때마다 다시 읽지 않고 이것과 브라우저 사본을 합친다 (quick) */
-let lastCloud: { rows: Job[]; limit: number; filter: string } | null = null;
+let lastCloud: { rows: Job[]; limit: number; filter: string; offset: number; total?: number } | null = null;
 
 /** 변환 내역 거르기 — 비어 있으면 전체. 계정 목록은 서버에서 거른 뒤 20개씩 읽으므로 「더 보기」로 빠짐없이 이어진다 */
 export interface JobFilter {
@@ -290,8 +297,8 @@ export interface JobFilter {
   channel?: Channel | 'godo';
   /** 오픈마켓 플랫폼 (channel 이 openmarket 일 때만) */
   market?: Market;
-  /** done = 완료만, problem = 오류·중단 */
-  state?: 'done' | 'problem';
+  /** ready = 준비(PSD 만 열고 아직 안 만든 것), done = 완료(아직 등록 전), reg = 등록(완료 + 등록한 페이지 주소 있음), problem = 오류·중단 */
+  state?: 'ready' | 'done' | 'reg' | 'problem';
   /** 최근 n일 안에 작업한 것 (마지막 수정 기준) — 기간 선택의 빠른 선택(오늘·7일·30일). 날이 바뀌어도 「최근 n일」로 따라간다 */
   days?: number;
   /** 달력에서 고른 날·기간 (마지막 수정 기준, 양 끝 날 포함) — days 와 함께 쓰지 않는다 */
@@ -313,7 +320,8 @@ const sinceMs = (days: number) => {
   return d.getTime() - (days - 1) * 86_400_000;
 };
 /** 계정 목록 조회 (휴지통 제외) — 거르기 규칙이 조건을 덧붙인다 */
-const listQuery = () => supabase.from(TABLE).select(LIST_COLS).is('deleted_at', null);
+// count = 전체 개수도 같이 받기 (변환 내역 페이지 번호용)
+const listQuery = (count = false) => supabase.from(TABLE).select(LIST_COLS, count ? { count: 'exact' } : undefined).is('deleted_at', null);
 type ListQuery = ReturnType<typeof listQuery>;
 /** 거르기 조건 하나 = 브라우저 사본 판정 + 계정 조회 조건 (둘이 같은 뜻이 되게 한곳에 둔다 — 새 조건은 여기에만 추가) */
 interface FilterRule {
@@ -326,7 +334,10 @@ function filterRules(f: JobFilter): FilterRule[] {
   if (f.channel === 'godo') rules.push({ local: (j) => GODO.includes(j.settings?.channel as Channel), cloud: (q) => q.in('data->settings->>channel', GODO) });
   else if (f.channel) rules.push({ local: (j) => j.settings?.channel === f.channel, cloud: (q) => q.eq('data->settings->>channel', f.channel!) });
   if (f.channel === 'openmarket' && f.market) rules.push({ local: (j) => j.settings?.market === f.market, cloud: (q) => q.eq('data->settings->>market', f.market!) });
-  if (f.state === 'done') rules.push({ local: (j) => j.state === 'done', cloud: (q) => q.eq('state', 'done') });
+  if (f.state === 'ready') rules.push({ local: (j) => j.state === 'ready', cloud: (q) => q.eq('state', 'ready') });
+  // 완료 / 등록 — 등록 = 완료 + 작업 기록에 등록한 페이지 주소(http…)가 있는 것. 목록 상태 칸 표시와 같은 기준 (상태 값 자체는 둘 다 done)
+  if (f.state === 'done') rules.push({ local: (j) => j.state === 'done' && !registered(j), cloud: (q) => q.eq('state', 'done').or('data->note->>link.is.null,data->note->>link.not.ilike.http%') });
+  if (f.state === 'reg') rules.push({ local: (j) => j.state === 'done' && registered(j), cloud: (q) => q.eq('state', 'done').ilike('data->note->>link', 'http%') });
   if (f.state === 'problem') rules.push({ local: (j) => PROBLEM.includes(j.state), cloud: (q) => q.in('state', PROBLEM) });
   if (f.days) {
     const since = sinceMs(f.days);
@@ -345,8 +356,9 @@ function filterRules(f: JobFilter): FilterRule[] {
   if (q) {
     const lower = q.toLowerCase();
     rules.push({
-      local: (j) => `${j.settings?.productName ?? ''} ${j.fileName} ${j.note?.assignee ?? ''} ${j.note?.memo ?? ''}`.toLowerCase().includes(lower),
-      cloud: (qq) => qq.or(`file_name.ilike.%${q}%,data->settings->>productName.ilike.%${q}%,data->note->>assignee.ilike.%${q}%,data->note->>memo.ilike.%${q}%`),
+      // 담당 = 담당자 칸, 비어 있으면 만든 사람 (목록 「담당」 칸과 같은 기준) — 그래서 만든 사람 이름으로도 찾는다
+      local: (j) => `${j.settings?.productName ?? ''} ${j.fileName} ${j.note?.assignee ?? ''} ${j.creator ?? ''} ${j.note?.memo ?? ''}`.toLowerCase().includes(lower),
+      cloud: (qq) => qq.or(`file_name.ilike.%${q}%,data->settings->>productName.ilike.%${q}%,data->note->>assignee.ilike.%${q}%,data->>creator.ilike.%${q}%,data->note->>memo.ilike.%${q}%`),
     });
   }
   return rules;
@@ -354,32 +366,42 @@ function filterRules(f: JobFilter): FilterRule[] {
 /** 브라우저 사본이 거르기에 맞는지 (계정 목록은 같은 규칙의 cloud 조건으로 서버에서 거른다) */
 export const matchFilter = (j: Job, f: JobFilter) => filterRules(f).every((r) => r.local(j));
 
-export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jobs: Job[]; more: boolean }) => void, filter: JobFilter = {}): Promise<{ jobs: Job[]; more: boolean }> {
+/**
+ * offset = 건너뛸 개수 (변환 내역 페이지: (페이지-1)×limit). total = 거르기에 맞는 전체 개수 (페이지 번호용).
+ * 둘째 페이지부터는 계정 목록만 그대로 보여 준다 — 브라우저 사본 합치기·올리기는 첫 페이지를 읽을 때 한다 (최근 것이라 첫 페이지에 있음)
+ */
+export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jobs: Job[]; more: boolean; total?: number }) => void, filter: JobFilter = {}, offset = 0): Promise<{ jobs: Job[]; more: boolean; total?: number }> {
   const cloud = await cloudReady(); // 계정 id 를 먼저 알아야 이 계정의 브라우저 사본만 고른다
   const [all, keyList] = await Promise.all([listLocal(), store('files').then((s) => req(s.getAllKeys()))]);
   const local = all.filter((j) => !j.deletedAt && matchFilter(j, filter));
   const fkey = JSON.stringify(filter);
   const keys = new Set(keyList as string[]);
   const mark = (j: Job): Job => ({ ...j, noFile: !keys.has(j.fileKey) });
-  const localPage = { jobs: local.slice(0, limit).map(mark), more: local.length > limit };
+  const localPage = { jobs: local.slice(offset, offset + limit).map(mark), more: local.length > offset + limit, total: local.length };
   if (!cloud) return localPage;
   // 계정 목록을 받는 동안 이 브라우저 사본을 먼저 보여 준다
-  if (!quick && local.length) onLocal?.(localPage);
+  if (!quick && local.length && offset === 0) onLocal?.(localPage);
 
   let rows: Job[];
-  if (quick && lastCloud && lastCloud.limit === limit && lastCloud.filter === fkey) rows = lastCloud.rows;
-  else {
-    const query = filterRules(filter).reduce((q, r) => r.cloud(q), listQuery());
-    const { data, error } = await query.order('updated_at', { ascending: false }).limit(limit + 1);
+  let total: number | undefined;
+  if (quick && lastCloud && lastCloud.limit === limit && lastCloud.filter === fkey && lastCloud.offset === offset) {
+    rows = lastCloud.rows;
+    total = lastCloud.total;
+  } else {
+    const query = filterRules(filter).reduce((q, r) => r.cloud(q), listQuery(true));
+    // limit 보다 하나 더 받아 「다음이 있음」을 안다 (range 는 양 끝 포함)
+    const { data, error, count } = await query.order('updated_at', { ascending: false }).range(offset, offset + limit);
     if (error) {
       cloudFailed(error, '읽기');
       return localPage;
     }
     rows = (data as unknown as LiteRow[]).map(fromLite);
     await fillOldInfo(rows);
-    lastCloud = { rows, limit, filter: fkey };
+    total = count ?? undefined;
+    lastCloud = { rows, limit, filter: fkey, offset, total };
   }
   const more = rows.length > limit;
+  if (offset > 0) return { jobs: rows.slice(0, limit).map(mark), more, total };
   const byId = new Map(rows.slice(0, limit).map((j) => [j.id, j]));
   // 계정 목록 쪽에 없는 브라우저 사본: 휴지통·영구 삭제됐는지, 그냥 오래돼서 이 쪽에 없는지 한 번에 확인한다
   // (확인 없이 다시 올리면 다른 곳에서 지운 작업이 되살아난다)
@@ -398,7 +420,7 @@ export async function listJobsPage(limit = 20, quick = false, onLocal?: (p: { jo
     // 계정 쪽이 더 새로우면(다른 PC 에서 고침) 가벼운 사본을 그대로 보여 주고, 열 때 fullJob 이 전체를 받아 브라우저 사본도 새로 한다
   }
   const jobs = [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt).map(mark);
-  return { jobs, more };
+  return { jobs, more, total };
 }
 
 /**
@@ -544,20 +566,29 @@ export async function jobById(id: string): Promise<Job | null> {
 }
 
 /**
- * 주소(?markup=<슬러그>&rev=<rev>)로 연 작업 찾기 — 같은 슬러그·rev 가 여럿이면 가장 최근 것. count = 맞는 작업 수
+ * 주소(?markup=<슬러그>&rev=<rev>&ch=<채널>&pf=<플랫폼>)로 연 작업 찾기. count = 맞는 작업 수
  * 슬러그는 이미지 서버 폴더 이름(규칙 6-1, 한 번 정하면 안 바뀜)이라 주소가 오래 유지된다
+ * - ch(·오픈마켓은 pf)가 있으면 그 판매처 작업만 본다 — 같은 제품을 고도몰·쿠팡 등으로 따로 만들면 슬러그·rev 가 같기 때문 (2026-11-26)
+ * - ch 가 없는 예전 주소는 고도몰 작업을 먼저, 그 안에서 가장 최근 것
  */
-export async function jobBySlug(slug: string, rev?: string): Promise<{ job: Job | null; count: number }> {
-  let ids: string[] = [];
+export async function jobBySlug(slug: string, rev?: string, ch?: string, pf?: string): Promise<{ job: Job | null; count: number }> {
+  type Hit = { id: string; channel?: string; market?: string };
+  let hits: Hit[] = [];
+  let cloudOk = false;
   if (await cloudReady()) {
-    let q = supabase.from(TABLE).select('id').is('deleted_at', null).eq('data->settings->>slug', slug);
+    let q = supabase.from(TABLE).select('id,channel:data->settings->>channel,market:data->settings->>market').is('deleted_at', null).eq('data->settings->>slug', slug);
     if (rev) q = q.eq('data->settings->>rev', rev);
     const { data, error } = await q.order('updated_at', { ascending: false }).limit(20);
     if (error) cloudFailed(error, '주소로 찾기');
-    else ids = (data as { id: string }[]).map((r) => r.id);
+    else { hits = data as Hit[]; cloudOk = true; }
   }
-  if (!ids.length) ids = (await listLocal()).filter((j) => !j.deletedAt && j.settings?.slug === slug && (!rev || j.settings.rev === rev)).map((j) => j.id);
-  return { job: ids.length ? await jobById(ids[0]) : null, count: ids.length };
+  if (!cloudOk || !hits.length)
+    hits = (await listLocal())
+      .filter((j) => !j.deletedAt && j.settings?.slug === slug && (!rev || j.settings.rev === rev))
+      .map((j) => ({ id: j.id, channel: j.settings?.channel, market: j.settings?.market }));
+  if (ch) hits = hits.filter((h) => h.channel === ch && (ch !== 'openmarket' || !pf || h.market === pf));
+  else hits = [...hits.filter((h) => GODO.includes(h.channel as Channel)), ...hits.filter((h) => !GODO.includes(h.channel as Channel))];
+  return { job: hits.length ? await jobById(hits[0].id) : null, count: hits.length };
 }
 
 /**
@@ -639,7 +670,8 @@ export async function putJob(job: Job) {
 }
 
 /** 작업 기록을 같은지 비교 (빈 글자·없음은 같은 것으로) */
-export const sameNote = (a: JobNote = {}, b: JobNote = {}) => (a.assignee ?? '') === (b.assignee ?? '') && (a.memo ?? '') === (b.memo ?? '') && !!a.test === !!b.test;
+export const sameNote = (a: JobNote = {}, b: JobNote = {}) =>
+  (a.assignee ?? '') === (b.assignee ?? '') && (a.memo ?? '') === (b.memo ?? '') && !!a.test === !!b.test && (a.link ?? '') === (b.link ?? '');
 
 /**
  * 작업 기록(담당자·메모·테스트) 저장 — 변환 내역 「작업 정보 편집」·만들기 화면의 작업 기록 칸이 같이 쓴다 (PSD 없이, 결과에는 영향 없음).
@@ -649,6 +681,8 @@ export const sameNote = (a: JobNote = {}, b: JobNote = {}) => (a.assignee ?? '')
 export async function saveJobNote(job: Job, note: JobNote): Promise<Job> {
   const full = await fullJob(job);
   if (full.state === 'running') throw new Error('만드는 중인 작업은 끝난 뒤에 고칠 수 있습니다.');
+  // 같은 기록이면 아무것도 쓰지 않는다 — 수정 시각·목록 순서가 그대로 (변환 내역에서 「저장」만 누른 경우)
+  if (sameNote(full.note, note)) return full;
   const next: Job = { ...full, note, updatedAt: full.updatedAt + 1 };
   await putJob(next);
   return next;
@@ -806,9 +840,10 @@ export function forkJob(src: Job, settings: Settings, opt: { keepPlan: boolean; 
     fileSize: src.fileSize,
     noFile: src.noFile,
     settings,
-    // 복제한 사람이 새 작업을 만든 사람 (담당자·메모·테스트 표시는 그대로 옮긴다)
+    // 복제한 사람이 새 작업을 만든 사람 (담당자·메모·테스트 표시는 그대로 옮긴다).
+    // 등록한 페이지는 옮기지 않는다 — 복제본은 아직 그 판매처에 올리지 않은 새 결과
     creator: opt.creator ?? src.creator,
-    note: src.note,
+    note: src.note && { ...src.note, link: undefined },
     state: 'ready',
     extra: src.extra,
     sections: {},

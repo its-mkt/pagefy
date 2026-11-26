@@ -7,9 +7,10 @@ import JobInfoFields, { hasAssignee } from '../src/components/JobInfoFields';
 const draw = (assignee: string, showError: boolean) => renderToString(h(JobInfoFields, { value: { assignee }, onChange: () => {}, showError }));
 
 describe('JobInfoFields 담당자 (필수)', () => {
-  it('이름표는 「담당자 (필수)」, 처음에는 빨간 표시 없음', () => {
+  it('이름표는 「담당자」 + 빨간 * (필수 표시), 처음에는 빨간 테두리 없음', () => {
     const html = draw('', false);
-    expect(html).toContain('담당자 (필수)');
+    expect(html).toContain('담당자');
+    expect(html).toContain('class="req"');
     expect(html).not.toContain('is-bad');
     expect(html).toContain('data-attn'); // 비었으니 커서를 옮길 칸으로는 표시
   });

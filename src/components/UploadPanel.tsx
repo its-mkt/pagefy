@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent } from 'react';
 import { fmtBytes } from '../lib/util';
-import { Upload } from 'lucide-react';
+import { Check, Upload } from 'lucide-react';
 import { useElapsed } from '../lib/time';
 
 /** PSD 열기 단계 — 워커·App 이 보내는 진행 문구의 앞부분으로 몇 번째 단계인지 안다 (psd.worker.ts · App.openPsd) */
@@ -26,6 +26,7 @@ function LoadSteps({ message }: { message: string }) {
         <ol className="upload__steps" aria-label="PSD 여는 단계">
           {STEPS.map((s, i) => (
             <li key={s.key} className={i < at ? 'is-done' : i === at ? 'is-cur' : ''} aria-current={i === at ? 'step' : undefined}>
+              {i < at && <Check className="upload__ico" aria-hidden="true" />}
               {s.label}
             </li>
           ))}
@@ -90,6 +91,8 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
   if (file) {
     return (
       <section className="panel panel--tight">
+        {/* PSD 확인 카드(PSD 확인)와 짝을 맞춰 제목을 단다 — 가로로 나란히 놓일 때 두 카드의 머리가 같은 높이에 있게 */}
+        <h2 className="panel__title">PSD 파일</h2>
         {/* 다른 PSD 는 머리의 「새 PSD」 버튼으로 연다 — 화면에 끌어다 놓기는 실수 방지로 받지 않음 (DropGuard, 2026-11-25) */}
         <div className={`filecard ${blocked ? 'is-busy' : ''}`}>
           <img className="filecard__thumb" src={file.thumbUrl} alt="" />
@@ -112,7 +115,6 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
       <div
         className={`drop ${over ? 'is-over' : ''} ${blocked ? 'is-busy' : ''}`}
         role="button"
-        data-tour="upload"
         tabIndex={blocked ? -1 : 0}
         aria-disabled={blocked}
         onClick={open}

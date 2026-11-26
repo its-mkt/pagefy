@@ -13,7 +13,7 @@
   align-items: center;
   justify-content: center;
   gap: 0.25rem;
-  padding: 2rem 1.25rem;
+  padding: $sp-6 $sp-4;
   border: 1px dashed var(--line2);
   background: var(--tile);
   text-align: center;
@@ -24,15 +24,15 @@
   &.is-busy { cursor: progress; }
 
   &__icon { width: 2.5rem; height: 2.5rem; color: var(--acc); margin-bottom: 0.5rem; }
-  &__msg { margin: 0; font-size: 1.125rem; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
+  &__msg { margin: 0; font-size: $fs-lg; font-weight: 700; letter-spacing: -0.02em; color: var(--ink); }
   &__sub { margin: 0; color: var(--accink); font-weight: 600; }
-  &__hint { margin: 0.75rem 0 0; max-width: 32rem; color: var(--sub); font-size: 0.75rem; }
+  &__hint { margin: 0.75rem 0 0; max-width: 32rem; color: var(--sub); font-size: $fs-xs; }
 }
 
 .upload__busy {
   display: grid;
   justify-items: center;
-  gap: 0.625rem;
+  gap: $sp-3;
 }
 .upload__now {
   margin: 0;
@@ -50,22 +50,23 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 0.25rem 1rem;
-  font-size: 0.75rem;
+  font-size: $fs-xs;
   color: var(--sub);
   counter-reset: step;
   li { counter-increment: step; }
   li::before { content: counter(step) '. '; }
-  .is-done { color: var(--ink2); &::before { content: '✓ '; color: var(--ok); } }
+  .is-done { color: var(--ink2); &::before { content: none; } } // 끝난 단계는 번호 대신 체크 아이콘 (.upload__ico)
+  .upload__ico { display: inline-block; width: 0.75rem; height: 0.75rem; margin-right: 0.25rem; vertical-align: -0.125rem; color: var(--ok); }
   .is-cur { color: var(--accink); font-weight: 700; }
 }
-.upload__slow { margin: 0; font-size: 0.75rem; color: var(--sub); }
+.upload__slow { margin: 0; font-size: $fs-xs; color: var(--sub); }
 
 
 // 올린 뒤: 한 줄 파일 카드 (다른 PSD 는 머리의 「새 PSD」로 — 화면에 끌어다 놓기는 받지 않음)
 .filecard {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 0.875rem;
+  gap: 0.5rem $sp-3;
   align-items: center;
   padding: 0.25rem;
 
@@ -87,12 +88,12 @@
     display: grid;
     gap: 0.125rem;
     b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    small { color: var(--sub); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-    .upload__busy { font-size: 0.8125rem; color: var(--ink2); justify-items: start; gap: 0.25rem; }
+    small { color: var(--sub); font-size: $fs-xs; font-variant-numeric: tabular-nums; }
+    .upload__busy { font-size: $fs-sm; color: var(--ink2); justify-items: start; gap: 0.25rem; }
     .upload__steps { justify-content: flex-start; }
   }
 
-  &__hint { flex: none; margin: 0 0.5rem 0 0; color: var(--sub); font-size: 0.75rem; }
+  &__hint { flex: none; margin: 0 0.5rem 0 0; color: var(--sub); font-size: $fs-xs; }
 }
 
 // ── PSD 확인
@@ -103,13 +104,14 @@
   &--warn { @include callout(amber); }
 
   &__title { margin: 0; font-weight: 700; }
+  &__sub { margin-left: 0.5rem; font-weight: 400; font-size: $fs-sm; opacity: 0.8; }
   &__list {
-    margin: 0.375rem 0 0;
-    padding-left: 1.25rem;
-    font-size: 0.8125rem;
+    margin: $sp-row 0 0;
+    padding-left: $sp-4;
+    font-size: $fs-sm;
     li + li { margin-top: $sp-row; }
   }
-  &__note { margin: 0.375rem 0 0; }
+  &__note { margin: $sp-row 0 0; }
 }
 
 .facts {
@@ -119,7 +121,7 @@
   margin: $sp-4 0 0;
 
   div { background: var(--tile); padding: 0.5rem 0.75rem; }
-  dt { font-size: 0.75rem; color: var(--sub); }
+  dt { font-size: $fs-xs; color: var(--sub); }
   dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 }
 
@@ -128,6 +130,11 @@
   margin-top: 0.75rem;
 
   > .sum {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: $sp-row;
+    width: 100%;
     padding: 0.5rem 0;
     color: var(--ink2);
     font-weight: 600;
@@ -139,12 +146,18 @@
 .summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 1.25rem;
+  gap: $sp-4;
 
   @media (max-width: 900px) { grid-template-columns: minmax(0, 1fr); }
 
   &__info, &__preview { min-width: 0; }
   &__meta { margin: 0 0 0.75rem; font-variant-numeric: tabular-nums; }
+}
+
+// 미리보기 칸 — 탭(글자 뺀 배경 / PSD 합성)과 그림 사이, 그림과 설명 사이를 띄운다 (.seg 아래 여백을 뺀 뒤 붙어 보이던 것 보정)
+.summary__preview {
+  .seg { margin-bottom: $sp-3; }
+  > .hint { margin-top: $sp-3; }
 }
 
 .fonts {
@@ -155,15 +168,15 @@
   flex-wrap: wrap;
   gap: 0.25rem;
 
-  li { margin: 0; padding: 0.125rem 0.5rem; background: var(--tile); font-size: 0.8125rem; }
+  li { margin: 0; padding: 0.125rem 0.5rem; background: var(--tile); font-size: $fs-sm; }
   small { color: var(--sub); }
   .is-bad { background: var(--red-a3); color: var(--red-a11); }
-  em { font-style: normal; font-size: 0.75rem; }
+  em { font-style: normal; font-size: $fs-xs; }
 }
 
 .baked {
   margin-top: 0.75rem;
-  ul { margin: 0.375rem 0 0; padding-left: 1.25rem; font-size: 0.8125rem; }
+  ul { margin: $sp-row 0 0; padding-left: $sp-4; font-size: $fs-sm; }
 }
 
 .texts__wrap { overflow-x: auto; }
@@ -172,9 +185,9 @@
   width: 100%;
   margin-top: 0.5rem;
   border-collapse: collapse;
-  font-size: 0.75rem;
+  font-size: $fs-xs;
 
-  th, td { border-bottom: 1px solid var(--line); padding: 0.375rem 0.5rem; text-align: left; vertical-align: top; }
+  th, td { border-bottom: 1px solid var(--line); padding: $sp-row 0.5rem; text-align: left; vertical-align: top; }
   th { color: var(--sub); font-weight: 500; background: var(--tile); white-space: nowrap; }
 }
 
@@ -190,17 +203,20 @@
 // 글자 뺀 배경 합성이 끝나기 전 (어두운 판 위 안내)
 .scrollimg__wait { display: flex; align-items: center; gap: 0.5rem; margin: 0; padding: 1rem; color: rgb(255 255 255 / 0.8) !important; }
 
+// 이미지 높이에 맞춰 줄이고, 아주 긴 그림만 칸 안에서 스크롤 (빈 어두운 칸이 남지 않게)
 .scrollimg {
-  height: 520px;
+  max-height: 520px;
   overflow: auto;
   background: var(--stage);
 
   img { display: block; width: 100%; height: auto; }
 
-  @media (max-width: 640px) { height: 400px; }
+  @media (max-width: 640px) { max-height: 400px; }
 }
 
 // ── 만들기 설정
+.setup__fields { display: grid; gap: $sp-4; margin: 0; padding: 0; border: 0; min-width: 0; }
+
 .setup {
   &__head {
     display: flex;
@@ -217,7 +233,7 @@
     &:disabled { opacity: 0.6; }
   }
 
-  &__actions.actions { margin-top: 1.25rem; } // main.scss .actions 보다 먼저 읽혀서 두 클래스로 이긴다
+  &__actions.actions { margin-top: $sp-4; } // main.scss .actions 보다 먼저 읽혀서 두 클래스로 이긴다
   // 만들기 버튼은 폼 폭에 맞춰 넓게 (가장 중요한 동작이 눈에 띄게, 칸들과 같은 폭). 옆의 「처음부터 다시」는 제 폭 그대로
   &__actions .btn--go { flex: 1 1 auto; }
   &__cost { margin: $sp-3 0 0; }
@@ -250,7 +266,7 @@
     border: 1px solid var(--line2);
     background: var(--card);
     color: var(--slate-11);
-    font-size: 0.8125rem;
+    font-size: $fs-sm;
     cursor: pointer;
     &:hover:not([data-state="checked"]) { background: var(--slate-a3); color: var(--ink); }
     &[data-state="checked"] { border-color: var(--indigo-9); box-shadow: inset 0 0 0 1px var(--indigo-9); color: var(--ink); font-weight: 600; }
@@ -260,7 +276,7 @@
   }
   &__meta {
     color: var(--slate-11);
-    font-size: 0.75rem;
+    font-size: $fs-xs;
     margin-left: 0.25rem;
   }
   &__warn {
@@ -275,79 +291,46 @@
   align-items: baseline;
   gap: $sp-2;
   margin: $sp-2 0 0;
-  font-size: 0.75rem;
+  font-size: $fs-xs;
   color: var(--sub);
-  code { font-size: 0.75rem; color: var(--ink2); word-break: break-all; }
+  code { font-size: $fs-xs; color: var(--ink2); word-break: break-all; }
 }
 
-.chgroup {
-  display: grid;
-  grid-template-columns: 10.5rem minmax(0, 1fr);
-  gap: 0.5rem 1rem;
-  align-items: center;
-  padding: 0.625rem 0.75rem;
-  background: var(--tile);
 
-  &__head {
-    margin: 0;
-    display: grid;
-    gap: 0.125rem;
-    b { font-weight: 700; color: var(--ink); font-size: 0.875rem; }
-    small { color: var(--sub); font-size: 0.6875rem; line-height: 1.4; }
-  }
-  &__opts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem; }
-
-  @media (max-width: 640px) { grid-template-columns: minmax(0, 1fr); }
-}
-
-.chopt {
-  display: inline-flex;
-  gap: 0.375rem;
-  align-items: center;
-  height: 2.125rem;
-  padding: 0 0.75rem;
-  background: var(--card);
-  border: 1px solid var(--line2);
-  cursor: pointer;
-  font-size: 0.8125rem;
-  transition: background-color 0.15s, border-color 0.15s;
-
-  &:hover { border-color: var(--acc); }
-  b { font-weight: 600; color: var(--ink); }
-  small { color: var(--sub); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
-
-}
+// 판매처: 고도몰/오픈마켓 선택(Seg) + 목록 드롭다운 — 한 줄, 좁으면 줄바꿈
+.setup__channel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.setup__channel-row > .sel { flex: 0 1 15rem; min-width: 0; }
 
 // 고급 설정
 .adv {
-  margin-top: 0.75rem;
-  background: var(--tile);
+  margin-top: 0;
+  background: var(--slate-3); // --tile(slate-a2)은 흰 바탕에서 거의 안 보여 한 단계 진한 면 — 고급 설정 상자가 칸으로 읽히게
 
   &__head {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem 0.75rem;
     align-items: center;
-    padding: 0.625rem 0.75rem 0.25rem;
+    padding: $sp-3 0.75rem 0.25rem;
   }
 
-  &__title { font-weight: 600; font-size: 0.8125rem; color: var(--ink2); }
-  &__edit { margin-left: auto; font-size: 0.75rem; }
-  &__body { padding: 0.25rem 0.75rem 0.875rem; display: grid; gap: 0.625rem; }
+  &__title { font-weight: 600; font-size: $fs-sm; color: var(--ink2); }
+  &__edit { margin-left: auto; font-size: $fs-xs; }
+  &__body { padding: 0.25rem 0.75rem $sp-3; display: grid; gap: $sp-3; }
   &__url {
     margin: 0;
     display: grid;
     gap: 0.25rem;
-    code { font-size: 0.8125rem; color: var(--ink); word-break: break-all; }
-    small { color: var(--sub); font-size: 0.75rem; }
+    code { font-size: $fs-sm; color: var(--ink); word-break: break-all; }
+    small { color: var(--sub); font-size: $fs-xs; }
   }
 }
 
-.setup__extra { margin-top: 0.75rem; }
+.setup__extra { margin-top: 0; }
 
 // 작업 기록 (담당자·메모·테스트용) — 추가 지시(Claude 로 감)와 가는 선으로 나눠 「기록용」임을 보인다
 .setup__memo {
-  margin-top: 1rem;
+  margin-top: 0;
   padding-top: 1rem;
   border-top: 1px solid var(--line);
   row-gap: 0.75rem;
@@ -357,7 +340,7 @@
     flex-wrap: wrap;
     align-items: baseline;
     gap: 0.25rem 0.5rem;
-    b { font-size: 0.875rem; color: var(--ink); }
+    b { font-size: $fs-md; color: var(--ink); }
   }
 }
 
@@ -366,21 +349,21 @@
 // Radix Themes Button 크기 4 (48px)
 .btn.btn--go {
   height: 3rem;
-  padding: 0 1.5rem;
-  font-size: 1.125rem;
+  padding: 0 $sp-5;
+  font-size: $fs-lg;
   font-weight: 500;
 
   @media (max-width: 480px) { flex: 1 1 100%; }
 }
 
 .blockers {
-  margin-top: 0.625rem;
-  padding: 0.625rem 0.875rem;
+  margin-top: $sp-3;
+  padding: $sp-3 $sp-3;
   @include callout(amber);
-  font-size: 0.8125rem;
+  font-size: $fs-sm;
 
   &__title { margin: 0; font-weight: 700; }
-  ul { margin: 0.25rem 0 0; padding-left: 1.25rem; }
+  ul { margin: 0.25rem 0 0; padding-left: $sp-4; }
   li + li { margin-top: $sp-row; }
 }
 
@@ -400,7 +383,7 @@
     gap: 0 0.5rem;
     align-items: baseline;
     b { font-weight: 700; }
-    span { color: var(--sub); font-size: 0.8125rem; word-break: break-all; }
+    span { color: var(--sub); font-size: $fs-sm; word-break: break-all; }
     > * + *::before { content: '·'; margin-right: 0.5rem; color: var(--line2); }
   }
 
@@ -416,15 +399,15 @@
     flex-basis: 100%;
     display: flex;
     flex-wrap: wrap;
-    gap: 0.625rem 2rem;
+    gap: $sp-3 $sp-6;
     margin: 0.75rem 0 0;
     padding-top: 0.75rem;
     border-top: 1px solid var(--line);
-    font-size: 0.8125rem;
+    font-size: $fs-sm;
     > div { flex: 0 0 auto; min-width: 0; max-width: 100%; display: grid; gap: 0.125rem; }
-    dt { color: var(--sub); font-size: 0.75rem; }
+    dt { color: var(--sub); font-size: $fs-xs; }
     dd { margin: 0; color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    code { font-size: 0.75rem; }
+    code { font-size: $fs-xs; }
     // 비어 있는 칸(담당 미지정 · 메모 없음)은 옅게
     dd.is-empty { color: var(--slate-a9); }
   }
@@ -435,15 +418,15 @@
 // 오픈마켓 플랫폼 고르기 (채널 오픈마켓일 때만)
 .market {
   margin: 0.5rem 0 0;
-  padding: 0.625rem 0.75rem;
+  padding: $sp-3 0.75rem;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 0.25rem 0.75rem;
   @include callout(indigo);
-  b { font-size: 0.8125rem; font-weight: 700; }
-  &__note { flex: 1 1 18rem; font-size: 0.75rem; }
+  b { font-size: $fs-sm; font-weight: 700; }
+  &__note { flex: 1 1 18rem; font-size: $fs-xs; }
 }
 
 // 고도몰 쇼핑몰 사이 구분선 — 아이티켓 · zbyhp · cadkorea | 온코어 (SettingsPanel GODO_SPLIT)
-.chopt__sep { align-self: stretch; width: 1px; margin: 0.25rem 0.375rem; background: var(--line2); }
+.chopt__sep { align-self: stretch; width: 1px; margin: 0.25rem $sp-row; background: var(--line2); }

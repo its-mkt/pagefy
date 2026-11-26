@@ -24,6 +24,11 @@ const MARKET_EDITOR: Record<Market, EditorId> = {
 /** 판매처 → 흉내 낼 에디터 (고도몰은 채널과 상관없이 같은 SE2 에디터) */
 export const editorFor = (p: { channel: Channel; market?: Market }): EditorId => (p.channel === 'openmarket' ? MARKET_EDITOR[normMarket(p.market)] : 'godo');
 
+/** 결과의 채널·플랫폼에 맞는 에디터 흉내 (수정 상자의 쇼핑몰 폭·스킨) — 고도몰은 godo, 오픈마켓은 플랫폼, 모르면 스마트스토어 */
+export function editorIdOf(m: { channel: string; market?: string }) {
+  return m.channel !== 'openmarket' ? 'godo' : m.market && m.market !== 'other' ? m.market : 'smartstore';
+}
+
 /** 근거 수준 — 규칙 7-4 표의 표시와 같다. 시험 = Pagefy 가 실제 에디터·필터 코드를 받아 직접 돌려 본 결과 (2026-11-25). 소스 = 에디터·사이트가 실제로 쓰는 코드·CSS 원문 (2026-11-25 조사). 추정 = 공개 자료가 없어 Pagefy 가 안전하게 가정한 것 */
 export type Evidence = '공식' | '시험' | '소스' | '등록 확인' | '관찰' | '커뮤니티' | '추정';
 
