@@ -168,6 +168,12 @@ button:disabled, [aria-disabled='true'] { cursor: not-allowed; }
   position: relative;
   margin-left: 0.5rem;
 
+  // 관리자에게 보이는 사용액 경고 점 — 프로필 사진 오른쪽 위 (메뉴 줄의 「관리자」가 드롭다운으로 옮겨 와서)
+  &__dot { position: absolute; top: 0; right: 0; box-shadow: 0 0 0 2px var(--card); pointer-events: none; }
+  // 드롭다운 「관리자」 항목 옆 경고 점 · 지금 관리자 화면이면 굵게
+  &__item-dot { margin-left: auto; }
+  &__item.is-on { font-weight: 600; }
+
   &__btn {
     width: 2.25rem;
     height: 2.25rem;
@@ -252,6 +258,10 @@ button:disabled, [aria-disabled='true'] { cursor: not-allowed; }
   // 등록 (완료 + 쇼핑몰에 등록) — 상태(초록·파랑·노랑·빨강)·판매처(보라·주황)와 다른 차분한 금색을 진하게 채워 눈에 띄면서도 튀지 않게 (2026-11-26 사용자: 세련된 다른 색)
   // 흰 글자가 잘 읽히게 9단계보다 한 단계 진한 10단계
   &--reg { color: #fff; background: var(--gold-10); }
+  // 변환 내역 상태 배지 — 마우스를 올리면 뜻풀이가 바로 뜬다 (도움말 커서로 알림)
+  &.jobs__stbadge, &.jobs__tipbadge { cursor: help; }
+  // 올리기 전 (만들었지만 이미지 서버에 안 올림) — 할 일이 남았다는 뜻: 면 없이 주황 테두리 (중단의 노랑 면·완료의 초록과 구분)
+  &--pending { color: var(--orange-a11); background: none; outline: 1px solid var(--orange-a8); outline-offset: -1px; }
   // 판매처 묶음 (변환 내역 제품명 옆) — 고도몰 보라 · 오픈마켓 주황 (상태 색 초록·노랑·빨강, 단추 색 회색·파랑과 겹치지 않게)
   &--godo { color: var(--violet-a11); background: var(--violet-a3); }
   &--om { color: var(--orange-a11); background: var(--orange-a3); }
@@ -397,6 +407,8 @@ h3 {
     &:hover:not(:disabled) { background: var(--indigo-a4); }
     &:active:not(:disabled) { background: var(--indigo-a5); }
   }
+  // 평소엔 회색, 올리거나 초점이 오면 빨갛게 — 줄마다 있는 지우는 단추가 늘 튀지 않게 (휴지통 「영구 삭제」, 2026-11-26 사용자)
+  &.btn--warnhover:hover:not(:disabled), &.btn--warnhover:focus-visible { background: var(--red-a3); color: var(--red-11); }
   &.is-danger {
     background: var(--red-9);
     color: #fff;
@@ -786,15 +798,6 @@ h3 {
     .seg { margin: 0; }
   }
   &__q { flex: 1 1 14rem; min-width: 10rem; }
-  // 「조건 지우기」 — 필터 줄 오른쪽 끝 바로 아래에 띄움 (날짜 머리 줄의 빈 오른쪽 자리). 줄 배치에 끼지 않아 칸이 밀리지 않는다
-  &__clear {
-    position: absolute;
-    top: calc(100% + 0.125rem);
-    right: 0;
-    font-size: 0.75rem;
-    line-height: 1.5;
-  }
-  &__count { margin-left: auto; font-size: 0.75rem; color: var(--sub); font-variant-numeric: tabular-nums; }
   // 지운 직후 되돌리기 알림
   &__undo {
     margin: 0 0 0.5rem;
@@ -817,7 +820,8 @@ h3 {
     @include callout(indigo);
     font-size: 0.8125rem;
     b { font-weight: 700; color: var(--indigo-12); }
-    code { font-size: 0.75rem; padding: 0 0.25rem; background: var(--card); word-break: break-all; }
+    // 경로 — 옅은 남색 안내 칸 위에서도 구분되게 한 단계 진한 남색 면 (테두리 없음), 고정폭 글꼴
+    code { font: 0.75rem/1.5 $mono; padding: 0 0.3125rem; background: var(--indigo-a4); color: var(--indigo-12); word-break: break-all; }
   }
   // 휴지통 목록은 흐리게 — 지금 쓰는 목록과 헷갈리지 않게
   &--trash .jobs__row { b { color: var(--ink2); } }
@@ -894,7 +898,8 @@ h3 {
     overflow: auto;
     max-height: 80vh;
     border: 1px solid var(--line2);
-    background: #fff;
+    // 상세 HTML 바깥은 연한 체크무늬(투명 표시) — 수정 편집기·에디터 테스트(previewDoc)와 같은 무늬. HTML 이 바탕을 안 칠하는 iframe 은 투명이라 이 무늬가 비친다
+    @include checker;
     iframe { display: block; width: 100%; border: 0; }
   }
 }
@@ -943,18 +948,26 @@ h3 {
   // 고르기 칸 — 체크박스만 (줄 앞, 좁게). 고른 줄은 옅은 강조 바탕
   &__c-sel { width: 2.25rem; padding-right: 0 !important; .ck { display: inline-flex; } }
   tbody tr.is-sel > td { background: var(--indigo-a2); }
-  // 고른 작업 일괄 처리 막대 (표 위)
+  // 표 위 막대 — 늘 보인다. 평소엔 옅은 회색(작업 수), 하나라도 고르면(.is-on) 강조색 + 일괄 단추.
+  // 높이 = 위아래 여백 + 작은 단추(2rem) — 단추가 나타나고 사라져도 표가 밀리지 않게
   &__bulk {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    min-height: calc(2rem + 2 * #{$sp-2});
+    box-sizing: border-box;
     gap: $sp-2;
     margin: $sp-2 0;
     padding: $sp-2 $sp-3;
-    background: var(--accbg);
-    color: var(--accink);
+    background: var(--tile);
+    color: var(--sub);
     font-size: 0.8125rem;
-    b { margin-right: auto; } // 「N개 선택」은 왼쪽, 일괄 작업 단추는 오른쪽
+    font-variant-numeric: tabular-nums;
+    transition: background-color 0.12s, color 0.12s;
+    b { font-weight: 500; }
+    // 왼쪽 묶음: 작업 수(·N개 선택) + 「조건 지우기」 — 일괄 작업 단추는 오른쪽
+    .jtable__count { display: inline-flex; align-items: center; gap: $sp-3; margin-right: auto; }
+    &.is-on { background: var(--accbg); color: var(--accink); b { font-weight: 600; } }
   }
 
   @media (max-width: 900px) { &__c-prog { display: none; } }
@@ -1083,6 +1096,12 @@ h3 {
   &__fields { margin: 0; padding: 0; border: 0; min-width: 0; row-gap: $sp-3; }
 }
 
+// 휴지통 안내 — 영구 삭제하면 이미지 서버 이미지도 지워진다 (주의 상자)
+.jobs__trash-note { margin: $sp-2 0; padding: $sp-2 $sp-3; @include callout(amber); font-size: $fs-sm; b { font-weight: 600; } }
+
+// 「휴지통으로 옮기기」 확인 창 — 이미지도 지울지 고르는 칸 (기본 꺼짐)
+.trashask__img { display: grid; gap: $sp-row; margin-top: $sp-3; padding: $sp-3; background: var(--tile); }
+
 // 「이미지 서버에서 지우기」 확인 창 내용
 .imgdel {
   &__wait { display: flex; align-items: center; gap: $sp-2; margin: 0; color: var(--sub); }
@@ -1103,6 +1122,14 @@ h3 {
   }
   &__sum { margin: 0; padding-left: 1.125rem; display: grid; gap: $sp-1; b { color: var(--ink); } }
   &__warn { display: grid; gap: $sp-1; padding: $sp-3 $sp-4; @include callout(red); span { font-size: 0.8125rem; } }
+  // 확인 문구 입력 (「제거합니다」를 그대로 쳐야 지우기 단추가 켜짐)
+  &__confirm {
+    display: grid;
+    gap: $sp-2;
+    font-size: 0.8125rem;
+    b { color: var(--err); }
+    input { width: 100%; height: 2.25rem; padding: 0 0.75rem; @include field; }
+  }
   &__done { display: grid; gap: $sp-2; p { margin: 0; } b { color: var(--ink); } }
 }
 
@@ -1131,9 +1158,10 @@ h3 {
     b { font-size: 0.875rem; color: var(--slate-12); }
     span { font-size: 0.75rem; color: var(--sub); line-height: 1.4; white-space: normal; }
   }
-  &-group { padding: 0.25rem 0.75rem; color: var(--sub); font-size: 0.75rem; font-weight: 600; }
-  &-has { color: var(--sub); font-style: normal; font-size: 0.75rem; }
-  &-free, &-cost { font-size: 0.75rem; }
+  // 묶음 제목: 이름(굵게) · 오른쪽에 비용·시간 한 번 (줄마다 반복하지 않음)
+  &-group { display: flex; align-items: baseline; justify-content: space-between; gap: $sp-2; padding: 0.25rem 0.75rem; color: var(--sub); font-size: 0.75rem; font-weight: 600; }
+  &-has { color: var(--sub); font-size: 0.75rem; }
+  &-free, &-cost { font-size: 0.6875rem; font-weight: 400; white-space: nowrap; }
   &-free { color: var(--green-11); }
   &-cost { color: var(--sub); }
 }

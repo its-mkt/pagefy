@@ -3,10 +3,9 @@ import { Button } from './Button';
 import { Dialog } from 'radix-ui';
 import { imageBaseUrl } from '../../shared/types';
 import { normMarket } from '../../shared/markets';
-import { fullJob, jobsInFolder, type Job } from '../lib/jobs';
+import { fullJob, jobsInFolder, setUploaded, type Job } from '../lib/jobs';
 import { uploadCheck, uploadDelete, uploadVerify, type UploadTarget } from '../lib/api';
 import { planDelete } from '../lib/imageDelete';
-import { CheckField } from './ui';
 
 /** 이미지 폴더 하나에서 지울 계획 — 같은 폴더(채널·플랫폼·슬러그)를 쓰는 고른 작업은 하나로 묶는다 */
 interface Plan {
@@ -29,6 +28,8 @@ type Step =
   | { kind: 'error'; message: string };
 
 const nameOf = (j: Job) => `${j.settings?.productName || j.fileName}${j.settings?.rev ? ` (${j.settings.rev})` : ''}`;
+/** 지우기 전에 직접 입력해야 하는 확인 문구 */
+const CONFIRM_WORD = '제거합니다';
 const keyOf = (t: UploadTarget) => `${t.channel}/${t.market ?? ''}/${t.slug}`;
 const uniq = <T,>(a: T[]) => [...new Set(a)];
 
@@ -37,9 +38,46 @@ const uniq = <T,>(a: T[]) => [...new Set(a)];
  * 고르지 않은 다른 작업도 가리키는 파일은 남기고, 쇼핑몰에 붙여넣었으면 그림이 빈칸이 된다는 확인을 한 번 받은 뒤에만 지운다.
  * 지운 뒤 공개 주소를 다시 열어 정말 안 열리는지 본다. 지울 수 없는 작업(HTML 없음·예전 주소 규칙)은 건너뛰고 이유를 보여 준다
  */
-export default function ImageDeleteDialog({ jobs, onClose }: { jobs: Job[] | null; onClose: () => void }) {
+/**
+ * 이미지를 지운 뒤 이어서 할 일 — 휴지통으로 옮기기 / 휴지통에서 영구 삭제.
+ * 이미지를 실패 없이 다 지우면 run 을 부른다. 일부 실패하면 부르지 않는다 (다시 지울 기회를 남김).
+ * only = 이미지는 두고 작업만 처리하는 단추 — onlyAlways 면 늘, 아니면 지울 것이 없거나 확인할 수 없거나 실패했을 때만
+ */
+export interface DeleteAfter {
+  run: () => void;
+  title: string;
+  action: (n: number) => string;
+  only: string;
+  onlyAlways?: boolean;
+  done: string;
+  /** 작업도 없어진다 (지운 뒤 다시 올릴 수 없음) */
+  gone?: boolean;
+  note?: string;
+}
+
+/** onChanged: 지운 작업의 「올림」 기록을 비운 뒤 (목록을 다시 그리게) */
+export default function ImageDeleteDialog({ jobs, onClose, after, onChanged }: { jobs: Job[] | null; onClose: () => void; after?: DeleteAfter; onChanged?: () => void }) {
   const [step, setStep] = useState<Step>({ kind: 'loading' });
-  const [sure, setSure] = useState(false);
+  const [trashed, setTrashed] = useState(false);
+  useEffect(() => {
+    if (jobs?.length) setTrashed(false);
+  }, [jobs]);
+  // 다 지웠으면 이어서 할 일 (한 번만)
+  useEffect(() => {
+    if (step.kind === 'done' && after && !trashed && !step.failed.length) {
+      after.run();
+      setTrashed(true);
+    }
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+  const onlyRun = after
+    ? () => {
+        after.run();
+        onClose();
+      }
+    : undefined;
+  // 되돌릴 수 없는 삭제라 확인 문구를 직접 입력해야 단추가 켜진다 (체크박스는 습관적으로 누르기 쉬움, 2026-11-26 사용자)
+  const [typed, setTyped] = useState('');
+  const sure = typed.trim() === CONFIRM_WORD;
   const acRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -47,7 +85,7 @@ export default function ImageDeleteDialog({ jobs, onClose }: { jobs: Job[] | nul
     const ac = new AbortController();
     acRef.current = ac;
     setStep({ kind: 'loading' });
-    setSure(false);
+    setTyped('');
     const picked = new Set(jobs.map((j) => j.id));
     (async (): Promise<Step> => {
       const skipped: { name: string; reason: string }[] = [];
@@ -149,6 +187,11 @@ export default function ImageDeleteDialog({ jobs, onClose }: { jobs: Job[] | nul
           still.push(...r.results.filter((x) => x.status === 200).map((x) => x.file));
         }
       }
+      // 이미지를 지웠으면 고른 작업은 「올리기 전」으로 (변환 내역 상태)
+      if (removedAll) {
+        for (const j of jobs ?? []) await setUploaded(j, undefined).catch(() => {});
+        onChanged?.();
+      }
       setStep({ kind: 'done', removed: removedAll, backups, missing, failed, still, foldersRemoved, backupFailed });
     } catch (e) {
       if (!ac.signal.aborted) setStep({ kind: 'error', message: `지우기 실패: ${(e as Error).message}${removedAll ? ` (그 전에 ${removedAll}장은 지웠습니다)` : ''}` });
@@ -169,7 +212,7 @@ export default function ImageDeleteDialog({ jobs, onClose }: { jobs: Job[] | nul
       <Dialog.Portal>
         <Dialog.Overlay className="dlg__overlay" />
         <Dialog.Content className="dlg imgdel" onEscapeKeyDown={(e) => busy && e.preventDefault()} onPointerDownOutside={(e) => busy && e.preventDefault()}>
-          <Dialog.Title className="dlg__title">이미지 서버에서 지우기</Dialog.Title>
+          <Dialog.Title className="dlg__title">{after ? after.title : '이미지 서버에서 지우기'}</Dialog.Title>
           <Dialog.Description className="dlg__sub">{title}</Dialog.Description>
 
           {step.kind === 'loading' && (
@@ -214,6 +257,7 @@ export default function ImageDeleteDialog({ jobs, onClose }: { jobs: Job[] | nul
                   </li>
                 )}
               </ul>
+              {after?.note && <p className="hint">{after.note}</p>}
               {/* 다른 사람의 작업은 볼 수 없다 — 무엇까지 확인했는지 밝혀 둔다 */}
               <p className="hint imgdel__scope">
                 {ready.scope === 'account' ? '같은 폴더를 쓰는지는 내 계정의 작업만 확인했습니다.' : '같은 폴더를 쓰는지는 이 브라우저의 작업만 확인했습니다.'} 다른 사람이 같은 제품 폴더로 만든 작업이 있다면 지우지 마세요.
@@ -222,15 +266,28 @@ export default function ImageDeleteDialog({ jobs, onClose }: { jobs: Job[] | nul
                 <>
                   <div className="imgdel__warn" role="note">
                     <b>이미 쇼핑몰 상세설명에 붙여넣었다면 그 페이지의 그림이 빈칸이 됩니다.</b>
-                    {noFile ? (
+                    {after?.gone ? (
+                      <span>작업 기록도 영구 삭제되므로 지운 이미지를 다시 올릴 수 없습니다.</span>
+                    ) : noFile ? (
                       <span>이 브라우저에 PSD 원본이 없는 작업은 지운 뒤 이미지를 다시 만들 수 없습니다. 공유 폴더의 PSD를 다시 골라야 합니다.</span>
                     ) : (
                       <span>지운 뒤에도 작업을 열어 「이미지 올리고 HTML 복사」를 누르면 다시 올릴 수 있습니다.</span>
                     )}
                   </div>
-                  <CheckField checked={sure} onChange={setSure}>
-                    {many ? '고른 작업 모두 쇼핑몰에 붙여넣지 않았거나, 이미 내린 상품입니다' : '쇼핑몰에 붙여넣지 않았거나, 이미 내린 상품입니다'}
-                  </CheckField>
+                  <label className="imgdel__confirm">
+                    <span>
+                      {many ? '고른 작업 모두 쇼핑몰에 붙여넣지 않았거나 이미 내린 상품일 때만 지우세요.' : '쇼핑몰에 붙여넣지 않았거나 이미 내린 상품일 때만 지우세요.'} 계속하려면 <b>{CONFIRM_WORD}</b>를 입력하세요.
+                    </span>
+                    <input
+                      value={typed}
+                      onChange={(e) => setTyped(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && sure && void run()}
+                      placeholder={CONFIRM_WORD}
+                      aria-label={`확인 문구 「${CONFIRM_WORD}」 입력`}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </label>
                 </>
               ) : (
                 <p className="hint">지울 이미지가 없습니다.</p>
@@ -255,13 +312,20 @@ export default function ImageDeleteDialog({ jobs, onClose }: { jobs: Job[] | nul
               {step.backupFailed.length > 0 && <p className="hint">예전 파일(백업) {step.backupFailed.length}개는 지우지 못해 서버에 남아 있습니다 (이미지 주소에는 영향 없음).</p>}
               {step.still.length > 0 && <p className="hint">{step.still.length}장은 아직 주소가 열립니다. 이미지 서버 캐시 때문일 수 있으니 잠시 뒤 다시 확인해 주세요.</p>}
               {step.failed.length > 0 && <p className="msg msg--error">일부 실패: {step.failed.join(', ')}</p>}
+              {after && (trashed ? <p><b>{after.done}</b></p> : step.failed.length > 0 && <p className="hint">일부 이미지를 지우지 못해 작업은 그대로 두었습니다. 다시 지우거나 「{after.only}」를 누르세요.</p>)}
             </div>
           )}
 
           <div className="dlg__actions">
             {ready && delTotal > 0 && (
               <Button type="button" size="sm" variant="danger" disabled={!sure} onClick={run}>
-                {delTotal}장 지우기
+                {after ? after.action(delTotal) : `${delTotal}장 지우기`}
+              </Button>
+            )}
+            {/* 이미지는 두고 작업만 (휴지통으로 / 영구 삭제) — onlyAlways 가 아니면 지울 것이 없거나 확인할 수 없거나 실패했을 때만 */}
+            {after && onlyRun && !trashed && !busy && ((after.onlyAlways && step.kind !== 'done' && step.kind !== 'loading') || (ready && delTotal === 0) || step.kind === 'blocked' || step.kind === 'error' || (step.kind === 'done' && step.failed.length > 0)) && (
+              <Button type="button" size="sm" onClick={onlyRun}>
+                {after.only}
               </Button>
             )}
             <Dialog.Close asChild>

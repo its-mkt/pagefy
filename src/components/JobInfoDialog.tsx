@@ -31,7 +31,8 @@ export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | nul
     setSaving(true);
     setError(null);
     try {
-      await onSave(job, { assignee: info.assignee?.trim() ?? '', memo: info.memo?.trim() ?? '', test: !!info.test, link: info.link?.trim() || undefined });
+      // 잠금은 이 창에서 고치지 않는다 (⋯ 메뉴) — 저장할 때 바뀌지 않게 그대로 넘긴다 (false = 등록 작업을 직접 푼 것도 그대로)
+      await onSave(job, { assignee: info.assignee?.trim() ?? '', memo: info.memo?.trim() ?? '', test: !!info.test, link: info.link?.trim() || undefined, locked: job.note?.locked });
       onClose();
     } catch (e) {
       setError(`저장하지 못했습니다: ${(e as Error).message}`);
@@ -50,7 +51,7 @@ export default function JobInfoDialog({ job, onClose, onSave }: { job: Job | nul
           <Dialog.Title className="dlg__title">작업 정보 편집</Dialog.Title>
           <Dialog.Description className="dlg__sub">
             {name}
-            {creator ? ` · 만든 사람 ${creator}` : ''} · 변환 내역에만 보이고 마크업에는 영향 없음
+            {creator ? ` · 만든 사람 ${creator}` : ''} · 변환 이력에만 보이고 마크업에는 영향 없음
           </Dialog.Description>
           <form
             className="jobinfo__form"

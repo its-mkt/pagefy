@@ -56,7 +56,7 @@ export default function TesterJobPicker({ search, onPick, busy, value }: { searc
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger className={`sel sel--sm tester__pick${value ? ' is-on' : ''}`} disabled={busy} aria-label={`변환 내역에서 불러오기: ${value || '고른 작업 없음'}`} title={value}>
+      <Popover.Trigger className={`sel sel--sm tester__pick${value ? ' is-on' : ''}`} disabled={busy} aria-label={`변환 이력에서 불러오기: ${value || '고른 작업 없음'}`} title={value}>
         <span className="sel__value">{busy ? '불러오는 중…' : value || '작업을 골라 불러오기'}</span>
         <span className="sel__chev">
           <ChevronDown />

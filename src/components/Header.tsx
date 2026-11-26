@@ -56,10 +56,8 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
       >
         {/* 파비콘과 같은 로고 (its.itket.com icons/pagefy.svg — 보라 네모 + 변환 화살표) */}
         <img className="header__mark" src={logo} alt="" aria-hidden="true" />
-        <div>
-          <h1>Pagefy</h1>
-          <p>상세페이지 PSD 를 쇼핑몰에 붙여넣을 HTML 로 바꿔 줍니다.</p>
-        </div>
+        {/* 로고 + 이름만 (설명 문구는 뺌 — 2026-11-26 사용자). 무엇을 하는 곳인지는 첫 화면·도움말에 있다 */}
+        <h1>Pagefy</h1>
       </a>
       </Tip>
       {/* 메뉴는 몇 개뿐이라 사이드바 대신 머리 안 탭으로 (결과 미리보기·변환 내역 거르기에 화면 폭을 다 쓰려고) */}
@@ -67,11 +65,12 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
         <nav className="header__nav" aria-label="메뉴">
           {(
             [
-              ['work', '만들기', ''],
-              ['jobs', '변환 내역', '#jobs'],
-              ['tester', '에디터 테스트', '#tester'],
+              // 메뉴 이름 (2026-11-26 사용자) — 변환 · 변환 이력 · 쇼핑몰 미리보기(옛 에디터 테스트) · 도움말.
+              // 관리자는 관리자만 가끔 쓰는 화면이라 프로필 드롭다운으로 옮겼다 (2026-11-26 사용자)
+              ['work', '변환', ''],
+              ['jobs', '변환 이력', '#jobs'],
+              ['tester', '쇼핑몰 미리보기', '#tester'],
               ['help', '도움말', '#help'],
-              ...(showAdmin ? ([['admin', '관리', '#admin']] as const) : []),
             ] as const
           ).map(([v, label, hash]) => (
             <a
@@ -87,11 +86,6 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
               }}
             >
               {label}
-              {v === 'admin' && budgetAlert && (
-                <Tip content="이번 달 사용액이 상한의 80% 를 넘었습니다">
-                  <span className="header__dot" role="img" aria-label="이번 달 사용액이 상한의 80% 를 넘었습니다" />
-                </Tip>
-              )}
             </a>
           ))}
         </nav>
@@ -117,7 +111,7 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
         {/* 스크롤해도 늘 보이는 머리에 둔다 — 긴 결과를 보다가도 바로 다음 PSD 로 */}
         {onNewPsd && (
           <>
-            <TipWrap disabled={newPsdDisabled} content={newPsdDisabled ? '만드는 중에는 다른 PSD 를 열 수 없습니다' : '다른 PSD 를 골라 새로 마크업합니다 — 화면에 끌어다 놓아도 됩니다 (지금 작업은 「변환 내역」에 저장돼 있음)'}>
+            <TipWrap disabled={newPsdDisabled} content={newPsdDisabled ? '만드는 중에는 다른 PSD 를 열 수 없습니다' : '다른 PSD 를 골라 새로 마크업합니다 — 화면에 끌어다 놓아도 됩니다 (지금 작업은 「변환 이력」에 저장돼 있음)'}>
             <Button type="button" size="sm" className="header__new" disabled={newPsdDisabled} onClick={() => pick.current?.click()}>
               <Plus />
               새 PSD
@@ -136,7 +130,14 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
             />
           </>
         )}
-        {user && <ProfileMenu user={user} onLogout={onLogout} />}
+        {user && (
+          <ProfileMenu
+            user={user}
+            onLogout={onLogout}
+            // 관리자 화면 — 관리자에게만. 이번 달 사용액 경고 점은 프로필 사진과 메뉴 항목에 붙는다
+            admin={showAdmin && onView ? { onOpen: () => onView('admin'), active: view === 'admin', alert: !!budgetAlert } : undefined}
+          />
+        )}
       </div>
     </header>
   );

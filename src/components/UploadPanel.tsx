@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent } from 'react';
 import { fmtBytes } from '../lib/util';
-import { Check, Upload } from 'lucide-react';
+import { Check, FileUp } from 'lucide-react';
 import { useElapsed } from '../lib/time';
 
 /** PSD 열기 단계 — 워커·App 이 보내는 진행 문구의 앞부분으로 몇 번째 단계인지 안다 (psd.worker.ts · App.openPsd) */
@@ -130,10 +130,11 @@ export default function UploadPanel({ onFile, loading, error, file, disabled }: 
           busy
         ) : (
           <>
-            <Upload className="drop__icon" />
+            {/* 파일을 올리는 칸 — 일반 「업로드」 화살표 대신 파일 모양 아이콘 (PSD 파일을 놓는 자리라는 뜻) */}
+            <FileUp className="drop__icon" />
             <p className="drop__msg">PSD 파일을 여기에 끌어다 놓으세요</p>
-            <p className="drop__sub">또는 클릭해서 고르기</p>
-            <p className="drop__hint">파일은 이 PC 브라우저 안에서만 읽습니다. 서버로는 레이어 정보와 축소 렌더 이미지만 보냅니다.</p>
+            <p className="drop__sub">또는 파일 선택</p>
+            <p className="drop__hint">PSD 원본은 서버에 올리지 않습니다. 구조 분석에 필요한 레이어 정보와 작은 미리보기만 보냅니다.</p>
           </>
         )}
         {fileInput}

@@ -36,12 +36,12 @@ export function CheckField({ checked, onChange, children, className, disabled }:
 
 /**
  * 마우스를 올리거나 키보드로 초점을 주면 뜨는 설명 (예전 title 속성). children 은 초점을 받을 수 있는 요소 하나여야 한다 —
- * 단추·링크가 아니면 tabIndex={0} 을 준다. 줄바꿈(\n)은 그대로 보인다
+ * 단추·링크가 아니면 tabIndex={0} 을 준다. 줄바꿈(\n)은 그대로 보인다. delay = 뜨기까지 기다리는 시간(ms, 기본 250 — 뜻풀이처럼 바로 봐야 하면 0)
  */
-export function Tip({ content, children, side = 'bottom' }: { content: ReactNode; children: ReactNode; side?: 'top' | 'bottom' | 'left' | 'right' }) {
+export function Tip({ content, children, side = 'bottom', delay = 250 }: { content: ReactNode; children: ReactNode; side?: 'top' | 'bottom' | 'left' | 'right'; delay?: number }) {
   if (!content) return <>{children}</>;
   return (
-    <Tooltip.Provider delayDuration={250} skipDelayDuration={150}>
+    <Tooltip.Provider delayDuration={delay} skipDelayDuration={150}>
       <Tooltip.Root>
         <Tooltip.Trigger asChild>{children}</Tooltip.Trigger>
         <Tooltip.Portal>
