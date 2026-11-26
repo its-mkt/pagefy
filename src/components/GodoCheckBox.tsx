@@ -1,5 +1,5 @@
-// 고도몰 등록 확인 — 상품번호(또는 상품 주소)를 넣으면 고도몰 상세설명을 읽어 지금 결과와 같은지 보여 준다 (읽기 전용, core/godo.ts)
-// 상품번호는 제품(채널/슬러그)마다 이 브라우저에 기억해 두고, 다음에 결과를 열면 자동으로 다시 확인한다
+// 등록한 페이지 링크 (고도몰) — 상품 페이지 주소(또는 상품번호)를 넣으면 고도몰 상세설명을 읽어 지금 결과와 같은지 보여 준다 (읽기 전용, core/godo.ts)
+// 이 제품 결과가 붙은 상품이면 그 주소를 작업 기록(link)에 남겨 변환 내역에 「등록됨」으로 보인다. 상품번호는 이 브라우저에도 기억한다
 import { useEffect, useRef, useState } from 'react';
 import { Button } from './Button';
 import { fetchGodoGoods } from '../lib/api';
@@ -11,20 +11,26 @@ interface Props {
   html: string;
   /** 'detail/<채널>/<슬러그>/' — 기억 키·Pagefy 결과 판별에 씀 */
   folder: string;
+  /** 이 작업에 저장된 등록 페이지 주소 (작업 기록 link) — 있으면 그 상품으로 확인한다 */
+  link?: string;
+  /** 확인해 보니 이 상품에 등록돼 있으면(지금 결과·옛 버전) 그 상품 페이지 주소를 작업에 저장한다 → 변환 내역 「등록됨」 */
+  onLink?: (url: string) => void;
 }
 
 const STATUS: Record<GodoCheck['status'], { label: string; tone: string }> = {
   latest: { label: '등록됨 · 지금 결과와 같음', tone: 'badge--ok' },
   old: { label: '등록됨 · 옛 버전', tone: 'badge--warn' },
-  other: { label: '이 제품 결과가 아님', tone: 'badge--error' },
+  other: { label: '다른 마크업이 등록됨', tone: 'badge--warn' },
   empty: { label: '상세설명 비어 있음', tone: 'badge--error' },
 };
 
 /** 2026-11-20 15:31:03 → 2026-11-20 15:31 */
 const shortDt = (v: string | null) => (v ? v.slice(0, 16) : '—');
 
-export default function GodoCheckBox({ html, folder }: Props) {
-  const [input, setInput] = useState(() => rememberedGoodsNo(folder));
+export default function GodoCheckBox({ html, folder, link, onLink }: Props) {
+  // 처음 넣어 둘 값: 작업에 저장된 등록 페이지(상품번호가 읽히면) → 이 브라우저에 기억한 상품번호
+  const startOf = () => (link && goodsNoOf(link) ? link.trim() : rememberedGoodsNo(folder));
+  const [input, setInput] = useState(startOf);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [check, setCheck] = useState<GodoCheck | null>(null);
@@ -32,7 +38,7 @@ export default function GodoCheckBox({ html, folder }: Props) {
 
   const run = async (raw = input) => {
     const no = goodsNoOf(raw);
-    if (!no) return setError('상품번호(숫자) 또는 상품 주소(…goodsNo=숫자)를 넣어 주세요.');
+    if (!no) return setError('상품 페이지 주소(…goodsNo=숫자) 또는 상품번호(숫자)를 넣어 주세요.');
     ctl.current?.abort();
     const c = (ctl.current = new AbortController());
     setBusy(true);
@@ -41,8 +47,13 @@ export default function GodoCheckBox({ html, folder }: Props) {
       const goods = await fetchGodoGoods(no, c.signal);
       if (c.signal.aborted) return;
       rememberGoodsNo(folder, no);
-      setInput(no);
-      setCheck(compareGodo(goods, html, folder));
+      const c2 = compareGodo(goods, html, folder);
+      // 칸에는 상품 페이지 주소를 보여 준다 (주소를 모르면 번호)
+      setInput(goods.url || no);
+      setCheck(c2);
+      // 상세설명이 있는 상품이면 등록 페이지로 작업에 남긴다 — 다른 마크업이 붙어 있어도 이 제품을 올린 페이지는 맞다 (내용이 다르다는 표시는 남김).
+      // 상세설명이 비어 있으면 아직 등록 전으로 본다. 이미 같은 주소면 다시 쓰지 않음
+      if (c2.status !== 'empty' && goods.url && goods.url !== link?.trim()) onLink?.(goods.url);
     } catch (err) {
       if (!c.signal.aborted) {
         setCheck(null);
@@ -53,13 +64,13 @@ export default function GodoCheckBox({ html, folder }: Props) {
     }
   };
 
-  // 기억한 상품번호가 있으면 결과를 열 때·결과가 바뀔 때 자동 확인
+  // 저장된 등록 페이지·기억한 상품번호가 있으면 결과를 열 때·결과가 바뀔 때 자동 확인
   useEffect(() => {
-    const no = rememberedGoodsNo(folder);
-    setInput(no);
+    const start = startOf();
+    setInput(start);
     setCheck(null);
     setError('');
-    if (no) void run(no);
+    if (start) void run(start);
     return () => ctl.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folder, html]);
@@ -67,16 +78,16 @@ export default function GodoCheckBox({ html, folder }: Props) {
   const st = check && STATUS[check.status];
   const g = check?.goods;
   return (
-    <div className="godo" role="group" aria-label="고도몰 등록 확인">
+    <div className="godo" role="group" aria-label="등록한 페이지 링크">
       <div className="godo__row">
-        <b className="godo__title">고도몰 등록 확인</b>
+        <b className="godo__title">등록한 페이지 링크</b>
         <input
           className="godo__input"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && !busy && void run()}
-          placeholder="상품번호 또는 상품 주소"
-          aria-label="고도몰 상품번호 또는 상품 주소"
+          placeholder="상품 페이지 주소 또는 상품번호"
+          aria-label="고도몰 상품 페이지 주소 또는 상품번호"
           spellCheck={false}
         />
         <Button type="button" size="sm" disabled={busy || !input.trim()} onClick={() => void run()}>
@@ -103,7 +114,12 @@ export default function GodoCheckBox({ html, folder }: Props) {
                 : '글자나 이미지가 지금 결과와 다릅니다. 지금 결과를 붙여넣으려면 「HTML 복사」 후 상세설명을 바꿔 주세요.'}
             </span>
           )}
-          {check.status === 'other' && <span className="godo__hint">이 상품 상세설명에는 이 제품 폴더의 이미지나 Pagefy 마크업이 없습니다. 상품번호를 확인해 주세요.</span>}
+          {check.status === 'other' && (
+            <span className="godo__hint">
+              이 상품 상세설명은 지금 결과가 아닙니다
+              {check.folderSeen ? ` — 이미지 폴더 /${check.folderSeen}/ 를 쓰는 다른 결과(예전 슬러그 등)가 붙어 있습니다` : ' — 이 제품 폴더의 이미지나 Pagefy 마크업이 없습니다'}. 지금 결과로 바꾸려면 이미지를 올린 뒤 「HTML 복사」로 상세설명을 바꿔 주세요. 다른 상품이라면 주소를 확인해 주세요.
+            </span>
+          )}
           {!g.mobileSameAsPc && !g.descriptionMobile.trim() && check.status !== 'empty' && (
             <span className="godo__hint">모바일 상세설명 칸은 비어 있습니다 (「PC 와 동일」 설정 꺼짐).</span>
           )}

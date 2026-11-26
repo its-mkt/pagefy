@@ -43,7 +43,14 @@
   // 세로로 쌓음: 에디터 → 저장하면 바뀌는 것 → 미리보기 전체 폭 (바뀌는 것은 짧아 옆 칸이 비고, 미리보기는 PC 750~980px 가 가로 스크롤 없이 보이게)
   &__grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: $sp-5; }
   &__col { min-width: 0; display: grid; gap: $sp-3; align-content: start; }
-  &__preview { min-width: 0; display: grid; gap: $sp-3; margin-top: $sp-5; }
+  &__preview {
+    min-width: 0;
+    display: grid;
+    gap: $sp-2; // 화면 고르기와 미리보기 사이를 붙여서 아래 여백이 뜨지 않게
+    margin-top: $sp-3;
+    // 접힘 제목 줄 — PSD 자세히 보기와 같게 가운데 (펼치기 화살표 포함)
+    > .sum { display: flex; justify-content: center; align-items: center; gap: $sp-1; width: 100%; }
+  }
 
   &__actions { display: flex; flex-wrap: wrap; align-items: center; gap: $sp-2; }
   // 「변환 내역에서 불러오기」 — 작업 이름이 길어도 줄이 넘치지 않게 (목록 안에서는 전체 이름)
@@ -61,9 +68,10 @@
     list-style: none;
     display: grid;
     gap: $sp-row;
-    li { display: grid; grid-template-columns: 4.75rem minmax(0, 1fr); align-items: start; gap: $sp-3; padding: $sp-2 $sp-3; background: var(--tile); }
+    // 첫 칸(등급 배지)은 폭이 고정이라 줄 배치(flex)로 충분하다 — 둘째 칸은 남은 폭을 쓰고 줄어들 수 있게 min-width 0
+    li { display: flex; flex-wrap: wrap; align-items: flex-start; gap: $sp-3; padding: $sp-2 $sp-3; background: var(--tile); > div:first-of-type { flex: 1 1 auto; min-width: 0; } }
     li.is-strict { opacity: 0.8; }
-    .badge { justify-content: center; }
+    .badge { justify-content: center; flex: 0 0 4.75rem; }
     b { color: var(--ink); font-weight: 600; }
   }
   &__n { color: var(--sub); font-variant-numeric: tabular-nums; }
@@ -80,14 +88,19 @@
     &--guess { color: var(--slate-a10); border-style: dashed; }
   }
   &__samples {
-    margin-top: 2px;
+    // 줄 오른쪽 끝 — 펼치면 코드 칸이 폭을 가진다 (둘째 칸은 줄어들며 줄바꿈)
+    flex: 0 0 auto;
+    margin: 0 0 0 auto;
+    width: 22rem;
+    max-width: 45%;
     .sum { font-size: 0.75rem; color: var(--sub); padding: 0; }
     .sum-body { display: grid; gap: 2px; margin-top: $sp-1; }
     code { display: block; font: 0.6875rem/1.5 $mono; color: var(--ink2); background: var(--card); padding: 2px $sp-2; word-break: break-all; }
   }
 
   // 미리보기
-  &__phead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: $sp-2; h3 { margin: 0; } .seg { margin: 0; } }
+  // 화면 고르기(PC · 모바일)는 오른쪽 — 미리보기 상자 오른쪽 모서리에 맞추고, 아래와는 한 칸(sp-2) 띄운다
+  &__phead { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: $sp-2; margin: 0 0 $sp-2; h3 { margin: 0; } .seg { margin: 0; } }
   &__stage {
     overflow: auto;
     max-height: 75vh;
@@ -126,13 +139,14 @@
   &__bar {
     display: flex;
     align-items: baseline;
-    gap: $sp-3;
+    gap: $sp-2;
     padding: $sp-2 $sp-3;
     background: var(--slate-a3);
     border-bottom: 1px solid var(--line);
     b { color: var(--ink); font-size: 0.8125rem; }
     span { color: var(--sub); font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
+  &__note { margin-left: auto; color: var(--sub); font-size: 0.75rem; }
   &__tools {
     display: flex;
     flex-wrap: wrap;
@@ -170,11 +184,20 @@
     margin-left: $sp-1;
     input { width: 14rem; height: 1.75rem; padding: 0 $sp-2; border: 1px solid var(--slate-a7); background: var(--card); font: inherit; color: var(--slate-12); }
   }
-  &__body { min-height: 16rem; display: grid; }
+  // 편집 칸 높이는 아래 가장자리를 끌어서 바꾼다 (기본 32rem, 최소 16rem) — 안의 편집 화면·HTML 입력·글자 보기는 칸을 가득 채운다
+  // 기본 높이는 화면 높이의 70% (최소 26rem, 최대 60rem; 손잡이로 줄여도 26rem 아래로는 안 줄어듦) — 큰 화면에서 상세페이지가 더 많이 보이게
+  &__body { height: clamp(26rem, 70vh, 60rem); min-height: 26rem; display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+  // 아래 가장자리 손잡이 — 가로 전체가 세로 조절 자리 (커서·포커스 표시)
+  // 잡는 곳을 한눈에 — 가운데 막대 + 옅은 띠 (항상 보임), 올리거나 초점이면 진해진다
+  &__grip { position: relative; display: grid; place-items: center; height: 14px; border-top: 1px solid var(--line); background: var(--slate-a2); cursor: ns-resize; touch-action: none; }
+  &__grip-mark { display: block; width: 3rem; height: 3px; background: var(--slate-a8); }
+  &__grip:hover, &__grip:focus-visible { background: var(--slate-a4); outline: none; }
+  &__grip:hover &__grip-mark, &__grip:focus-visible &__grip-mark { background: var(--slate-11); }
   &__src {
     width: 100%;
-    min-height: 16rem;
-    resize: vertical;
+    height: 100%;
+    min-height: 0;
+    resize: none;
     padding: $sp-3;
     border: 0;
     background: var(--card);
@@ -182,11 +205,15 @@
     tab-size: 2;
     &:focus { outline: 2px solid var(--indigo-8); outline-offset: -2px; }
   }
-  &__text { margin: 0; padding: $sp-3; max-height: 30rem; overflow: auto; white-space: pre-wrap; font-size: 0.8125rem; }
+  &__text { margin: 0; padding: $sp-3; height: 100%; min-height: 0; overflow: auto; white-space: pre-wrap; font-size: 0.8125rem; }
+  // 경고 띠(있을 때만) + 편집 화면 — 세로로 쌓고 편집 화면이 남은 높이를 모두 쓴다
+  // (grid 두 줄이면 경고가 없을 때 iframe 이 첫 줄(auto)에 들어가 기본 높이 150px 로 줄어들었다)
   &__design {
-    display: grid;
-    grid-template-rows: auto 1fr;
-    iframe { width: 100%; height: 26rem; border: 0; background: #fff; }
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    iframe { flex: 1 1 auto; width: 100%; height: auto; min-height: 0; border: 0; background: #fff; }
   }
   &__warn { margin: 0; padding: $sp-2 $sp-3; background: var(--red-a4); color: var(--red-a11); font-size: 0.75rem; }
   &__modes {
@@ -250,8 +277,18 @@
   padding-right: $sp-1;
   color: var(--sub);
   font-size: 0.75rem;
-  white-space: nowrap; // 줄이 좁으면 안내 전체가 다음 줄로 (「Editor 탭으로」만 잘려 내려가지 않게)
-  .link-btn { font-size: 0.75rem; }
+  // 도구 칸(.edsim__tools > span)은 높이 1.5rem 으로 고정돼 있어서, 이 안내만 높이를 풀어 줄바꿈해도 잘리지 않게 한다
+  .edsim__tools > & {
+    display: inline-flex;
+    height: auto;
+    min-height: 1.5rem;
+    min-width: 0;
+    padding: 0 $sp-1;
+    border: 0;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .link-btn { font-size: 0.75rem; white-space: nowrap; }
 }
 
 // 불러온 결과의 판매처 묶음 ≠ 고른 에디터 (TesterPanel) — 노란 안내 상자

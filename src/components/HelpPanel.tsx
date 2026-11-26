@@ -2,7 +2,6 @@
 // 개발 용어(슬러그·규칙 절 번호·토큰)는 쓰지 않는다. 자세한 마크업 규칙은 공유 폴더 원본 한 곳에만 둔다
 import { SHARED_ROOT } from '../lib/sharedFolder';
 import { Fold } from './ui';
-import { Button } from './Button';
 
 const STEPS = [
   ['PSD 올리기', 'PSD 파일을 「PSD 올리기」 칸에 끌어다 놓거나 「클릭해서 고르기」 (칸 밖에 놓으면 열리지 않음). 파일은 서버로 가지 않고 이 PC 브라우저 안에서만 읽습니다.'],
@@ -29,19 +28,13 @@ const FAQ: [string, string][] = [
   ['만드는 중에 창을 닫았어요.', '「변환 내역」(또는 만들기 화면의 「최근 작업」)에서 다시 열면 이미 받은 부분은 남아 있습니다. 「저장된 계획으로 마무리」가 보이면 비용 없이 끝낼 수 있습니다.'],
 ];
 
-/** onRestartTour: 만들기 화면의 단계별 처음 안내를 처음처럼 다시 띄운다 (lib/tour.ts) */
-export default function HelpPanel({ onRestartTour }: { onRestartTour?: () => void }) {
+export default function HelpPanel() {
   return (
     <section className="panel help" aria-labelledby="help-title">
       <h2 id="help-title" className="panel__title">도움말</h2>
 
       <div className="help__head">
         <h3 className="help__h">이렇게 씁니다</h3>
-        {onRestartTour && (
-          <Button type="button" size="sm" onClick={onRestartTour}>
-            처음 안내 다시 보기
-          </Button>
-        )}
       </div>
       <ol className="help__steps">
         {STEPS.map(([t, d], i) => (

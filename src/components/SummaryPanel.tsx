@@ -15,7 +15,7 @@ export default function SummaryPanel({ loaded }: { loaded: Loaded }) {
 
       {issues.length > 0 ? (
         <div className="ready ready--warn">
-          <p className="ready__title">확인할 것 {issues.length}건</p>
+          <p className="ready__title">확인할 것 {issues.length}건 <span className="ready__sub">주의 사항이라 그대로 만들어도 됩니다</span></p>
           <ul className="ready__list">
             {issues.map((w) => <li key={w}>{w}</li>)}
           </ul>
@@ -25,7 +25,6 @@ export default function SummaryPanel({ loaded }: { loaded: Loaded }) {
           <p className="ready__title">문제 없이 바로 만들 수 있습니다</p>
         </div>
       )}
-      {issues.length > 0 && <p className="hint ready__note">확인할 것은 주의 사항일 뿐이라 그대로 만들어도 됩니다.</p>}
 
       <dl className="facts">
         <div><dt>크기</dt><dd>{s.width}×{s.height}</dd></div>

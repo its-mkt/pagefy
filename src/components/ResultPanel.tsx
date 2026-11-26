@@ -11,13 +11,13 @@ import { plainCheck } from '../lib/plainCheck';
 import GodoCheckBox from './GodoCheckBox';
 import { SeEditBox } from './SeEditor';
 import { imageKind, imageUse } from '../lib/imageUse';
-import { editorOf } from '../lib/editorSim';
+import { editorIdOf, editorOf } from '../lib/editorSim';
 import Select from './Select';
 import { buildZip, download, fmtBytes } from '../lib/util';
 import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, saveZipToShared, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
 import { CheckField, Fold, Seg, Tip, TipWrap } from './ui';
 import Elapsed from './Elapsed';
-import { Check as CheckMark, Eye, RotateCw } from 'lucide-react';
+import { Check as CheckMark, ChevronRight, Eye, RotateCw } from 'lucide-react';
 import { copyText, useCopy } from '../lib/clipboard';
 import { fmtDur, secMs } from '../lib/time';
 import { useFrameHeight } from '../lib/useFrameHeight';
@@ -51,6 +51,10 @@ interface Props {
   autoFix?: { ok: boolean; text: string } | null;
   /** 고도몰 등록 확인 상자 (서버에 아이티켓 고도몰 API 키가 있고 채널이 아이티켓일 때) */
   godo?: boolean;
+  /** 이 작업에 저장된 등록 페이지 주소 (작업 기록 link) */
+  regLink?: string;
+  /** 등록 확인이 맞으면 그 상품 페이지 주소를 작업 기록에 저장 */
+  onRegLink?: (url: string) => void;
   /** 「수정」에서 저장해 둔 복사 구간 HTML (이 결과에 맞을 때만, 없으면 null) — 「HTML 복사」가 이것을 쓴다 */
   savedEdit?: string | null;
   /** 수정 저장(html) · 원래대로(null) — 작업에 남긴다 */
@@ -142,7 +146,7 @@ function diagnostics(result: Result, loaded: Loaded, run: RunState) {
   ].join('\n');
 }
 
-export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, onRetry, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo, savedEdit = null, onSaveEdit }: Props) {
+export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, onRetry, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo, regLink, onRegLink, savedEdit = null, onSaveEdit }: Props) {
   const [tab, setTab] = useState<Tab>('preview');
   // 「수정」 — 실수 방지로 「저장」해야만 복사에 들어간다 (2026-11-25 사용자).
   //  draft = 저장하지 않은 고침 (있으면 「HTML 복사」를 막는다) · savedEdit = 저장한 고침 (작업에 남음, 결과가 다시 만들어지면 App 이 버림)
@@ -273,6 +277,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
           <ol className="runsteps" aria-label="진행 단계">
             {STEPS.map(([k, label], i) => (
               <li key={k} className={i < stepIdx ? 'is-done' : i === stepIdx ? 'is-on' : ''} aria-current={i === stepIdx ? 'step' : undefined}>
+                {i > 0 && <ChevronRight className="runsteps__sep" aria-hidden="true" />}
+                {i < stepIdx && <CheckMark className="runsteps__ico" aria-hidden="true" />}
                 {label}
               </li>
             ))}
@@ -355,7 +361,6 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               <div className="getit__btns">
               <button
                 className={`btn ${autoUpload || imgReady ? 'btn--primary' : ''} getit__copy`}
-                data-tour="copy"
                 disabled={!result.parsed.html || upBusy || (!autoUpload && !imgReady) || dirty}
                 onClick={() => copyHtml()}
               >
@@ -365,7 +370,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                     {upload!.phase === 'checking' ? '이미지 서버 확인 중…' : upload!.phase === 'uploading' ? `이미지 올리는 중 ${upload!.done}/${upload!.total}` : upload!.phase === 'removing' ? `이미지 지우는 중 ${upload!.done}/${upload!.total}` : '이미지 주소 확인 중…'}
                   </>
                 ) : copied === 'html' ? (
-                  '복사됨 ✓ 이제 붙여넣으세요'
+                  <><CheckMark className="btn__ico" aria-hidden="true" /> 복사됨 · 이제 붙여넣으세요</>
                 ) : (
                   autoUpload && upload!.phase !== 'done' ? '이미지 올리고 HTML 복사' : 'HTML 복사'
                 )}
@@ -374,7 +379,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                   예전엔 안내 글 아래 글자 링크라 설명처럼 묻혀서(2026-11-25 의견) 복사 버튼 옆 보조 버튼으로. 복사가 막혀 있어도(이미지 올리기 전) 미리 볼 수 있다 */}
               {onOpenTester && (
                 <TipWrap disabled={!result.parsed.html} content="붙여넣기 전에, 쇼핑몰 에디터가 저장하면서 이 HTML을 어떻게 바꾸는지 미리 봅니다">
-                  <Button type="button" className="getit__tester" data-tour="tester" disabled={!result.parsed.html} onClick={onOpenTester}>
+                  <Button type="button" className="getit__tester" disabled={!result.parsed.html} onClick={onOpenTester}>
                     <Eye className="btn__ico" />
                     에디터 미리보기
                   </Button>
@@ -497,7 +502,6 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 onCopyHtml={() => copyHtml()}
               />
             )}
-            {godo && <GodoCheckBox html={copySection(result.parsed.html)} folder={`/${result.meta.channel}/${result.meta.slug}/`} />}
             {/* 그 밖의 일(보관·직접 올리기)은 주 버튼과 선으로 나눠 아래에 모은다 */}
             {(autoUpload || zipError) && (
               <div className="getit__extra">
@@ -511,6 +515,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               </div>
             )}
           </div>
+
+          {/* 등록한 페이지 링크 — 복사·붙여넣기(받아 가기 상자)가 끝난 뒤의 일이라 상자 밖에 따로 둔다 */}
+          {godo && <GodoCheckBox html={copySection(result.parsed.html)} folder={`/${result.meta.channel}/${result.meta.slug}/`} link={regLink} onLink={onRegLink} />}
 
           {issues.length > 0 && (
             <ul className="checks">
@@ -602,6 +609,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 title="복사 전에 수정"
                 resetKey={editKey}
                 note={openmarket ? '오픈마켓 HTML' : '고도몰 상세설명'}
+                common={openmarket}
                 html={draft ?? edited ?? original}
                 onChange={(h) => setDraft(h === (edited ?? original) ? null : h)}
                 p={editorOf(editorIdOf(result.meta))}
@@ -1067,7 +1075,7 @@ function ManualSteps(p: {
               </CheckField>
               {p.ready && (
                 <Button type="button" size="sm" variant="primary" onClick={p.onCopyHtml}>
-                  {p.htmlCopied ? '복사됨 ✓ 이제 붙여넣으세요' : 'HTML 복사'}
+                  {p.htmlCopied ? <><CheckMark className="btn__ico" aria-hidden="true" /> 복사됨 · 이제 붙여넣으세요</> : 'HTML 복사'}
                 </Button>
               )}
             </div>
@@ -1079,8 +1087,4 @@ function ManualSteps(p: {
   );
 }
 
-/** 결과의 채널·플랫폼에 맞는 에디터 흉내 (수정 상자의 쇼핑몰 폭·스킨) — 고도몰은 godo, 오픈마켓은 플랫폼, 모르면 스마트스토어 */
-function editorIdOf(m: { channel: string; market?: string }) {
-  return m.channel !== 'openmarket' ? 'godo' : m.market && m.market !== 'other' ? m.market : 'smartstore';
-}
 

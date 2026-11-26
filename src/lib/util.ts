@@ -2,6 +2,9 @@ import type { CutImage } from './images';
 import { safeFolderName } from './sharedFolder';
 
 /** 규칙 6-1 제품슬러그: 영문 소문자, 공백·특수문자는 '-' 하나로, 앞뒤 '-' 제거 */
+/** 서버 폴더 이름이 규칙에 안 맞을 때의 안내 — 칸 아래 빨간 글씨와 「만들기 전에」 목록에서 같은 문장을 쓰므로 한곳에 둔다 */
+export const SLUG_BLOCK = '서버 폴더 이름을 영문 소문자·숫자·하이픈으로 입력하세요 (PSD 이름이 한글이면 영문 모델명으로).';
+
 export function toSlug(name: string) {
   return name
     .toLowerCase()

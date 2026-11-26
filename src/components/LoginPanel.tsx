@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Button } from './Button';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, toLoginEmail, type Role } from '../lib/supabase';
-import { Lock } from 'lucide-react';
+import { Check, Lock } from 'lucide-react';
 
 /** 계정 관리(가입·승인 요청·비밀번호 찾기)를 하는 곳 */
 const ACCOUNT_URL = '/ad-insight/';
@@ -55,8 +55,14 @@ export default function LoginPanel({ session, role }: { session: Session | null;
   return (
     <GateShell icon={<Lock />} title="로그인하면 사용할 수 있습니다" desc="광고 인사이트와 같은 계정으로 로그인합니다.">
       <form className="gate__form" onSubmit={login}>
-        <input className={`gate__input${err ? ' is-err' : ''}`} name="username" placeholder="이메일" value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" autoFocus required />
-        <input className={`gate__input${err ? ' is-err' : ''}`} type="password" name="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required />
+        <label className="gate__field">
+          <span>이메일 <em className="req" title="필수 입력">*</em></span>
+          <input className={`gate__input${err ? ' is-err' : ''}`} name="username" placeholder="이메일" value={id} onChange={(e) => setId(e.target.value)} autoComplete="username" autoFocus required aria-required="true" />
+        </label>
+        <label className="gate__field">
+          <span>비밀번호 <em className="req" title="필수 입력">*</em></span>
+          <input className={`gate__input${err ? ' is-err' : ''}`} type="password" name="password" placeholder="비밀번호" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" required aria-required="true" />
+        </label>
         {err && <p className="gate__error" role="alert">{err}</p>}
         <Button variant="primary" className="gate__submit" disabled={busy}>{busy ? '확인 중...' : '로그인'}</Button>
       </form>
@@ -82,9 +88,9 @@ function GateShell({ icon, title, desc, children }: { icon: React.ReactNode; tit
           <p className="gate__brand-name">Pagefy</p>
           <p className="gate__brand-lead">상세페이지 PSD 를 쇼핑몰에 붙여넣을 HTML 마크업으로 바꿉니다.</p>
           <ul className="gate__brand-points">
-            <li>관리자가 승인한 계정만 사용</li>
-            <li>광고 인사이트와 같은 계정</li>
-            <li>PSD 는 이 PC 브라우저 안에서만 읽음</li>
+            <li><Check className="gate__ico" aria-hidden="true" />관리자가 승인한 계정만 사용</li>
+            <li><Check className="gate__ico" aria-hidden="true" />광고 인사이트와 같은 계정</li>
+            <li><Check className="gate__ico" aria-hidden="true" />PSD 는 이 PC 브라우저 안에서만 읽음</li>
           </ul>
           <p className="gate__brand-foot">계정·권한 문의는 마케팅팀으로 연락해 주세요.</p>
         </aside>

@@ -5,6 +5,10 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import { previewDoc, type EditorProfile } from '../lib/editorSim';
 import Select from './Select';
 import { Tip } from './ui';
+import { Info } from 'lucide-react';
+
+/** Editor 탭 안내 (도구 막대의 ⓘ 에 뜬다) */
+const EDITOR_NOTE = 'Editor 탭에서는 글자를 바로 고치고 위 도구로 꾸며 볼 수 있습니다 (테스트라 쇼핑몰에는 저장되지 않음). 고도몰은 <style> 을 지우지 않지만, 여기서 저장하면 www.·http:// 글자가 자동 링크가 됩니다.';
 
 /** SmartEditor 2 기본 글꼴 목록 (고도몰 관리자 상세설명 에디터) */
 const FONTS = ['나눔고딕', '돋움', '돋움체', '굴림', '굴림체', '바탕', '바탕체', '궁서', 'Arial', 'Tahoma', 'Times New Roman', 'Verdana', 'Courier New'];
@@ -157,20 +161,19 @@ export const SeEditorView = forwardRef<SeApi, { html: string; p: EditorProfile; 
 
   return (
     <div className="edsim__design">
-      <p className="edsim__warn">
-        {warn ?? (
-          <>
-            Editor 탭에서는 글자를 바로 고치고 위 도구로 꾸며 볼 수 있습니다 (테스트라 쇼핑몰에는 저장되지 않음). 고도몰은 &lt;style&gt; 을 지우지 않지만, 여기서 저장하면 www.·http:// 글자가 자동 링크가 됩니다.
-          </>
-        )}
-      </p>
+      {/* 호출자가 준 경고(저장 전 주의 등)만 띠로 보인다. 기본 안내(Editor 탭 설명)는 도구 막대의 ⓘ 에 있다 */}
+      {warn && <p className="edsim__warn">{warn}</p>}
       <iframe ref={frame} title="에디터 디자인 모드" sandbox="allow-same-origin" srcDoc={doc} onLoad={onLoad} />
     </div>
   );
 });
 
 /** SmartEditor 2 도구 막대 — Editor 탭에서만 누를 수 있다 (HTML·TEXT 탭에서는 회색, 설명 툴팁) */
-export function SeToolbar({ api, enabled, active, onGoEditor }: { api: React.RefObject<SeApi | null>; enabled: boolean; active: Active; onGoEditor?: () => void }) {
+/**
+ * common = 오픈마켓용 공통 도구만 (굵게·기울임·밑줄·취소선·정렬·링크). 글꼴·크기는 플랫폼 에디터마다 달라 뺀다.
+ * 실제 플랫폼 에디터와 결과가 다를 수 있으므로 화면에 그 안내를 같이 둔다.
+ */
+export function SeToolbar({ api, enabled, active, onGoEditor, common = false }: { api: React.RefObject<SeApi | null>; enabled: boolean; active: Active; onGoEditor?: () => void; common?: boolean }) {
   const [linkOpen, setLinkOpen] = useState(false);
   const [url, setUrl] = useState('https://');
   const off = enabled ? undefined : 'Editor 탭에서 쓸 수 있습니다';
@@ -186,25 +189,29 @@ export function SeToolbar({ api, enabled, active, onGoEditor }: { api: React.Ref
   );
   return (
     <div className="edsim__tools" role="toolbar" aria-label="SmartEditor 도구">
-      <Select<string>
-        size="sm"
-        className="edsim__pick"
-        aria-label="글꼴"
-        disabled={!enabled}
-        value=""
-        onChange={(v) => v && run({ k: 'font', name: v })}
-        options={[{ value: '', label: '글꼴' }, ...FONTS.map((f) => ({ value: f, label: <span style={{ fontFamily: f }}>{f}</span>, text: f }))]}
-      />
-      <Select<string>
-        size="sm"
-        className="edsim__pick"
-        aria-label="글자 크기"
-        disabled={!enabled}
-        value=""
-        onChange={(v) => v && run({ k: 'size', pt: Number(v) })}
-        options={[{ value: '', label: '크기' }, ...SIZES.map((s) => ({ value: String(s), label: `${s}pt` }))]}
-      />
-      <i />
+      {!common && (
+        <>
+          <Select<string>
+            size="sm"
+            className="edsim__pick"
+            aria-label="글꼴"
+            disabled={!enabled}
+            value=""
+            onChange={(v) => v && run({ k: 'font', name: v })}
+            options={[{ value: '', label: '글꼴' }, ...FONTS.map((f) => ({ value: f, label: <span style={{ fontFamily: f }}>{f}</span>, text: f }))]}
+          />
+          <Select<string>
+            size="sm"
+            className="edsim__pick"
+            aria-label="글자 크기"
+            disabled={!enabled}
+            value=""
+            onChange={(v) => v && run({ k: 'size', pt: Number(v) })}
+            options={[{ value: '', label: '크기' }, ...SIZES.map((s) => ({ value: String(s), label: `${s}pt` }))]}
+          />
+          <i />
+        </>
+      )}
       {btn(<b>B</b>, '굵게', { k: 'toggle', cmd: 'bold' }, active.bold)}
       {btn(<em>I</em>, '기울임', { k: 'toggle', cmd: 'italic' }, active.italic)}
       {btn(<u>U</u>, '밑줄', { k: 'toggle', cmd: 'underline' }, active.underline)}
@@ -222,6 +229,12 @@ export function SeToolbar({ api, enabled, active, onGoEditor }: { api: React.Ref
       <Tip content="테스트 뷰어에서는 지원하지 않습니다 — 그림·표는 HTML 탭에서 넣어 주세요">
         <span className="edsim__tool is-na" tabIndex={0}>
           사진
+        </span>
+      </Tip>
+      {/* Editor 탭 안내 (예전엔 편집 화면 위 띠) — 마우스를 올리거나 눌러 본다 */}
+      <Tip content={EDITOR_NOTE}>
+        <span className="edsim__tool is-info" tabIndex={0} aria-label="Editor 탭 안내">
+          <Info className="btn__ico" aria-hidden="true" />
         </span>
       </Tip>
       <Tip content="테스트 뷰어에서는 지원하지 않습니다 — 그림·표는 HTML 탭에서 넣어 주세요">
@@ -265,9 +278,11 @@ export function SeToolbar({ api, enabled, active, onGoEditor }: { api: React.Ref
  * html 은 원래 서버 주소 그대로 받고 돌려준다. localize = [서버 주소, 미리보기 주소] — 아직 안 올린 그림도 편집 화면에 보이게
  */
 /** resetKey 가 바뀌면 편집 화면을 새로 그린다 — 「고친 것 버리기」처럼 같은 html 로 되돌릴 때 (같은 값이면 다시 그리지 않아 고친 모양이 남는다) */
-export function SeEditBox({ html, onChange, p, images = [], title, note, warn, resetKey }: { html: string; onChange: (html: string) => void; p: EditorProfile; images?: [string, string][]; title: string; note?: React.ReactNode; warn?: React.ReactNode; resetKey?: number }) {
+export function SeEditBox({ html, onChange, p, images = [], title, note, warn, resetKey, common = false }: { html: string; onChange: (html: string) => void; p: EditorProfile; images?: [string, string][]; title: string; note?: React.ReactNode; warn?: React.ReactNode; resetKey?: number; /** 오픈마켓: 공통 도구만 */ common?: boolean }) {
   const [tab, setTab] = useState<'editor' | 'html'>('editor');
   const api = useRef<SeApi>(null);
+  // 편집 칸 높이 — 아래 손잡이로 조절 (에디터 테스트와 같음)
+  const bodyRef = useRef<HTMLDivElement>(null);
   const [active, setActive] = useState<Active>({});
   const localize = (h: string) => images.reduce((acc, [from, to]) => acc.split(from).join(to), h);
   const unlocalize = (h: string) => images.reduce((acc, [from, to]) => acc.split(to).join(from), h);
@@ -277,8 +292,8 @@ export function SeEditBox({ html, onChange, p, images = [], title, note, warn, r
         <b>{title}</b>
         {note && <span>{note}</span>}
       </div>
-      <SeToolbar api={api} enabled={tab === 'editor'} active={active} onGoEditor={() => setTab('editor')} />
-      <div className="edsim__body">
+      <SeToolbar api={api} enabled={tab === 'editor'} active={active} common={common} onGoEditor={() => setTab('editor')} />
+      <div className="edsim__body" ref={bodyRef}>
         {tab === 'editor' ? (
           <SeEditorView key={resetKey} ref={api} html={localize(html)} p={p} onEdit={(h) => onChange(unlocalize(h))} onActive={setActive} warn={warn} />
         ) : (
@@ -297,6 +312,49 @@ export function SeEditBox({ html, onChange, p, images = [], title, note, warn, r
           </button>
         ))}
       </div>
+      <EdsimGrip target={bodyRef} />
     </div>
+  );
+}
+
+/** 편집 칸 아래 가장자리 손잡이 — 마우스·터치로 끌거나 화살표 키로 높이를 바꾼다 (최소 16rem = 256px) */
+export function EdsimGrip({ target }: { target: React.RefObject<HTMLDivElement | null> }) {
+  const MIN = 416; // 26rem — CSS 최소 높이와 같게 (너무 작아져 스크롤 영역이 사라지지 않게)
+  const setH = (px: number) => {
+    const el = target.current;
+    if (el) el.style.height = `${Math.max(MIN, Math.round(px))}px`;
+  };
+  return (
+    <Tip content="끌어서 높이 조절 (위·아래 화살표 키도 됩니다)" side="top">
+    <div
+      className="edsim__grip"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="편집 칸 높이 조절"
+      tabIndex={0}
+      onPointerDown={(e) => {
+        const el = target.current;
+        if (!el) return;
+        e.preventDefault();
+        const startY = e.clientY;
+        const startH = el.getBoundingClientRect().height;
+        const move = (ev: PointerEvent) => setH(startH + ev.clientY - startY);
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      }}
+      onKeyDown={(e) => {
+        if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+        e.preventDefault();
+        const h = target.current?.getBoundingClientRect().height ?? MIN;
+        setH(h + (e.key === 'ArrowDown' ? 32 : -32));
+      }}
+    >
+      <span className="edsim__grip-mark" aria-hidden="true" />
+    </div>
+    </Tip>
   );
 }

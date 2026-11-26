@@ -8,6 +8,8 @@ export interface GodoCheck {
   status: GodoStatus;
   /** old 일 때: 글자·이미지는 같고 코드(CSS 등)만 다름 */
   sameContent?: boolean;
+  /** other 일 때: 등록된 상세설명이 쓰는 이미지 폴더 (예: itket/zgx-nano-ai-station) — 다른 슬러그로 만든 예전 결과인지 알려 준다 */
+  folderSeen?: string;
   goods: GodoGoods;
   /** 확인한 시각 (ISO) */
   checkedAt: string;
@@ -36,7 +38,11 @@ export function compareGodo(goods: GodoGoods, html: string, folder: string): God
   if (norm(d) === norm(html)) return { ...base, status: 'latest' };
   const root = /^\s*<div class="(dp-[a-z0-9-]+)/.exec(html)?.[1];
   const ours = d.includes(folder) || (!!root && new RegExp(`class="${root}[" ]`).test(d));
-  if (!ours) return { ...base, status: 'other' };
+  if (!ours) {
+    // 이미지 주소의 …/detail/<채널>/<슬러그>/ (오픈마켓은 openmarket/<플랫폼>/<슬러그>) — 같은 제품을 다른 슬러그로 만든 결과일 때 보여 준다
+    const seen = /\/detail\/((?:openmarket\/[a-z0-9-]+\/)?[a-z0-9]+\/[a-z0-9-]+)\//i.exec(d)?.[1];
+    return { ...base, status: 'other', ...(seen ? { folderSeen: seen } : {}) };
+  }
   const sameContent = textOf(d) === textOf(html) && imagesOf(d, folder) === imagesOf(html, folder);
   return { ...base, status: 'old', sameContent };
 }

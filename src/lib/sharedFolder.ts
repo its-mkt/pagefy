@@ -94,6 +94,38 @@ type SavePicker = (o: {
 }) => Promise<FileSystemFileHandle>;
 
 /**
+ * 공유 폴더의 「채널\제품명」 안에서 PSD 를 찾는다 (「공유 폴더에 저장」 때 PSD 가 같은 폴더에 들어간다).
+ * - prompt = false: 기억한 폴더 권한이 이미 허용돼 있을 때만 읽는다 (권한 묻기 없음 — 화면을 열 때 쓴다)
+ * - prompt = true: 버튼을 누른 직후에만 쓴다 (권한 묻기·폴더 고르기까지 한다)
+ * 찾지 못하거나 읽을 수 없으면 null (화면이 「PSD 선택」으로 직접 고르게 한다)
+ */
+export async function findSharedPsd(inp: { channel: Channel; productName: string; fileName?: string }, prompt = false): Promise<File | null> {
+  let root: FileSystemDirectoryHandle;
+  try {
+    if (prompt) {
+      root = await getSharedRoot(false);
+    } else {
+      const h = await loadRoot();
+      if (!h || (await h.queryPermission({ mode: 'readwrite' })) !== 'granted') return null;
+      root = h;
+    }
+  } catch {
+    return null;
+  }
+  try {
+    const ch = await root.getDirectoryHandle(CHANNEL_DIR[inp.channel]);
+    const prod = await ch.getDirectoryHandle(safeFolderName(inp.productName));
+    const psds: FileSystemFileHandle[] = [];
+    for await (const e of prod.values()) if (e.kind === 'file' && /\.psd$/i.test(e.name)) psds.push(e as FileSystemFileHandle);
+    if (!psds.length) return null;
+    const pick = psds.find((f) => f.name === inp.fileName) ?? psds[0];
+    return await pick.getFile();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * zip 을 저장 창으로 저장 — 창이 공유 폴더(기억한 A_상세페이지 → 채널 폴더)에서 열린다.
  * 웹 페이지는 \\192.168.1.254\… 같은 네트워크 경로를 직접 열 수 없어서(브라우저 보안), 저장 창의 시작 위치로 대신한다.
  * 기억한 폴더가 없으면 지난번에 zip 을 저장한 폴더(id 'pagefy-zip')에서 열리므로, 처음 한 번만 공유 폴더로 옮겨 가면 된다.

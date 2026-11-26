@@ -8,7 +8,7 @@ import { readLocal, writeLocal } from '../lib/util';
 import { useCopy } from '../lib/clipboard';
 import { useFrameHeight } from '../lib/useFrameHeight';
 import { CheckField, Fold, Seg, Tip } from './ui';
-import { SeEditorView, SeToolbar, type SeApi } from './SeEditor';
+import { EdsimGrip, SeEditorView, SeToolbar, type SeApi } from './SeEditor';
 import Select from './Select';
 import TesterJobPicker from './TesterJobPicker';
 import type { Job } from '../lib/jobs';
@@ -17,6 +17,8 @@ import type { Job } from '../lib/jobs';
 export interface TesterSource {
   html: string;
   label: string;
+  /** 제품명 — 편집 박스 머리글에 「제품명 · 플랫폼」으로 보인다 (직접 붙여넣은 HTML 은 없음) */
+  product?: string;
   editor: EditorId;
   /** 이미지 주소 → 미리보기용 주소 */
   images: [string, string][];
@@ -92,10 +94,20 @@ export default function TesterPanel({
   const [marketId, setMarketId] = useState<EditorId>(p.group === '오픈마켓' ? editorId : 'smartstore');
   const [input, setInput] = useState(() => (start ? start.html : (sessionStorage.getItem(DRAFT_KEY) ?? '')));
   const [source, setSource] = useState<TesterSource | null>(start ?? null);
+  // 예시 넣기·비우기 되돌리기 — 바꾸기 전 글·출처와, 바꾼 뒤 글(after). 그 뒤 글이 그대로일 때만 되돌린다 (그사이 고쳤으면 덮어쓰지 않음)
+  // 편집 칸 높이 — 아래 가장자리 손잡이로 조절 (edsim__body 의 inline height)
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [undo, setUndo] = useState<{ input: string; source: TesterSource | null; after: string } | null>(null);
+  const replaceInput = (next: string) => {
+    setUndo({ input, source, after: next });
+    setInput(next);
+    setSource(null);
+  };
   useEffect(() => {
     if (start) onStarted?.(); // 처음 열 때 한 번만
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  const [tab, setTab] = useState<'html' | 'editor' | 'text'>('html');
+  // 기본은 Editor 탭 (보는 그대로 꾸며 볼 수 있는 화면). HTML·TEXT 는 눌러서 본다
+  const [tab, setTab] = useState<'html' | 'editor' | 'text'>('editor');
   const [strict, setStrict] = useState(true);
   const [designMode, setDesignMode] = useState(false);
   const [marks, setMarks] = useState(true);
@@ -106,7 +118,7 @@ export default function TesterPanel({
   useEffect(() => writeLocal(STORE_KEY, editorId), [editorId]);
   // 다른 플랫폼으로 바꾸면 에디터 탭·디자인 모드는 처음 상태로
   useEffect(() => {
-    setTab('html');
+    setTab('editor');
     setDesignMode(false);
   }, [editorId]);
 
@@ -228,26 +240,31 @@ export default function TesterPanel({
         <div className="tester__col">
           <div className="edsim">
             <div className="edsim__bar">
-              <b>상세설명</b>
-              <span>{p.editor}</span>
+              {/* 머리글 = 「제품명 · 플랫폼」 (제품명은 결과·변환 내역에서 불러왔을 때만). 에디터 이름은 마우스를 올리면 보인다 */}
+              {/* 강약: 제품명은 진하게, 플랫폼은 옅게 (제품명이 없으면 플랫폼을 진하게) */}
+              {source?.product ? (
+                <>
+                  <b title={p.editor}>{source.product}</b>
+                  <span title={p.editor}>· {p.label}</span>
+                </>
+              ) : (
+                <b title={p.editor}>{p.label}</b>
+              )}
+              {/* 오픈마켓: 공통 도구만 흉내 낸다 — 실제 플랫폼 에디터와 다를 수 있음을 알린다 */}
+              {!godo && <small className="edsim__note">공통 도구만 (글꼴·크기 없음) — 실제 플랫폼 에디터와 다를 수 있습니다</small>}
             </div>
-            {/* 고도몰: SmartEditor 2 도구 막대 — Editor 탭에서 실제로 꾸며 볼 수 있다 (저장 없음, SeEditor.tsx). 오픈마켓은 HTML 직접 입력만 */}
-            {godo ? (
-              <SeToolbar
-                api={seApi}
-                enabled={tab === 'editor'}
-                active={seActive}
-                onGoEditor={() => {
-                  setTab('editor');
-                  if (input.trim()) setDesignMode(true); // 아래 Editor 탭 단추와 같게 (저장 때 URL 자동 링크 표시)
-                }}
-              />
-            ) : (
-              <div className="edsim__tools" aria-hidden="true">
-                <span>HTML 직접 입력 — 에디터 꾸미기 기능과 섞어 쓰지 않음</span>
-              </div>
-            )}
-            <div className="edsim__body">
+            {/* 고도몰: SmartEditor 2 전체 도구 / 오픈마켓: 공통 도구 — Editor 탭에서 꾸며 볼 수 있다 (저장 없음, SeEditor.tsx) */}
+            <SeToolbar
+              api={seApi}
+              enabled={tab === 'editor'}
+              active={seActive}
+              common={!godo}
+              onGoEditor={() => {
+                setTab('editor');
+                if (input.trim()) setDesignMode(true); // 아래 Editor 탭 단추와 같게 (저장 때 URL 자동 링크 표시)
+              }}
+            />
+            <div className="edsim__body" ref={bodyRef}>
               {tab === 'html' && (
                 <textarea
                   className="edsim__src"
@@ -264,8 +281,7 @@ export default function TesterPanel({
               {tab === 'editor' && <SeEditorView ref={seApi} html={localize(input)} p={p} onEdit={(h) => setInput(unlocalize(h))} onActive={setSeActive} />}
               {tab === 'text' && <pre className="edsim__text">{textOnly(input) || '(글자 없음)'}</pre>}
             </div>
-            {godo && (
-              <div className="edsim__modes" role="tablist" aria-label="에디터 모드">
+            <div className="edsim__modes" role="tablist" aria-label="에디터 모드">
                 {(
                   [
                     ['editor', 'Editor'],
@@ -289,7 +305,7 @@ export default function TesterPanel({
                   </button>
                 ))}
               </div>
-            )}
+            <EdsimGrip target={bodyRef} />
           </div>
 
           {/* 넣기(왼쪽: 주 행동 옅은 파랑 · 나머지 회색 면) | 글자 수 · 비우기(오른쪽 끝) */}
@@ -315,13 +331,18 @@ export default function TesterPanel({
                 if (f) openFile(f);
               }}
             />
-            <Button type="button" size="sm" onClick={() => (setInput(SAMPLE), setSource(null))}>
+            <Button type="button" size="sm" onClick={() => replaceInput(SAMPLE)}>
               예시 넣기
             </Button>
             <span className="tester__len">{input.length.toLocaleString()}자</span>
             {input && (
-              <Button type="button" size="sm" onClick={() => (setInput(''), setSource(null))}>
+              <Button type="button" size="sm" onClick={() => replaceInput('')}>
                 비우기
+              </Button>
+            )}
+            {undo && input === undo.after && (
+              <Button type="button" size="sm" variant="soft" onClick={() => { setInput(undo.input); setSource(undo.source); setUndo(null); }}>
+                되돌리기
               </Button>
             )}
           </div>
@@ -364,12 +385,12 @@ export default function TesterPanel({
                       <div>
                         <b>{c.what}</b> <span className="tester__n">{c.count}곳</span>
                         <Ev ev={c.ev} />
-                        <Fold summary="해당 코드 보기" className="tester__samples">
-                          {c.samples.map((s, j) => (
-                            <code key={j}>{s}</code>
-                          ))}
-                        </Fold>
                       </div>
+                      <Fold summary="해당 코드 보기" className="tester__samples">
+                        {c.samples.map((s, j) => (
+                          <code key={j}>{s}</code>
+                        ))}
+                      </Fold>
                     </li>
                   ))}
                 </ul>
@@ -380,18 +401,17 @@ export default function TesterPanel({
       </div>
 
       {/* ── 상품 페이지 미리보기 — 플랫폼 PC 폭(최대 980px)이 잘리지 않게 전체 폭 ── */}
-      <div className="tester__preview">
+      <Fold className="tester__preview" summary="상품 페이지에서 미리보기 (저장 후)">
         <div className="tester__phead">
-          <h3>상품 페이지에서 (저장 후)</h3>
-          <Seg
-            aria-label="화면"
-            value={screen}
-            onChange={setScreen}
-            items={[
-              { value: 'pc', label: `PC ${p.pcWidth}px` },
-              { value: 'mobile', label: capture ? '모바일 (PC 캡처 축소)' : sim?.mobile.mode === 'none' ? '모바일 (미리보기 없음)' : `모바일 360px` },
-            ]}
-          />
+            <Seg
+              aria-label="화면"
+              value={screen}
+              onChange={setScreen}
+              items={[
+                { value: 'pc', label: `PC ${p.pcWidth}px` },
+                { value: 'mobile', label: capture ? '모바일 (PC 캡처 축소)' : sim?.mobile.mode === 'none' ? '모바일 (미리보기 없음)' : `모바일 360px` },
+              ]}
+            />
         </div>
         {/* 불러온 결과의 판매처 묶음과 고른 에디터가 다르면 알린다 — 고도몰 결과(<style>·글꼴 블록)를 오픈마켓 에디터로 보면 CSS 가 글자로 쏟아지는 게 정상 흉내라 헷갈린다 */}
         {source && editorOf(source.editor).group !== p.group && (
@@ -427,7 +447,7 @@ export default function TesterPanel({
             <pre>{sim.html}</pre>
           </Fold>
         )}
-      </div>
+      </Fold>
       <p className="hint tester__foot">
         규칙 원본 7-2-1·7-3·7-4 표와 플랫폼 공식 문서(2026-11-25 대조)를 근거로 흉내 낸 것입니다 — 실제 에디터 코드가 아니므로, 처음 쓰는 플랫폼은 실제로 등록해 확인하고 결과를 규칙 표에 [등록 확인]으로 남겨 주세요.
       </p>
@@ -604,3 +624,4 @@ function textOnly(html: string) {
   t.content.querySelectorAll('style,script').forEach((e) => e.remove());
   return (t.content.textContent ?? '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
 }
+

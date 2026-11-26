@@ -5,7 +5,6 @@
 @use 'operate';
 @use 'radix';
 @use 'tester';
-@use 'tour';
 
 :root { @include light; }
 :root[data-theme='dark'] { @include dark; }
@@ -59,13 +58,26 @@ button:disabled, [aria-disabled='true'] { cursor: not-allowed; }
 .app__main {
   max-width: $page-max;
   margin: 0 auto;
-  padding: 2rem $page-pad 5rem;
+  padding: 2rem $page-pad;
   display: grid;
   // 넓은 미리보기(PSD 폭 iframe)가 칸을 밀어 좁은 화면에서 가로로 넘치지 않게
   grid-template-columns: minmax(0, 1fr);
   gap: $sp-5;
 
   @media (max-width: 640px) { padding: 1rem 1rem 4rem; }
+}
+
+// PSD 파일 카드(왼쪽, 좁게) + PSD 확인(오른쪽, 넓게) — 넓은 화면에서만 가로로, 그 밖은 한 줄씩
+.prep {
+  display: grid;
+  &[hidden] { display: none; } // 저장 결과만 보는 동안 숨김 (display 가 hidden 을 이기지 않게)
+  grid-template-columns: minmax(0, 1fr);
+  gap: $sp-5;
+  align-items: stretch;
+  > .panel { margin: 0; }
+  &--pair {
+    @media (min-width: 960px) { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  }
 }
 
 // 머리 — 광고 인사이트 상단바와 같은 높이·선
@@ -237,6 +249,9 @@ button:disabled, [aria-disabled='true'] { cursor: not-allowed; }
   &--warn { color: var(--amber-a11); background: var(--amber-a3); }
   &--error { color: var(--red-a11); background: var(--red-a3); }
   &--acc { color: var(--indigo-a11); background: var(--indigo-a3); }
+  // 등록 (완료 + 쇼핑몰에 등록) — 상태(초록·파랑·노랑·빨강)·판매처(보라·주황)와 다른 차분한 금색을 진하게 채워 눈에 띄면서도 튀지 않게 (2026-11-26 사용자: 세련된 다른 색)
+  // 흰 글자가 잘 읽히게 9단계보다 한 단계 진한 10단계
+  &--reg { color: #fff; background: var(--gold-10); }
   // 판매처 묶음 (변환 내역 제품명 옆) — 고도몰 보라 · 오픈마켓 주황 (상태 색 초록·노랑·빨강, 단추 색 회색·파랑과 겹치지 않게)
   &--godo { color: var(--violet-a11); background: var(--violet-a3); }
   &--om { color: var(--orange-a11); background: var(--orange-a3); }
@@ -301,6 +316,20 @@ h3 {
 
   // 칸 이름 + 입력 칸을 세로로 — 체크박스(CheckField, label.ck)는 상자와 글자가 한 줄이라 뺀다 (.ck 모양은 _radix.scss)
   label:not(.ck) { display: grid; gap: $sp-2; align-content: start; }
+  // 체크박스 줄은 내용 너비만 — 줄 빈 곳을 눌러도 체크되지 않게 (박스·글자만 라벨)
+  label.ck { justify-self: start; }
+  // 체크박스 설명(작은 글)은 이름 글자와 떨어지도록 왼쪽 여백
+  .ck small { margin-left: $sp-2; }
+
+  // 담당자·메모를 가로로 나란히 (좁은 화면은 한 칸씩) — 작업 기록 칸 (JobInfoFields)
+  .jobinfo__pair {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: $sp-3;
+    align-items: start;
+    @media (max-width: 640px) { grid-template-columns: minmax(0, 1fr); }
+  }
   label:not(.ck) > small { margin-top: calc(#{$sp-row} - #{$sp-2}); } // 칸 → 도움말은 이름 → 칸보다 조금 붙인다
   label:not(.ck) > span { font-size: 0.75rem; color: var(--sub); font-weight: 500; }
   small { color: var(--sub); font-size: 0.75rem; word-break: break-all; }
@@ -317,6 +346,9 @@ h3 {
   textarea { resize: vertical; }
   .msg--error { color: var(--err); }
 }
+
+// 필수 입력 표시 (*) — 입력 칸 이름 옆 빨간 별. 폼 안팎 어디서든 같은 모양 (.form 밖의 칸도 쓴다)
+.req { font-style: normal; font-size: 0.75rem; font-weight: 600; color: var(--red-a11); }
 
 .actions {
   margin-top: 1rem;
@@ -516,6 +548,9 @@ h3 {
   width: 100%;
   display: flex;
   justify-content: center;
+  align-items: center;
+  // 로그인 화면은 머리말(약 62px)과 본문 여백을 뺀 영역의 가운데에 둔다
+  min-height: calc(100vh - 11rem);
   padding: 2rem 0;
 
   &__shell {
@@ -546,7 +581,8 @@ h3 {
     padding: 0;
     list-style: none;
     font-size: 0.875rem;
-    li::before { content: '✓'; margin-right: 0.5rem; font-weight: 700; }
+    li { display: flex; align-items: center; gap: 0.5rem; }
+    .gate__ico { flex: none; width: 0.875rem; height: 0.875rem; }
   }
   &__brand-foot { margin-top: auto !important; padding-top: 1.5rem; font-size: 0.75rem; opacity: 0.75; }
 
@@ -571,6 +607,8 @@ h3 {
   &__desc { margin: 0 0 1.25rem; font-size: 0.875rem; color: var(--sub); line-height: 1.5; }
 
   &__form { display: flex; flex-direction: column; gap: 0.75rem; }
+  // 로그인 칸 이름 (이메일 · 비밀번호 *) — 글자 안내(placeholder)만 있던 칸에 이름을 붙인다
+  &__field { display: grid; gap: 0.375rem; text-align: left; > span { font-size: 0.75rem; color: var(--sub); font-weight: 500; } }
   &__input {
     width: 100%;
     padding: 0.75rem 1rem;
@@ -665,7 +703,13 @@ h3 {
   }
   // 제품명 + 묶음 배지 한 줄 — 이름이 길면 이름만 줄임표, 배지는 늘 보이게
   &__title { display: flex; align-items: center; gap: $sp-2; min-width: 0; b { min-width: 0; } }
-  &__group { flex: none; min-height: 1.125rem; padding: 0 0.3125rem; font-size: 0.6875rem; }
+  &__group { flex: none; min-height: 1.125rem; padding: 0 0.3125rem; font-size: 0.6875rem; gap: 0.1875rem; }
+  &__group-ico { flex: none; width: 0.6875rem; height: 0.6875rem; } // 「등록」 배지 앞 체크 (글자 크기와 같게)
+  // 이름 칸 둘째 줄 (크기 · 등록한 제품 링크 · 메모) — 이름 단추 밖에 있어 링크를 둘 수 있다
+  &__sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sub); font-size: 0.75rem; }
+  // 밑줄은 글자 아래로 조금 띄운다 (붙으면 한글 받침과 겹쳐 답답함)
+  &__reg { display: inline-flex; align-items: center; gap: 2px; color: var(--accink); text-decoration: none; &:hover { text-decoration: underline; text-underline-offset: 0.1875rem; } }
+  &__reg-ico { width: 0.75rem; height: 0.75rem; }
   &__name {
     small { color: var(--sub); font-size: 0.75rem; }
     // 눌러서 여는 이름 칸 (button) — 단추 모양은 없이 글자 그대로, 올리면 제품명에 밑줄 + 손가락 (누를 수 있다는 신호)
@@ -682,8 +726,8 @@ h3 {
       color: inherit;
       text-align: left;
       pointer-events: none;
+      // 마우스를 올리면 커서만 손가락으로 (제목 밑줄 없음 — 사용자 지시 2026-11-26)
       > * { max-width: 100%; pointer-events: auto; cursor: pointer; }
-      &:hover .jobs__title b { text-decoration: underline; text-underline-offset: 0.1875rem; }
       &:focus-visible { outline: 2px solid var(--indigo-8); outline-offset: 2px; }
     }
   }
@@ -817,9 +861,35 @@ h3 {
     &--ok { @include callout(green); }
     &--missing { @include callout(red); span { flex-basis: 100%; } .link-btn { margin-left: 0; padding-left: 0; } }
   }
-  &__acts.actions { margin: 0 0 0.75rem; gap: 0.5rem; align-items: center; }
-  &__close { margin-left: auto; }
-  &__more { margin: 0 0 $sp-3; }
+  // 머리: 제품명(왼쪽) · 닫기 아이콘(오른쪽)
+  &__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: $sp-3;
+    .panel__title { margin-bottom: $sp-2; min-width: 0; }
+  }
+  // 상태 배지 한 줄 (이미지 서버 · 공유 폴더 PSD · 고친 내용)
+  &__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: $sp-2;
+    margin: 0 0 $sp-3;
+    .spinner, .btn__ico { width: 0.75rem; height: 0.75rem; }
+  }
+  // 탭 줄: 왼쪽 미리보기/수정 탭 · 오른쪽 동작(⋯ · HTML 복사) — 아래 선은 줄 전체에
+  // 탭은 아랫선에 붙인다(flex-end) — 가운데 정렬이면 탭(2.5rem)이 동작 칸(2.25rem + 아래 여백)보다 낮아 파란 밑줄이 선 위로 뜬다
+  &__bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: $sp-2 $sp-4;
+    margin: $sp-4 0 $sp-4;
+    box-shadow: inset 0 -1px 0 0 var(--slate-a5);
+    .tabs { margin: 0; box-shadow: none; }
+  }
+  &__acts { display: flex; align-items: center; gap: $sp-2; padding-bottom: $sp-2; margin-left: auto; }
   &__frame {
     overflow: auto;
     max-height: 80vh;
@@ -870,8 +940,24 @@ h3 {
   &__c-who { max-width: 8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 0.8125rem; color: var(--ink2); }
   &__c-time, &__c-prog { color: var(--sub); font-size: 0.75rem; }
   &__c-acts { white-space: nowrap; text-align: right; .jobs__acts { justify-content: flex-end; } }
+  // 고르기 칸 — 체크박스만 (줄 앞, 좁게). 고른 줄은 옅은 강조 바탕
+  &__c-sel { width: 2.25rem; padding-right: 0 !important; .ck { display: inline-flex; } }
+  tbody tr.is-sel > td { background: var(--indigo-a2); }
+  // 고른 작업 일괄 처리 막대 (표 위)
+  &__bulk {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: $sp-2;
+    margin: $sp-2 0;
+    padding: $sp-2 $sp-3;
+    background: var(--accbg);
+    color: var(--accink);
+    font-size: 0.8125rem;
+    b { margin-right: auto; } // 「N개 선택」은 왼쪽, 일괄 작업 단추는 오른쪽
+  }
 
-  @media (max-width: 900px) { &__c-prog, &__size { display: none; } }
+  @media (max-width: 900px) { &__c-prog { display: none; } }
   @media (max-width: 640px) {
     &__c-ch, &__c-who { display: none; }
     th, td { padding-inline: 0.5rem; }
@@ -1001,14 +1087,42 @@ h3 {
 .imgdel {
   &__wait { display: flex; align-items: center; gap: $sp-2; margin: 0; color: var(--sub); }
   &__path { margin: 0; code { font: 0.75rem/1.5 $mono; color: var(--ink2); word-break: break-all; } }
+  // 여러 작업을 고른 경우 — 폴더마다 작업 이름 · 지울 장수 · 경로 (길면 상자 안에서 스크롤)
+  &__plans {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: $sp-2;
+    max-height: 12rem;
+    overflow: auto;
+    li { display: grid; gap: 0.125rem; padding: $sp-2 $sp-3; background: var(--tile); }
+    b { color: var(--ink); font-size: 0.8125rem; }
+    small { color: var(--sub); font-size: 0.75rem; }
+    code { font: 0.75rem/1.5 $mono; color: var(--ink2); word-break: break-all; }
+  }
   &__sum { margin: 0; padding-left: 1.125rem; display: grid; gap: $sp-1; b { color: var(--ink); } }
   &__warn { display: grid; gap: $sp-1; padding: $sp-3 $sp-4; @include callout(red); span { font-size: 0.8125rem; } }
   &__done { display: grid; gap: $sp-2; p { margin: 0; } b { color: var(--ink); } }
 }
 
 .jobs__copy-arrow { margin-left: auto; padding-left: 0.5rem; opacity: 0.6; }
+// 변환 내역 페이지 번호 — 목록 아래 가운데, 전체 개수는 옆에 옅게
+.jobs__pager {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: $sp-1;
+  margin: $sp-4 0 0;
+  &-gap { padding: 0 $sp-1; color: var(--sub); }
+  &-n { margin-left: $sp-3; color: var(--sub); font-size: $fs-xs; font-variant-numeric: tabular-nums; }
+  &--one .jobs__pager-n { margin-left: 0; }
+}
+
 .jobs__copy {
   width: 16rem;
+  animation-duration: 0.06s; // 하위 메뉴는 바로 뜨게 — 나타나는 효과를 짧게
   &-head {
     display: flex;
     flex-direction: column;
