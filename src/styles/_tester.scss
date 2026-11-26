@@ -105,14 +105,15 @@
     overflow: auto;
     max-height: 75vh;
     padding: $sp-4;
-    background: repeating-conic-gradient(var(--slate-a2) 0 25%, transparent 0 50%) 0 0 / 16px 16px, var(--slate-a3);
+    // 저장 결과 미리보기·수정 편집기와 같은 연한 체크무늬 (2026-11-26 사용자: 통일)
+    @include checker;
   }
+  // 화면 틀 — 바탕·테두리 없이 투명 (판의 체크무늬 위에 상세 HTML 만 보이게, 2026-11-26 사용자). 틀 폭(PC·360px)은 위 「PC · 모바일」 단추 이름으로 안다
   &__device {
     margin: 0 auto;
     overflow: hidden;
-    background: #fff;
-    box-shadow: 0 0 0 1px var(--slate-a6), 0 4px 16px var(--slate-a4);
-    iframe { display: block; border: 0; background: #fff; }
+    background: transparent;
+    iframe { display: block; border: 0; background: transparent; }
   }
   &__empty { display: grid; place-items: center; min-height: 16rem; padding: $sp-5; background: var(--tile); color: var(--sub); text-align: center; }
   &__measure {

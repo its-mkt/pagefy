@@ -58,7 +58,7 @@ export default function JobInfoFields({ value: v, onChange, showError }: { value
         {!okLink(v.link) && <small className="msg--error">http:// 또는 https:// 로 시작하는 주소를 넣어 주세요.</small>}
       </label>
       <CheckField className="form__wide" checked={!!v.test} onChange={(t) => onChange({ ...v, test: t })}>
-        테스트용 작업 <small>변환 내역에 「테스트」로 표시되고, 거르기에서 뺄 수 있습니다</small>
+        테스트용 작업 <small>변환 이력에 「테스트」로 표시되고, 거르기에서 뺄 수 있습니다</small>
       </CheckField>
     </>
   );

@@ -13,7 +13,7 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { SLUG_BLOCK, fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, editBase, filterOn, fileKeyOf, findJobsWithHtml, savedEditFor, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform } from './lib/jobs';
+import { busyJobIds, deleteJob, editBase, filterOn, fileKeyOf, findJobsWithHtml, savedEditFor, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, setUploaded, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform } from './lib/jobs';
 import Header, { type View } from './components/Header';
 import HelpPanel from './components/HelpPanel';
 import TesterPanel, { type TesterSource } from './components/TesterPanel';
@@ -296,6 +296,15 @@ export default function App() {
       const sizes = new Map(remote.files.map((f) => [f.file, f.size]));
       const all = r.images.every((im) => sizes.get(im.file) === im.blob.size);
       if (all) setUpload({ phase: 'done', done: r.images.length, total: r.images.length, restored: true });
+      // 서버에 다 있는데 기록이 없으면(예전 작업) 기록해 둔다 — 변환 내역에서 「완료」로 보이게
+      const cur = jobRef.current;
+      if (all && cur && !cur.uploadedAt)
+        setUploaded(cur, Date.now())
+          .then((j) => {
+            if (jobRef.current?.id === j.id) jobRef.current = j;
+            refreshJobs(true);
+          })
+          .catch(() => {});
     })().catch(() => {});
   }, [result?.baseUrl, result?.images, health?.upload]);
   const abortRef = useRef<AbortController | null>(null);
@@ -342,9 +351,9 @@ export default function App() {
       setTrashLoading(false);
     }
   }
-  async function restoreFromTrash(id: string) {
+  async function restoreFromTrash(ids: string | string[]) {
     try {
-      await untrashJob(id);
+      for (const id of Array.isArray(ids) ? ids : [ids]) await untrashJob(id);
     } catch (e) {
       setLoadError((e as Error).message);
     }
@@ -353,8 +362,9 @@ export default function App() {
     else refreshTrashN();
     refreshJobs();
   }
-  async function purgeFromTrash(id: string) {
-    await deleteJob(id).catch((e) => setLoadError(`영구 삭제하지 못했습니다 (${(e as Error).message})`));
+  /** 휴지통에서 영구 삭제 (여러 개) — 이미지 서버 정리는 휴지통 화면의 확인 창에서 먼저 한다 */
+  async function purgeFromTrash(ids: string[]) {
+    for (const id of ids) await deleteJob(id).catch((e) => setLoadError(`영구 삭제하지 못했습니다 (${(e as Error).message})`));
     await openTrash();
   }
   // 늦게 끝난 옛 요청이 새 목록을 덮지 않게 순번을 매긴다 (불러오는 중 표시는 마지막 전체 읽기가 끝날 때 끈다)
@@ -421,11 +431,65 @@ export default function App() {
     setJobPage(0);
     refreshJobs();
   }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 변환 내역에 들어가면 목록이 다 그려진 뒤 맨 위로 — 들어가자마자 살짝 내려간 채로 열리던 문제 (2026-11-26).
+  // 브라우저의 스크롤 복원(뒤로 가기·새로고침 때 예전 위치로)이 목록이 늦게 그려지는 동안 끼어들 수 있어 끄고, 화면이 직접 맨 위로 둔다.
+  // 거르기·페이지 이동으로 다시 읽을 때는 올리지 않는다 (들어온 직후 한 번만)
+  useEffect(() => {
+    if ('scrollRestoration' in window.history) window.history.scrollRestoration = 'manual';
+  }, []);
+  // 0 = 할 일 없음 · 1 = 막 들어옴(읽기 시작 기다림) · 2 = 읽는 중 → 읽기가 끝나면 맨 위로
+  const enteredJobs = useRef<0 | 1 | 2>(0);
+  const prevJobsView = useRef(view);
+  useEffect(() => {
+    const entered = view === 'jobs' && prevJobsView.current !== 'jobs';
+    prevJobsView.current = view;
+    if (view !== 'jobs') {
+      enteredJobs.current = 0;
+      return;
+    }
+    if (entered) enteredJobs.current = 1;
+    if (enteredJobs.current === 1 && jobsLoading) enteredJobs.current = 2;
+    else if (enteredJobs.current === 2 && !jobsLoading) {
+      enteredJobs.current = 0;
+      requestAnimationFrame(() => window.scrollTo({ top: 0 }));
+    }
+  }, [view, jobsLoading]);
   // 화면(만들기·변환 내역 등)을 바꾸면 보던 저장 결과는 닫는다 — 두 화면에 같이 남지 않게.
   // 작업 페이지로 들어갈 때는 닫지 않는다 (목록에서 고른 저장 결과를 그 페이지에서 연다)
   useEffect(() => {
     if (view !== 'job') setViewJob(null);
   }, [view]);
+  // 예전 작업(올린 기록 없음): 변환 내역의 지금 페이지에서만, 이미지 서버의 그 제품 폴더에 파일이 있으면 「올림」으로 기록한다.
+  // 결과 이미지 목록이 목록 사본에는 없어 폴더에 파일이 있는지로 본다 (근사). 작업마다 한 번만 확인 (이 화면을 연 동안)
+  const uploadChecked = useRef(new Set<string>());
+  useEffect(() => {
+    if (view !== 'jobs' || !health?.upload) return;
+    const todo = jobs.filter((j) => j.state === 'done' && !j.uploadedAt && j.settings?.slug && !uploadChecked.current.has(j.id));
+    if (!todo.length) return;
+    for (const j of todo) uploadChecked.current.add(j.id);
+    let stop = false;
+    (async () => {
+      let marked = 0;
+      for (const j of todo) {
+        if (stop) return;
+        const s = j.settings;
+        const target: UploadTarget = { channel: s.channel, slug: s.slug, ...(s.channel === 'openmarket' ? { market: normMarket(s.market) } : {}), publicRoot: s.publicRoot };
+        try {
+          const remote = await uploadCheck(target);
+          if (remote.exists && remote.files.length) {
+            await setUploaded(j, Date.now());
+            marked++;
+          }
+        } catch {
+          // 확인 못 하면 그대로 (「올리기 전」)
+        }
+      }
+      if (marked && !stop) refreshJobs(true);
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [jobs, view, health?.upload]); // eslint-disable-line react-hooks/exhaustive-deps
   /** 지금 작업을 고쳐 저장 (섹션이 동시에 끝나도 ref 에서 이어 붙여 잃지 않는다) */
   function updateJob(patch: Partial<Job> | ((j: Job) => Partial<Job>)) {
     const cur = jobRef.current;
@@ -556,7 +620,7 @@ export default function App() {
     let file = picked ?? (await getFile(job.fileKey).catch(() => undefined));
     if (!file) {
       setLoading(null);
-      setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 선택」로 같은 PSD를 골라 주세요.');
+      setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 변환 이력의 「PSD 선택」로 같은 PSD를 골라 주세요.');
       return;
     }
     if (picked) {
@@ -798,7 +862,7 @@ export default function App() {
       if (!r.job && !r.markup) {
         if (loadedRef.current || viewJobRef.current) closeCurrent();
         if (r.trash) {
-          setViewState('jobs'); // 휴지통은 변환 내역 화면에만 있다
+          setViewState('jobs'); // 휴지통은 변환 이력 화면에만 있다
           await openTrash();
         }
         else setTrash(null);
@@ -832,8 +896,8 @@ export default function App() {
         // 이 PC 에 PSD 원본이 없으면 저장된 결과(HTML)라도 보여 준다
         if (loadedRef.current) closeCurrent();
         await showSaved(job);
-        setLoadError('이 PC 브라우저에 PSD 원본이 없어 저장된 결과를 보여 줍니다. 고치려면 작업 목록의 「PSD 선택」로 같은 PSD를 골라 주세요.');
-      } else setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 작업 목록의 「PSD 선택」로 같은 PSD를 골라 주세요.');
+        setLoadError('이 PC 브라우저에 PSD 원본이 없어 저장된 결과를 보여 줍니다. 고치려면 변환 이력의 「PSD 선택」로 같은 PSD를 골라 주세요.');
+      } else setLoadError('이 작업의 PSD 원본이 이 브라우저에 없습니다. 변환 이력의 「PSD 선택」로 같은 PSD를 골라 주세요.');
     } finally {
       routeBusy.current = false;
       // 화면이 다 바뀐 뒤 주소를 실제 화면에 맞춘다 (못 연 작업이면 첫 화면 주소로)
@@ -1005,7 +1069,8 @@ export default function App() {
   /** 결과를 화면에 보이고, 완성 HTML 도 작업에 저장 → PSD 원본이 없는 PC 에서도 「결과 보기」로 볼 수 있다 (같으면 다시 저장하지 않음) */
   function showResult(next: Result) {
     setResult(next);
-    if (jobRef.current && jobRef.current.html !== next.parsed.html) updateJob({ html: next.parsed.html });
+    // 결과가 바뀌면(다시 만들기·다시 계산) 서버의 이미지는 예전 것 → 「올리기 전」으로
+    if (jobRef.current && jobRef.current.html !== next.parsed.html) updateJob({ html: next.parsed.html, uploadedAt: undefined });
   }
 
   /** commit=false 면 화면·작업에 반영하지 않고 결과만 돌려준다 (「문제 자동 수정」이 나아졌는지 본 뒤에 반영) */
@@ -1455,6 +1520,8 @@ export default function App() {
         unused,
         message: bad.length ? `올린 뒤 ${bad.length}장이 열리지 않거나 내용이 다릅니다. 잠시 뒤 「이미지 올리고 HTML 복사」로 다시 확인하세요.` : undefined,
       });
+      // 다 올리고 확인까지 됐으면 작업에 기록 — 변환 내역 「완료」 기준
+      if (!bad.length && live()) updateJob({ uploadedAt: Date.now() });
       return !bad.length && live();
     } catch (e) {
       if (ac.signal.aborted) return false;
@@ -1501,6 +1568,8 @@ export default function App() {
         total,
         message: failed.length ? `되돌리기 일부 실패: ${failed.join(', ')}` : `이미지 서버에서 ${parts || '되돌렸습니다'}.`,
       });
+      // 올린 것을 되돌렸으면 「올리기 전」으로
+      if (!failed.length) updateJob({ uploadedAt: undefined });
     } catch (e) {
       if (ac.signal.aborted) return;
       set((u) => ({ ...u, phase: 'error', message: `되돌리기 실패: ${(e as Error).message}` }));
@@ -1513,7 +1582,7 @@ export default function App() {
       jobRef.current = null;
       setJobId(null);
     }
-    // 지우기 = 휴지통으로 (30일 안에 복원). 영구 삭제는 휴지통에서
+    // 지우기 = 휴지통으로 (언제든 복원). 영구 삭제는 휴지통에서
     try {
       await trashJob(id);
     } catch (e) {
@@ -1624,7 +1693,7 @@ export default function App() {
   };
 
   // 변환 내역 — 머리말 메뉴 「변환 내역」(#jobs) 전용 화면 + 만들기 첫 화면의 「최근 작업」(최근 5건, 2026-11-24)
-  const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, page: jobPage, total: jobsTotal, pageSize: JOB_PAGE, onPage: goJobPage, onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash, imageServer: !!health?.upload, onEditInfo: editJobNote };
+  const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, page: jobPage, total: jobsTotal, pageSize: JOB_PAGE, onPage: goJobPage, onRefresh: () => refreshJobs(true), onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash, imageServer: !!health?.upload, onEditInfo: editJobNote };
   // 저장된 결과 보기 (PSD 없이) — 변환 내역에서 고르면 변환 내역 화면 안에서, 만들기 화면의 최근 작업에서 고르면 만들기 화면에서 연다
   const savedView = viewJob && (
     <SavedView
@@ -1719,7 +1788,7 @@ export default function App() {
                 </span>
                 {role === 'admin' && view !== 'admin' && (
                   <button type="button" className="link-btn" onClick={() => setView('admin')}>
-                    관리 화면에서 보기
+                    관리자 화면에서 보기
                   </button>
                 )}
               </p>
@@ -1728,11 +1797,12 @@ export default function App() {
             {view === 'tester' && allowed && <TesterPanel current={resultTester} start={testerStart} onStarted={() => setTesterStart(null)} findJobs={findJobsWithHtml} onPick={pickForTester} />}
             {view === 'help' && <HelpPanel />}
             {view === 'admin' && role === 'admin' && <AdminPanel onChanged={() => fetchHealth().then(setHealth, () => {})} />}
-            {view === 'admin' && role !== 'admin' && <p className="msg msg--error">관리 화면은 관리자만 볼 수 있습니다.</p>}
+            {view === 'admin' && role !== 'admin' && <p className="msg msg--error">관리자 화면은 관리자만 볼 수 있습니다.</p>}
             {/* 만들기 화면 = 작업 페이지(job)와 같은 칸을 쓴다. 작업 페이지에 따로 제목은 두지 않는다 — 제품명은 저장 결과 패널 제목·PSD 파일 카드에 있다 (2026-11-26 사용자). 목록으로는 메뉴 「변환 내역」 */}
             <div className="app__view" hidden={view !== 'work' && view !== 'job'}>
-            {/* 저장된 결과만 보는 동안은 단계 표시·PSD 올리기를 숨긴다 (만드는 흐름이 아니라 보기) */}
-            {!viewJob && <Stepper step={step} shown={shown} onPick={(n) => setPickedStep(n === step ? null : n)} />}
+            {/* 저장된 결과만 보는 동안은 단계 표시·PSD 올리기를 숨긴다 (만드는 흐름이 아니라 보기).
+                PSD 를 열기 전(만들기 첫 화면)에도 숨긴다 — 큰 PSD 올리기 칸이 있어 ① 만 켜진 단계 표시는 정보가 없다. 여는 중·작업 불러오는 중부터 보인다 */}
+            {!viewJob && (loaded || !!loading || restoring) && <Stepper step={step} shown={shown} onPick={(n) => setPickedStep(n === step ? null : n)} />}
             {/* PSD 파일 카드 + PSD 확인을 가로로 나란히 (넓은 화면) — 좁으면 한 줄씩 */}
             {/* PSD 파일 카드는 결과를 보는 4단계에서 숨긴다 (단계 표시 ①을 누르면 다시 보임) · 저장 결과만 볼 때도 숨김 */}
             <div className={`prep${loaded && shown === 2 && !restoring ? ' prep--pair' : ''}`} hidden={!!viewJob || (shown === 4 && !restoring)}>
@@ -1773,7 +1843,7 @@ export default function App() {
               <div className="metadiff" role="alert">
                 <b>설정이 결과와 다릅니다 — 아래 결과는 바뀌기 전 설정({CHANNEL_LABEL[result.meta.channel]}{result.meta.market ? ` · ${MARKETS[result.meta.market].label}` : ''})으로 만든 것입니다.</b>
                 <span>바뀐 것: {metaDiff.join(' · ')}. {resume?.code ? '같은 묶음 안에서 바꿔 저장된 구조 계획으로 비용 없이 다시 계산할 수 있습니다.' : '고도몰과 오픈마켓은 HTML 방식이 달라 구조 계획부터 다시 만들어야 합니다 (Claude 1회).'}
-                  {!samePlatform(result.meta, meta) && ' 판매처가 바뀌어 새 작업으로 저장되고, 원래 작업은 변환 내역에 그대로 남습니다.'}</span>
+                  {!samePlatform(result.meta, meta) && ' 판매처가 바뀌어 새 작업으로 저장되고, 원래 작업은 변환 이력에 그대로 남습니다.'}</span>
                 <span className="metadiff__actions">
                   <Button
                     type="button"

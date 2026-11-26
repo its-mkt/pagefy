@@ -64,6 +64,7 @@ function alignBlocks(d: Document, box: HTMLElement, cmd: keyof typeof ALIGN) {
  *    :not(#…) 세 번 = ID 세 개 수준이라 그 규칙을 이긴다. 선택 색도 막아 두었으므로(투명) 보이게
  *  - 커서: 클리핑 글자는 color·-webkit-text-fill-color 가 transparent 라(codegen 클리핑 글자) 커서도 투명 → 커서 색을 따로
  *  - 맞춤법 물결(spellcheck)은 칸에서 끈다 — 영문 제품명마다 빨간 밑줄이 그어져 디자인을 가린다
+ *  (바깥 체크무늬 배경은 previewDoc 이 칠한다 — 에디터 테스트 미리보기와 같음)
  */
 const EDIT_SCOPE = '[data-pf-edit]:not(#pf-e1):not(#pf-e2):not(#pf-e3)';
 const EDIT_CSS = `<style>${EDIT_SCOPE},${EDIT_SCOPE} *{-webkit-user-select:text!important;-moz-user-select:text!important;user-select:text!important;caret-color:#3e63dd!important}${EDIT_SCOPE}::selection,${EDIT_SCOPE} *::selection{background:rgba(62,99,221,.35)!important}</style>`;

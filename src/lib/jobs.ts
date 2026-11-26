@@ -24,6 +24,8 @@ export interface JobNote {
   test?: boolean;
   /** 쇼핑몰에 등록한 상품 페이지 주소 — 있으면 변환 내역에 「등록됨」 링크 (고도몰은 등록 확인이 맞으면 자동으로 채움) */
   link?: string;
+  /** 잠금 — 변환 내역 ⋯ 메뉴에서 켠다. 휴지통으로 옮기기·이미지 서버에서 지우기·일괄 선택을 막는다 (실수로 지우지 않게) */
+  locked?: boolean;
 }
 
 /** 등록 페이지 주소로 쓸 수 있는지 (비어 있으면 됨 — 선택 칸) */
@@ -50,6 +52,8 @@ export interface Job {
   /** 계획을 만들 때 쓴 값 — 설정이 이와 같아야 이어서 만들 수 있다 */
   meta?: GenerateMeta;
   baseUrl?: string;
+  /** 이미지 서버에 결과 이미지를 다 올린 시각 — 목록의 「완료」 기준 (없으면 「올리기 전」). 다시 만들거나 이미지를 지우면 비운다 */
+  uploadedAt?: number;
   extra?: string;
   plan?: { bundle: PlanBundle; report: string; raw: string };
   /** 성공한 섹션만 (id → 결과) */
@@ -72,7 +76,7 @@ export interface Job {
   lite?: boolean;
   /** 목록 표시용 요약 (계정에 함께 저장해 목록을 가볍게 읽는다) */
   info?: ListInfo;
-  /** 휴지통으로 옮긴 시각 — TRASH_DAYS 일 지나면 자동으로 영구 삭제 */
+  /** 휴지통으로 옮긴 시각 — 사용자가 휴지통에서 영구 삭제할 때까지 남는다 */
   deletedAt?: number;
   /** (브라우저 사본) 계정에 올라간 적이 있음 — 계정에서 사라졌으면 다른 곳에서 영구 삭제한 것이라 다시 올리지 않는다 */
   syncedAt?: number;
@@ -81,10 +85,8 @@ export interface Job {
 }
 
 /** 휴지통 보관 기간 (일) */
-export const TRASH_DAYS = 30;
 /** 휴지통 작업의 PSD 원본(브라우저 사본)을 남겨 두는 시간 — cleanFiles */
 const TRASH_KEEP_FILE_MS = 86_400_000;
-const TRASH_MS = TRASH_DAYS * 24 * 60 * 60_000;
 
 export interface ListInfo {
   engine?: string;
@@ -204,7 +206,7 @@ const fromRow = (r: Row): Job => ({
 });
 
 /** 목록은 계획·결과(작업당 수십~수백 KB)를 빼고 요약만 읽는다 */
-const LIST_COLS = 'id,created_at,updated_at,file_key,file_name,file_size,state,running_until,deleted_at,cost_usd,model,settings:data->settings,creator:data->>creator,note:data->note,error:data->>error,info:data->info,revisionCount:data->revisionCount';
+const LIST_COLS = 'id,created_at,updated_at,file_key,file_name,file_size,state,running_until,deleted_at,cost_usd,model,settings:data->settings,creator:data->>creator,note:data->note,error:data->>error,info:data->info,revisionCount:data->revisionCount,uploadedAt:data->uploadedAt';
 interface LiteRow extends Omit<Row, 'data'> {
   settings: Settings;
   creator: string | null;
@@ -212,6 +214,7 @@ interface LiteRow extends Omit<Row, 'data'> {
   error: string | null;
   info: ListInfo | null;
   revisionCount: number | null;
+  uploadedAt: number | null;
 }
 const fromLite = (r: LiteRow): Job => ({
   id: r.id,
@@ -233,6 +236,7 @@ const fromLite = (r: LiteRow): Job => ({
   revisionCount: r.revisionCount ?? 0,
   lite: true,
   info: r.info ?? undefined,
+  uploadedAt: r.uploadedAt ?? undefined,
 });
 
 /** 계정 저장을 쓸 수 있으면 true (배포 화면 + 로그인 + 표 있음) */
@@ -297,8 +301,8 @@ export interface JobFilter {
   channel?: Channel | 'godo';
   /** 오픈마켓 플랫폼 (channel 이 openmarket 일 때만) */
   market?: Market;
-  /** ready = 준비(PSD 만 열고 아직 안 만든 것), done = 완료(아직 등록 전), reg = 등록(완료 + 등록한 페이지 주소 있음), problem = 오류·중단 */
-  state?: 'ready' | 'done' | 'reg' | 'problem';
+  /** ready = 준비(PSD 만 열고 아직 안 만든 것), pending = 올리기 전(만들었지만 이미지 서버에 안 올림), done = 완료(이미지 올림, 아직 등록 전), reg = 등록(등록한 페이지 주소 있음), problem = 오류·중단 */
+  state?: 'ready' | 'pending' | 'done' | 'reg' | 'problem';
   /** 최근 n일 안에 작업한 것 (마지막 수정 기준) — 기간 선택의 빠른 선택(오늘·7일·30일). 날이 바뀌어도 「최근 n일」로 따라간다 */
   days?: number;
   /** 달력에서 고른 날·기간 (마지막 수정 기준, 양 끝 날 포함) — days 와 함께 쓰지 않는다 */
@@ -336,7 +340,10 @@ function filterRules(f: JobFilter): FilterRule[] {
   if (f.channel === 'openmarket' && f.market) rules.push({ local: (j) => j.settings?.market === f.market, cloud: (q) => q.eq('data->settings->>market', f.market!) });
   if (f.state === 'ready') rules.push({ local: (j) => j.state === 'ready', cloud: (q) => q.eq('state', 'ready') });
   // 완료 / 등록 — 등록 = 완료 + 작업 기록에 등록한 페이지 주소(http…)가 있는 것. 목록 상태 칸 표시와 같은 기준 (상태 값 자체는 둘 다 done)
-  if (f.state === 'done') rules.push({ local: (j) => j.state === 'done' && !registered(j), cloud: (q) => q.eq('state', 'done').or('data->note->>link.is.null,data->note->>link.not.ilike.http%') });
+  // 올리기 전 / 완료 — 둘 다 등록 전. 이미지 서버에 올렸는지(uploadedAt)로 나눈다 (목록 상태 칸과 같은 기준)
+  const notReg = (q: ListQuery) => q.eq('state', 'done').or('data->note->>link.is.null,data->note->>link.not.ilike.http%');
+  if (f.state === 'pending') rules.push({ local: (j) => j.state === 'done' && !registered(j) && !j.uploadedAt, cloud: (q) => notReg(q).is('data->uploadedAt', null) });
+  if (f.state === 'done') rules.push({ local: (j) => j.state === 'done' && !registered(j) && !!j.uploadedAt, cloud: (q) => notReg(q).not('data->uploadedAt', 'is', null) });
   if (f.state === 'reg') rules.push({ local: (j) => j.state === 'done' && registered(j), cloud: (q) => q.eq('state', 'done').ilike('data->note->>link', 'http%') });
   if (f.state === 'problem') rules.push({ local: (j) => PROBLEM.includes(j.state), cloud: (q) => q.in('state', PROBLEM) });
   if (f.days) {
@@ -491,23 +498,12 @@ export async function untrashJob(id: string) {
   lastCloud = null;
 }
 
-/** 보관 기간이 지난 휴지통 항목 영구 삭제 */
-async function purgeTrash() {
-  const cutoff = Date.now() - TRASH_MS;
-  for (const j of await listLocal()) if (j.deletedAt && j.deletedAt < cutoff) await req((await store('jobs', 'readwrite')).delete(j.id));
-  if (await cloudReady()) {
-    const { error } = await supabase.from(TABLE).delete().not('deleted_at', 'is', null).lt('deleted_at', new Date(cutoff).toISOString());
-    cloudFailed(error, '휴지통 비우기');
-  }
-}
-
-/** 휴지통 목록 (최근에 지운 순). 열 때 기간 지난 것부터 비운다 */
+/** 휴지통 목록 (최근에 지운 순). 기간이 지나도 저절로 지우지 않는다 — 영구 삭제는 사용자가 휴지통에서 (2026-11-26 사용자) */
 export async function listTrash(): Promise<Job[]> {
-  await purgeTrash();
   const local = (await listLocal()).filter((j) => j.deletedAt);
   const byId = new Map(local.map((j) => [j.id, { ...j, noFile: true }]));
   if (await cloudReady()) {
-    const { data, error } = await supabase.from(TABLE).select(LIST_COLS).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }).limit(100);
+    const { data, error } = await supabase.from(TABLE).select(LIST_COLS).not('deleted_at', 'is', null).order('deleted_at', { ascending: false }).limit(500);
     if (error) cloudFailed(error, '휴지통 읽기');
     else for (const j of (data as unknown as LiteRow[]).map(fromLite)) byId.set(j.id, { ...j, noFile: true });
   }
@@ -671,7 +667,7 @@ export async function putJob(job: Job) {
 
 /** 작업 기록을 같은지 비교 (빈 글자·없음은 같은 것으로) */
 export const sameNote = (a: JobNote = {}, b: JobNote = {}) =>
-  (a.assignee ?? '') === (b.assignee ?? '') && (a.memo ?? '') === (b.memo ?? '') && !!a.test === !!b.test && (a.link ?? '') === (b.link ?? '');
+  (a.assignee ?? '') === (b.assignee ?? '') && (a.memo ?? '') === (b.memo ?? '') && !!a.test === !!b.test && (a.link ?? '') === (b.link ?? '') && (a.locked ?? null) === (b.locked ?? null); // 잠금은 없음·켬·끔(등록 작업을 직접 푼 것)을 구분
 
 /**
  * 작업 기록(담당자·메모·테스트) 저장 — 변환 내역 「작업 정보 편집」·만들기 화면의 작업 기록 칸이 같이 쓴다 (PSD 없이, 결과에는 영향 없음).
@@ -684,6 +680,18 @@ export async function saveJobNote(job: Job, note: JobNote): Promise<Job> {
   // 같은 기록이면 아무것도 쓰지 않는다 — 수정 시각·목록 순서가 그대로 (변환 내역에서 「저장」만 누른 경우)
   if (sameNote(full.note, note)) return full;
   const next: Job = { ...full, note, updatedAt: full.updatedAt + 1 };
+  await putJob(next);
+  return next;
+}
+
+/**
+ * 이미지 서버에 올렸는지 기록 (at = 올린 시각, undefined = 비움) — 목록 순서가 바뀌지 않게 수정 시각은 1ms 만 올린다 (작업 기록 저장과 같음).
+ * 같은 값이면 아무것도 쓰지 않는다
+ */
+export async function setUploaded(job: Job, at: number | undefined): Promise<Job> {
+  const full = await fullJob(job);
+  if (full.state === 'running' || !!full.uploadedAt === !!at) return full;
+  const next: Job = { ...full, uploadedAt: at, updatedAt: full.updatedAt + 1 };
   await putJob(next);
   return next;
 }
@@ -730,7 +738,7 @@ export async function deleteJob(id: string) {
  * 계정 저장을 쓰면 기록은 계정에 있으므로 브라우저 기록도 MAX_JOBS 개만, 아니면 기록도 MAX_JOBS 개까지 (예전과 같음)
  */
 export async function prune(keepId?: string) {
-  const jobs = (await listLocal()).filter((j) => !j.deletedAt); // 휴지통 항목은 기간이 지나면 purgeTrash 가 지운다
+  const jobs = (await listLocal()).filter((j) => !j.deletedAt); // 휴지통 항목은 사용자가 휴지통에서 영구 삭제할 때까지 둔다
   // 계정 저장 중이면 계정에 올라간 것만 브라우저에서 정리한다 (못 올린 작업을 지우면 영영 사라짐)
   const drop = jobs.filter((j) => j.id !== keepId).slice(MAX_JOBS - 1).filter((j) => cloudOff || j.syncedAt);
   for (const j of drop) if (!pending.has(j.id)) await req((await store('jobs', 'readwrite')).delete(j.id));
@@ -843,7 +851,7 @@ export function forkJob(src: Job, settings: Settings, opt: { keepPlan: boolean; 
     // 복제한 사람이 새 작업을 만든 사람 (담당자·메모·테스트 표시는 그대로 옮긴다).
     // 등록한 페이지는 옮기지 않는다 — 복제본은 아직 그 판매처에 올리지 않은 새 결과
     creator: opt.creator ?? src.creator,
-    note: src.note && { ...src.note, link: undefined },
+    note: src.note && { ...src.note, link: undefined, locked: undefined }, // 잠금도 옮기지 않는다 (복제본은 새 결과)
     state: 'ready',
     extra: src.extra,
     sections: {},

@@ -308,10 +308,11 @@ export const EDITORS: EditorProfile[] = [
       NEG_PAD_CHECK,
     ],
     notes: [
-      '에디터는 SmartEditor 2.10 이지만 고도몰은 원본의 태그 제거 필터를 빼고 씁니다 [소스]. 아이티켓 관리자 에디터 파일을 받아 직접 돌려 보니 HTML 탭·Editor 탭 어느 쪽에서 저장해도 <style>·class·role·aria·calc()·var()·iframe·script 가 남았습니다 [시험·등록 확인]. 서버 쪽 필터는 공개 사본상 없지만 전역 필터는 미확인입니다.',
-      '저장할 때 HTML 이 한 번 다시 정리됩니다 — 닫지 않은 태그 닫기, 표에 tbody 넣기, 빈 <p>·공백만 든 <p> 삭제 [시험]. Editor 탭에서 저장하면 URL 글자가 자동 링크가 됩니다 [시험].',
-      '다시 수정할 때 에디터가 Editor 탭으로 열리고 <font> 를 <span> 으로 바꿉니다 [소스] — 고칠 때는 Pagefy 결과를 HTML 탭에 통째로 다시 붙여넣으세요. 에디터로 올리는 이미지는 webp 를 받지 않습니다 (외부 주소 이미지는 상관없음) [소스].',
-      '미리보기에는 아이티켓·온코어 스킨 CSS 를 함께 걸었습니다 [관찰, 2026-11-25 실측] — h3 숨김·모바일 표 글자 12px(아이티켓), 가운데 정렬·p 회색(#6b6f78)·iframe·video 높이 auto(온코어 리뉴얼), 상세 img 폭 100%. 온코어는 유튜브 iframe 높이가 auto 로 바뀌어 낮아질 수 있으니 height 를 꼭 지정하세요. 휴대폰(360px) 상세 영역 323~332px.',
+      // 2026-11-26 사용자 요청으로 압축 — 자세한 근거는 규칙 원본(pagefy.md 7-4 표)에 그대로 있다
+      'SmartEditor 2.10 이지만 고도몰은 태그 제거 필터를 빼고 씁니다 — 어느 탭에서 저장해도 <style>·class·aria·iframe·script 가 남습니다 [소스·시험]. 전역 필터는 미확인.',
+      '저장할 때 HTML 을 다시 정리합니다 (닫는 태그·tbody 추가, 빈 <p> 삭제). Editor 탭에서 저장하면 URL 이 자동 링크가 됩니다 [시험].',
+      '다시 열면 Editor 탭으로 열려 <font> 가 <span> 으로 바뀝니다 — 고칠 때는 결과를 HTML 탭에 통째로 다시 붙여넣으세요. 에디터로 올리는 이미지는 webp 불가 [소스].',
+      '미리보기에 아이티켓·온코어 스킨 CSS 를 걸었습니다 (h3 숨김·p 회색·img 폭 100% 등) [관찰]. 온코어는 iframe 높이가 auto 로 바뀌니 height 를 지정하세요. 휴대폰 상세 폭 323~332px.',
     ],
   },
   {
@@ -926,8 +927,14 @@ function mobileMode(p: EditorProfile, root: HTMLElement, hadLink: boolean): SimR
   return { mode: 'same', why: '원본 그대로 노출됩니다 [공식, FAQ 13768]. HTML 글자 크기는 무시되고 모바일용으로 고정됩니다 [공식] — 고정 크기는 공개되지 않아 기본 크기로 보여 줍니다 (추정)' };
 }
 
+/**
+ * 상세 HTML 바깥 배경 — 연한 체크무늬(투명 표시). 상세 HTML 이 어디까지인지 흰 배경과 구분되게 (2026-11-26 사용자: 미리보기·수정·에디터 테스트 통일)
+ * 같은 무늬가 SCSS 에도 있다: _tokens.scss 의 @mixin checker (저장 결과 미리보기 틀)
+ */
+export const CHECKER_BG = 'background-color:#fff;background-image:conic-gradient(#eceef2 25%,#fff 0 50%,#eceef2 0 75%,#fff 0);background-size:16px 16px';
+
 /** 미리보기 문서 — 쇼핑몰 상세 영역 감싸개 + 스킨 CSS 안에 저장 후 HTML 을 넣는다 */
-export function previewDoc(html: string, p: EditorProfile, opt: { mobile: boolean; marks: boolean; fixedFont?: boolean }) {
+export function previewDoc(html: string, p: EditorProfile, opt: { mobile: boolean; marks: boolean; fixedFont?: boolean; transparent?: boolean }) {
   const area = opt.mobile ? p.mobileWidth : p.pcWidth;
   const pad = opt.mobile ? Math.max(0, (360 - area) / 2) : 0;
   const marks = opt.marks
@@ -942,8 +949,11 @@ export function previewDoc(html: string, p: EditorProfile, opt: { mobile: boolea
   // 쇼핑몰이 붙이는 감싸개도 같은 서버를 거친다 (컴퓨존 모바일: 빈 680px 표가 <table "680"> 으로 나옴)
   const wrap = opt.mobile && p.mobileTransform ? p.wrap.map(p.mobileTransform) : p.wrap;
   const body = raw.replace(/loading="lazy"/g, 'loading="eager"');
+  // 바깥 배경: 상세 HTML 이 칠하지 않은 곳은 모두 체크무늬 (모바일 양옆 스킨 여백 포함 — 흰 띠 없이, 2026-11-26 사용자).
+  // transparent = 문서는 칠하지 않고 바깥(에디터 테스트 판의 같은 체크무늬)이 비치게 — 판과 무늬가 어긋나지 않도록
+  const bg = opt.transparent ? 'html,body{background:transparent}' : `html,body{${CHECKER_BG}}`;
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<style>html,body{margin:0;background:#fff}body{padding:0 ${pad}px;font:14px/1.5 'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#333;word-break:keep-all}
-.pf-shell{width:${area}px;max-width:100%;margin:0 auto}${p.skinCss ?? ''}${opt.mobile ? (p.skinMobileCss ?? '') : (p.skinPcCss ?? '')}${marks}${fixed}</style></head>
+<style>html,body{margin:0}body{padding:0 ${pad}px;font:14px/1.5 'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#333;word-break:keep-all}
+.pf-shell{width:${area}px;max-width:100%;margin:0 auto}${p.skinCss ?? ''}${opt.mobile ? (p.skinMobileCss ?? '') : (p.skinPcCss ?? '')}${bg}${marks}${fixed}</style></head>
 <body><div class="pf-shell">${wrap[0]}${body}${wrap[1]}</div></body></html>`;
 }

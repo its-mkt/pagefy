@@ -26,6 +26,8 @@ export interface TesterSource {
 
 const STORE_KEY = 'pagefy.tester.editor';
 const DRAFT_KEY = 'pagefy.tester.draft';
+/** 이 페이지(새로고침 전)에서 에디터 테스트를 연 적이 있는지 — 처음 열 때만 가장 최근 변환 내역을 불러온다 (2026-11-26 사용자). 다시 들어오면 고치던 글(임시 저장본) 그대로 */
+let openedOnce = false;
 
 const LEVEL: Record<SimChange['level'], [string, string]> = {
   removed: ['지워짐', 'badge--error'],
@@ -148,8 +150,9 @@ export default function TesterPanel({
   const capture = sim?.mobile.mode === 'capture';
   // 그림 수만큼 전체 HTML 을 나눴다 붙이므로 결과가 바뀔 때만 (입력·마우스 올림으로 다시 그릴 때마다 하지 않게)
   const shown = useMemo(() => (sim ? localize(marks ? sim.annotated : sim.html) : ''), [sim, marks, source]); // eslint-disable-line react-hooks/exhaustive-deps
-  const pcDoc = useMemo(() => previewDoc(shown, p, { mobile: false, marks }), [shown, p, marks]);
-  const mobileDoc = useMemo(() => (capture ? pcDoc : previewDoc(shown, p, { mobile: true, marks, fixedFont: p.mobileFixedFont && sim?.mobile.mode === 'same' })), [capture, pcDoc, shown, p, marks, sim?.mobile.mode]);
+  // 미리보기 문서는 투명 — 판(.tester__stage)의 체크무늬가 상세 HTML 바깥·모바일 양옆 여백에 그대로 비친다
+  const pcDoc = useMemo(() => previewDoc(shown, p, { mobile: false, marks, transparent: true }), [shown, p, marks]);
+  const mobileDoc = useMemo(() => (capture ? pcDoc : previewDoc(shown, p, { mobile: true, marks, transparent: true, fixedFont: p.mobileFixedFont && sim?.mobile.mode === 'same' })), [capture, pcDoc, shown, p, marks, sim?.mobile.mode]);
 
   const loadCurrent = () => {
     if (!current) return;
@@ -176,6 +179,19 @@ export default function TesterPanel({
       setPicking(false);
     }
   };
+  // 처음 열 때(「에디터 미리보기」로 들어온 게 아니면) 가장 최근 변환 내역(저장된 HTML 이 있는 작업)을 불러온다
+  useEffect(() => {
+    const first = !openedOnce;
+    openedOnce = true;
+    if (!first || start || !findJobs || !onPick) return;
+    // 취소 표시를 두지 않는다 — 개발 모드(StrictMode)는 효과를 두 번 돌리는데, 두 번째는 openedOnce 로 건너뛰므로 첫 번째가 끝까지 불러와야 한다
+    findJobs('', 0, 1).then(
+      ({ jobs }) => {
+        if (jobs[0]) void loadPick(jobs[0]);
+      },
+      (e) => console.warn('[tester] 최근 변환 이력을 불러오지 못했습니다', e),
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const openFile = async (f: File) => {
     const t = await f.text();
     // Pagefy 결과 HTML 파일이면 복사 구간만
@@ -192,7 +208,7 @@ export default function TesterPanel({
     <section className="panel tester" aria-labelledby="tester-title">
       <div className="tester__head">
         <h2 id="tester-title" className="panel__title">
-          에디터 테스트
+          쇼핑몰 미리보기
           <small>붙여넣을 HTML 이 쇼핑몰 상세 에디터에 저장되면 어떻게 바뀌는지 미리 봅니다</small>
         </h2>
       </div>
@@ -202,7 +218,7 @@ export default function TesterPanel({
         {/* 변환 내역의 다른 작업 불러오기 — 플랫폼 고르기 왼쪽 (한 줄, 좁으면 두 줄) (고르면 그 작업의 판매처로 플랫폼도 바뀜, 2026-11-25) */}
         {findJobs && onPick && (
           <div className="tester__from">
-            <span className="tester__glabel">변환 내역</span>
+            <span className="tester__glabel">변환 이력</span>
             <TesterJobPicker search={findJobs} onPick={loadPick} busy={picking} value={source?.label} />
             {pickError && <p className="msg msg--error" role="alert">{pickError}</p>}
           </div>
@@ -416,7 +432,7 @@ export default function TesterPanel({
         {/* 불러온 결과의 판매처 묶음과 고른 에디터가 다르면 알린다 — 고도몰 결과(<style>·글꼴 블록)를 오픈마켓 에디터로 보면 CSS 가 글자로 쏟아지는 게 정상 흉내라 헷갈린다 */}
         {source && editorOf(source.editor).group !== p.group && (
           <p className="tester__mismatch" role="note">
-            불러온 결과는 <b>{editorOf(source.editor).group}</b>용인데 <b>{p.group}</b> 에디터({p.label})로 보고 있습니다. {p.group}에 올리려면 변환 내역의 「⋯ → 다른 판매처용으로 복제」로 {p.group}용 결과를 만들어 불러오세요.
+            불러온 결과는 <b>{editorOf(source.editor).group}</b>용인데 <b>{p.group}</b> 에디터({p.label})로 보고 있습니다. {p.group}에 올리려면 변환 이력의 「⋯ → 다른 판매처용으로 복제」로 {p.group}용 결과를 만들어 불러오세요.
           </p>
         )}
         {sim ? (

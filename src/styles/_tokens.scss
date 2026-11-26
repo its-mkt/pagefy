@@ -58,6 +58,13 @@ $fs-lg: 1.125rem; // 18px — 칸 제목 (패널 안 큰 글자)
   &:focus { outline: 2px solid var(--indigo-8); outline-offset: -1px; border-color: var(--line2); box-shadow: none; }
 }
 
+// 상세 HTML 바깥 배경 — 연한 체크무늬(투명 표시). editorSim.ts 의 CHECKER_BG 와 같은 무늬 (미리보기·수정·에디터 테스트 통일, 2026-11-26)
+@mixin checker {
+  background-color: #fff;
+  background-image: conic-gradient(#eceef2 25%, #fff 0 50%, #eceef2 0 75%, #fff 0);
+  background-size: 16px 16px;
+}
+
 @mixin callout($s) {
   background: var(--#{$s}-a3);
   color: var(--#{$s}-a11);

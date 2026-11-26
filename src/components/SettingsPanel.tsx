@@ -290,7 +290,7 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
         <div className="form setup__memo">
           <p className="setup__memo-head form__wide">
             <b>작업 기록</b>
-            <small>변환 내역에만 보입니다</small>
+            <small>변환 이력에만 보입니다</small>
           </p>
           <JobInfoFields value={note} onChange={onNoteChange} showError={whoTried} />
         </div>
