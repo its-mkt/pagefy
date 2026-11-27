@@ -372,6 +372,40 @@
   }
 }
 
+// ---- 다시 변환 (2026-11-27) — 결과 제목 오른쪽 단추 + 확인 창 ----
+.reconv {
+  &__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: $sp-2;
+    margin-bottom: $sp-3;
+    .panel__title { margin: 0; }
+  }
+  &__acts { display: flex; flex-wrap: wrap; gap: $sp-2; }
+  &__field {
+    display: grid;
+    gap: $sp-1;
+    > span { font-size: 0.8125rem; font-weight: 600; color: var(--ink2); }
+    textarea {
+      width: 100%;
+      min-height: 5.5rem;
+      padding: 0.5rem 0.75rem;
+      resize: vertical;
+      @include field;
+    }
+  }
+  &__notes {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: $sp-1;
+    color: var(--sub);
+    font-size: 0.8125rem;
+  }
+}
+
 // 이미지 서버 업로드 (등록 순서 1번)
 .upbox {
   display: inline-flex;

@@ -82,7 +82,10 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
               onClick={(e) => {
                 if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
                 e.preventDefault();
-                onView(v);
+                // 「변환」은 로고와 같다 (2026-11-27 사용자): 다른 화면이면 변환 화면으로 돌아오고, 변환 화면에서 누르면 첫 화면(PSD 올리기 + 최근 작업).
+                // 만드는 중·읽는 중에는 goHome 이 그대로 둔다
+                if (v === 'work' && onHome) onHome();
+                else onView(v);
               }}
             >
               {label}
@@ -96,18 +99,9 @@ export default function Header({ health, error, user, onLogout, onNewPsd, newPsd
         {health?.mock && <span className="badge badge--warn">MOCK 모드 (Claude 호출 안 함)</span>}
         {health && !health.mock && !health.hasKey && <span className="badge badge--error">{CLOUD ? "API 키 미등록 (Supabase 비밀값)" : "API 키 없음 (.env)"}</span>}
         {health && !CLOUD && health.rules.fallback && <Tip content={health.rules.source}><span className="badge badge--warn" tabIndex={0}>규칙: 공유 폴더 접근 불가 → 로컬 사본</span></Tip>}
-        {/* 쓰는 Claude 모델·생각 깊이(effort) — 규칙 출처·수정 시각은 마우스를 올리면 */}
-        {health && !health.mock && health.hasKey && (
-          <Tip
-            content={`구조 계획: ${health.model} · effort ${health.planEffort ?? health.effort}\n${rulesLabel} (${health.rules.source})${health.rules.updatedAt ? ` · ${new Date(health.rules.updatedAt).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })} 수정본` : ''}`}
-          >
-            <span className="badge header__info" tabIndex={0}>
-              Claude {modelLabel(health.model)} · {health.planEffort ?? health.effort}
-            </span>
-          </Tip>
-        )}
-        {/* 남은 한도: Pagefy 월 상한 대비 이번 달 사용액 (Anthropic 계정 잔액이 아님 — 그 값은 API 키로 읽을 수 없다) */}
-        {health?.budget && <BudgetChip budget={health.budget} />}
+        {/* 쓰는 Claude 모델·생각 깊이(effort)와 이번 달 남은 한도를 한 칩에 (2026-11-27 사용자: 따로 두지 말고 합치고 글자 강약으로만 구분).
+            남은 한도 = Pagefy 월 상한 대비 이번 달 사용액 (Anthropic 계정 잔액이 아님). 규칙 출처·수정 시각·사용액은 마우스를 올리면 */}
+        {health && <StatusChip health={health} rulesLabel={rulesLabel} />}
         {/* 스크롤해도 늘 보이는 머리에 둔다 — 긴 결과를 보다가도 바로 다음 PSD 로 */}
         {onNewPsd && (
           <>
@@ -151,17 +145,43 @@ function modelLabel(id: string) {
 
 const usd = (n: number) => `$${n.toLocaleString('en-US', { maximumFractionDigits: n < 100 ? 2 : 0 })}`;
 
-/** 이번 달 남은 한도 — 80% 넘으면 주의, 다 쓰면(막힘) 빨강 */
-function BudgetChip({ budget: b }: { budget: BudgetInfo }) {
-  const left = Math.max(0, b.capUsd - b.spentUsd);
-  const ratio = b.capUsd > 0 ? b.spentUsd / b.capUsd : 1;
-  const tone = b.blocked ? "badge--error" : ratio >= BUDGET_WARN_RATIO ? "badge--warn" : "";
+/** 이번 달 남은 한도 설명 (칩 툴팁) */
+const budgetTip = (b: BudgetInfo) =>
+  `${b.month} 사용 ${usd(b.spentUsd)} / 월 상한 ${usd(b.capUsd)}${b.unblocked ? ' · 관리자가 이번 달 상한을 풀었음' : ''}\nPagefy 에서 쓴 Claude 비용 기준 (Anthropic 계정 잔액과는 다름)`;
+
+/**
+ * 모델 · 남은 한도 칩 — 라벨은 흐리게, 값은 진하게, 사이는 얇은 세로선.
+ * 한도 80% 를 넘으면 칩 전체를 주의(호박), 다 쓰면(막힘) 빨강. MOCK·키 없음이면 모델은 빼고 한도만 (그때는 따로 경고 배지가 뜬다)
+ */
+function StatusChip({ health, rulesLabel }: { health: HealthInfo; rulesLabel: string }) {
+  const showModel = !health.mock && health.hasKey;
+  const b = health.budget;
+  if (!showModel && !b) return null;
+  const effort = health.planEffort ?? health.effort;
+  const left = b ? Math.max(0, b.capUsd - b.spentUsd) : 0;
+  const ratio = b && b.capUsd > 0 ? b.spentUsd / b.capUsd : 1;
+  const tone = !b ? '' : b.blocked ? 'badge--error' : ratio >= BUDGET_WARN_RATIO ? 'badge--warn' : '';
+  const updated = health.rules.updatedAt ? ` · ${new Date(health.rules.updatedAt).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' })} 수정본` : '';
+  const tip = [showModel && `구조 계획: ${health.model} · effort ${effort}\n${rulesLabel} (${health.rules.source})${updated}`, b && budgetTip(b)].filter(Boolean).join('\n\n');
   return (
-    <Tip
-      content={`${b.month} 사용 ${usd(b.spentUsd)} / 월 상한 ${usd(b.capUsd)}${b.unblocked ? ' · 관리자가 이번 달 상한을 풀었음' : ''}\nPagefy 에서 쓴 Claude 비용 기준 (Anthropic 계정 잔액과는 다름)`}
-    >
+    <Tip content={tip}>
       <span className={`badge header__info ${tone}`} tabIndex={0}>
-        {b.blocked ? `한도 소진 · ${usd(b.spentUsd)} / ${usd(b.capUsd)}` : `남은 한도 ${usd(left)} / ${usd(b.capUsd)}`}
+        {showModel && (
+          <span>
+            <span className="header__info-k">Claude</span> <b className="header__info-v">{modelLabel(health.model)}</b> <span className="header__info-k">· {effort}</span>
+          </span>
+        )}
+        {showModel && b && <span className="header__info-sep" aria-hidden="true" />}
+        {b &&
+          (b.blocked ? (
+            <span>
+              <b className="header__info-v">한도 소진</b> <span className="header__info-k">· {usd(b.spentUsd)} / {usd(b.capUsd)}</span>
+            </span>
+          ) : (
+            <span>
+              <span className="header__info-k">남은 한도</span> <b className="header__info-v">{usd(left)}</b> <span className="header__info-k">/ {usd(b.capUsd)}</span>
+            </span>
+          ))}
       </span>
     </Tip>
   );

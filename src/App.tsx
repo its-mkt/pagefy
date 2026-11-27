@@ -13,7 +13,7 @@ import { measureTexts } from './lib/lsAdjust';
 import { checkLayout, type LayoutResult } from './lib/layoutCheck';
 import { PsdWorker } from './lib/psd/client';
 import { SLUG_BLOCK, fmtBytes, kstDate, productNameFromFile, readLocal, todayRev, toSlug, writeLocal } from './lib/util';
-import { busyJobIds, deleteJob, editBase, filterOn, fileKeyOf, findJobsWithHtml, savedEditFor, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, setUploaded, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform } from './lib/jobs';
+import { busyJobIds, deleteJob, editBase, filterOn, fileKeyOf, findJobsWithHtml, savedEditFor, fullJob, jobById, jobBySlug, listInfo, listTrash, markInterruptedLocal, trashCount, trashJob, untrashJob, getFile, listJobsPage, markInterrupted, prune, putJob, requestPersist, forkJob, jobsForProduct, replacePsdJob, sameFile, sameGroup, sameMeta, samePlatform, saveFile, saveJobNote, sameNote, setUploaded, settingsToSave, platformMoved, platformLabel, savesToAccount, touchRunning, type Job, type JobFilter, type JobNote, type Platform, type PrevPlan } from './lib/jobs';
 import Header, { type View } from './components/Header';
 import HelpPanel from './components/HelpPanel';
 import TesterPanel, { type TesterSource } from './components/TesterPanel';
@@ -22,6 +22,7 @@ import AdminPanel from './components/AdminPanel';
 import { BUDGET_WARN_RATIO } from '../shared/ops';
 import { CHANNEL_LABEL } from '../shared/types';
 import { MARKETS } from '../shared/markets';
+import ReplacePsdDialog from './components/ReplacePsdDialog';
 import JobsPanel from './components/JobsPanel';
 import SavedView from './components/SavedView';
 import LoginPanel from './components/LoginPanel';
@@ -248,7 +249,7 @@ export default function App() {
     publicRoot: readLocal('pagefy.publicRoot', DEFAULT_PUBLIC_ROOT),
     extra: '',
   }));
-  /** 지금 작업의 기록 (담당자·메모·테스트) — 설정과 따로 작업의 note 에 저장. 담당자는 다음 PSD 에도 이어 쓴다 (같은 사람 일을 몰아서 하는 경우가 많음) */
+  /** 지금 작업의 기록 (담당자·메모·테스트) — 설정과 따로 작업의 note 에 저장. 새 PSD 는 빈 기록으로 시작한다 (담당자도 이어 쓰지 않음, 사용자 지시 2026-11-27) */
   const [note, setNote] = useState<JobNote>({});
   const [run, setRun] = useState<RunState>(emptyRun);
   const [result, setResult] = useState<Result | null>(null);
@@ -543,7 +544,6 @@ export default function App() {
     writeLocal('pagefy.market', settings.market);
     writeLocal('pagefy.publicRoot', settings.publicRoot);
   }, [settings.channel, settings.market, settings.publicRoot]);
-  useEffect(() => writeLocal('pagefy.assignee', note.assignee ?? ''), [note.assignee]);
 
   // 작업 목록 불러오기 — 새로고침으로 끊긴 작업은 "중단됨"
   useEffect(() => {
@@ -650,6 +650,48 @@ export default function App() {
       setNote(n);
     }
     refreshJobs(true);
+  }
+
+  /**
+   * 「PSD 교체」: 같은 작업에 디자인을 고친 PSD 를 넣고 연다 (2026-11-27). 설정·작업 기록은 그대로, 옛 계획·결과는 비운다 (replacePsdJob).
+   * 새 PSD 로 「마크업 만들기」를 누르면 계획부터 다시 만든다
+   */
+  async function replacePsd(job: Job, file: File) {
+    if (loading || running) return;
+    let src: Job;
+    try {
+      // 지금 열린 작업이면 화면의 최신 사본 (방금 고친 설정·기록이 아직 계정에 안 올라갔을 수 있음)
+      src = jobRef.current?.id === job.id ? { ...jobRef.current, settings: settingsToSave(jobRef.current, settings), note } : await fullJob(job);
+    } catch (e) {
+      setLoadError((e as Error).message);
+      return;
+    }
+    if (src.state === 'running' || (await busyJobIds()).has(src.id)) {
+      setLoadError('만드는 중인 작업은 PSD 를 바꿀 수 없습니다. 끝나거나 멈춘 뒤에 다시 해 주세요.');
+      return;
+    }
+    const nj = replacePsdJob(src, file);
+    try {
+      await putJob(nj);
+    } catch (e) {
+      setLoadError(`PSD 를 바꾸지 못했습니다: ${(e as Error).message}`);
+      return;
+    }
+    // PSD 원본은 이 브라우저에 — 저장한 뒤 정리(prune)로 쓰는 작업이 없어진 옛 PSD 사본(수백 MB)을 바로 치운다
+    saveFile(file)
+      .then((ok) => (ok ? prune(nj.id).then(() => refreshJobs(true)) : jobRef.current?.id === nj.id && updateJob({ noFile: true })))
+      .catch((e) => console.warn('[jobs]', e));
+    refreshJobs(true);
+    await openPsd(file, nj);
+  }
+
+  /** 새 PSD 를 올리면 같은 제품명의 작업이 있는지 먼저 본다 — 있으면 「기존 작업의 PSD 교체 / 새 작업」을 묻는다 */
+  const [swapAsk, setSwapAsk] = useState<{ file: File; jobs: Job[] } | null>(null);
+  async function pickPsd(file: File) {
+    if (loading || running) return;
+    const found = await jobsForProduct(productNameFromFile(file.name)).catch(() => [] as Job[]);
+    if (found.length) setSwapAsk({ file, jobs: found });
+    else await openPsd(file);
   }
 
   /** 변환 내역의 「복제」: 같은 PSD 로 다른 판매처용 새 작업을 만들어 연다 (원래 작업은 그대로) */
@@ -763,10 +805,12 @@ export default function App() {
   }
 
   /**
-   * 새 작업으로 저장 (PSD 원본은 뒤에서 천천히). 기록은 n — 없으면 담당자만 이어 쓰고 메모는 비운다.
+   * 새 작업으로 저장 (PSD 원본은 뒤에서 천천히). 기록은 n — 없으면 빈 기록 (freshNote).
    * 로컬에서 로그인해 MOCK(가짜 결과)으로 만든 작업은 배포 화면과 같은 계정 표에 쌓이므로 「테스트」로 표시해 둔다 (변환 내역 「테스트 제외」로 걸러짐)
    */
-  function newJob(file: File, s: Settings, n: JobNote = { assignee: readLocal('pagefy.assignee', ''), ...(AUTH && !CLOUD && health?.mock ? { test: true, memo: '로컬 MOCK' } : {}) }) {
+  /** 새 PSD 의 작업 기록 — 이전 작업의 담당자·메모를 가져오지 않는다 (2026-11-27). 로컬 MOCK 으로 계정에 쌓이는 작업만 「테스트」 표시 */
+  const freshNote = (): JobNote => (AUTH && !CLOUD && health?.mock ? { test: true, memo: '로컬 MOCK' } : {});
+  function newJob(file: File, s: Settings, n: JobNote = freshNote()) {
     const now = Date.now();
     const nj: Job = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, fileKey: fileKeyOf(file), fileName: file.name, fileSize: file.size, settings: s, creator: me, note: n, state: 'ready', sections: {}, failed: {}, revisionCount: 0 };
     setNote(n);
@@ -944,7 +988,10 @@ export default function App() {
       const name = productNameFromFile(file.name);
       // 규칙 6-1: 슬러그는 한 번 정하면 바꾸지 않는다 → 이 PC 에서 그 제품에 썼던 슬러그를 다시 쓴다
       const savedSlug = readLocal<Record<string, string>>('pagefy.slugs', {})[name];
-      const next: Settings = { ...settings, productName: name, slug: savedSlug || toSlug(name), rev: todayRev() };
+      // 추가 지시는 그 PSD 에만 쓰는 값이라 새 PSD 로 가져오지 않는다 (채널·판매처·주소 루트만 이어 쓴다, 2026-11-27)
+      const next: Settings = { ...settings, productName: name, slug: savedSlug || toSlug(name), rev: todayRev(), extra: '' };
+      // 새 PSD 면 읽는 동안 보이는 설정 칸에도 이전 작업의 담당자·메모가 남지 않게 바로 비운다
+      if (!job) setNote(freshNote());
       /** 먼저 띄운 화면 (PSD 확인·합성 미리보기) — 글자 뺀 배경은 아직 */
       let early: { composite: ImageBitmap; url: string } | null = null;
       const opened = await worker.open(
@@ -1125,8 +1172,18 @@ export default function App() {
     return { bundle, report: pp.report };
   }
 
-  /** 마크업 생성. 저장된 계획이 지금 설정과 같으면 계획을 건너뛰고 남은 섹션만 만든다 (fresh = 처음부터) */
-  async function generate(fresh = false) {
+  /** 「다시 변환」에서 적은 내용을 이번 요청의 추가 지시 뒤에 붙인다 */
+  const withWish = (extra: string, wish: string) => (wish.trim() ? [extra.trim(), `[다시 변환 — 직전 결과에서 마음에 안 든 점] ${wish.trim()}`].filter(Boolean).join('\n\n') : extra);
+
+  /** 지금 계획을 「이전 결과」로 남길 모양 (코드 생성 계획만 — 옛 방식은 섹션 결과가 있어야 해 비용 없이 되살릴 수 없다). 없으면 있던 것 그대로 */
+  const prevOf = (j: Job): PrevPlan | undefined =>
+    j.plan && j.meta && j.plan.bundle.plan.engine === 'code' ? { plan: j.plan, meta: j.meta, baseUrl: j.baseUrl, extra: j.extra, revisionCount: j.revisionCount, at: Date.now() } : j.prevPlan;
+
+  /**
+   * 마크업 생성. 저장된 계획이 지금 설정과 같으면 계획을 건너뛰고 남은 섹션만 만든다 (fresh = 처음부터).
+   * wish = 「다시 변환」에서 적은 마음에 안 드는 점 — 이번 구조 계획 요청에만 추가 지시로 붙이고 설정(추가 지시)에는 남기지 않는다
+   */
+  async function generate(fresh = false, wish = '') {
     const L = loadedRef.current;
     if (!L || !workerRef.current) return;
     // 지금 열린 작업을 목록에서 지운 뒤에도 버튼이 먹히게 새 작업으로 다시 저장
@@ -1190,7 +1247,7 @@ export default function App() {
         const planOut = await charged(
           collect(
             'plan',
-            { meta: m, summary: L.summary, tiles, extra: settings.extra },
+            { meta: m, summary: L.summary, tiles, extra: withWish(settings.extra, wish) },
             {
               status: (msg) => pushStatus(`① ${msg}`),
               thinking: (t) => setRun((r) => ({ ...r, thinking: (r.thinking + t).slice(-4000) })),
@@ -1210,7 +1267,8 @@ export default function App() {
         }
         planRaw = planOut.text;
         planReady = true;
-        updateJob((j) => ({ meta: m, baseUrl: base, extra: settings.extra, plan: { bundle, report: planReport, raw: planRaw }, sections: {}, failed: {}, revisionCount: 0, usage: addUsage(j.usage, planOut.usage), model: planOut.model }));
+        // 바로 전 결과의 계획은 「이전 결과로 되돌리기」용으로 남긴다
+        updateJob((j) => ({ meta: m, baseUrl: base, extra: settings.extra, plan: { bundle, report: planReport, raw: planRaw }, prevPlan: prevOf(j), sections: {}, failed: {}, revisionCount: 0, usage: addUsage(j.usage, planOut.usage), model: planOut.model }));
         pushStatus(`① 구조 계획 완료: 섹션 ${bundle.plan.sections.length}개, 사진 ${bundle.plan.photos?.length ?? 0}장`);
       }
       const plan = bundle.plan;
@@ -1269,6 +1327,49 @@ export default function App() {
   }
 
   /** 「문제 자동 수정」: 점검 결과 중 구조 계획으로 고칠 수 있는 것만 모아 Claude 1회 → 나아졌을 때만 바꾼다 */
+  async function restorePrev() {
+    const j = jobRef.current;
+    const p = j?.prevPlan;
+    if (!j || !p || !loaded || !workerRef.current || run.phase === 'running') return;
+    if ((await busyJobIds()).has(j.id)) {
+      setRun((r) => ({ ...r, phase: 'error', error: BUSY_MSG }));
+      return;
+    }
+    const L0 = loadedRef.current;
+    const ac = new AbortController();
+    abortRef.current = ac;
+    const release = holdLock(j.id);
+    // 지금 결과의 이미지 미리보기 주소(blob URL)는 성공할 때까지 놓지 않는다 (실패하면 그대로 되살림 — 자동 수정과 같은 방식)
+    const prevCut = cutRef.current;
+    cutRef.current = null;
+    setAutoFix(null);
+    setRun({ ...emptyRun(), phase: 'running', startedAt: Date.now(), status: ['이전 결과로 되돌리는 중 — 남겨 둔 구조 계획으로 마크업을 다시 계산 (Claude 호출 없음)'] });
+    updateJob({ state: 'running', error: undefined });
+    try {
+      const { bundle, report, raw } = p.plan;
+      // 실패하면 finalize 까지 가지 않아 화면 결과·작업 계획은 지금 것 그대로 남는다
+      await buildFromPlan(p.meta, p.baseUrl ?? imageBaseUrl(p.meta), bundle, report, raw, [], ac.signal);
+      if (prevCut) for (const im of prevCut.images) URL.revokeObjectURL(im.url);
+      // 맞바꾼다 — 방금까지의 결과가 「이전 결과」가 되어 다시 되돌릴 수 있다
+      updateJob((cur) => ({ plan: p.plan, meta: p.meta, baseUrl: p.baseUrl, extra: p.extra, revisionCount: p.revisionCount, prevPlan: prevOf(cur), state: 'done' }));
+      setRevisionCount(p.revisionCount);
+      pushStatus('이전 결과로 되돌렸습니다 — 방금 결과는 「이전 결과」로 남아 다시 되돌릴 수 있습니다.');
+      setRun((r) => ({ ...r, phase: 'done', endedAt: Date.now() }));
+    } catch (e) {
+      if (loadedRef.current !== L0) {
+        if (prevCut) for (const im of prevCut.images) URL.revokeObjectURL(im.url);
+        return;
+      }
+      setCut(prevCut); // 이번에 자른 이미지는 놓고 지금 결과의 이미지를 되살린다
+      const msg = ac.signal.aborted ? '취소했습니다.' : (e as Error).message;
+      setRun((r) => ({ ...r, phase: 'error', error: `되돌리지 못했습니다: ${msg} — 지금 결과는 그대로 남아 있습니다.` }));
+      updateJob({ state: 'done' });
+    } finally {
+      abortRef.current = null;
+      release();
+    }
+  }
+
   async function runAutoFix() {
     if (!result || !loaded || result.bundle.plan.engine !== 'code') return;
     const req = fixRequest(result.checks, result.layout);
@@ -1404,7 +1505,7 @@ export default function App() {
         pushStatus(`자동 수정: ${fmtScore(b)} → ${fmtScore(a)}`);
       }
       // 새 계획은 마크업까지 성공한 뒤에 저장한다 (실패하면 이전 계획·결과를 그대로 둔다)
-      updateJob({ plan: { bundle, report, raw: out.text } });
+      updateJob((j) => ({ plan: { bundle, report, raw: out.text }, prevPlan: prevOf(j) }));
       setRevisionCount((n) => n + 1);
       setRun((r) => ({ ...r, phase: 'done', endedAt: Date.now() }));
       updateJob((j) => ({ state: 'done', revisionCount: j.revisionCount + 1 }));
@@ -1694,6 +1795,11 @@ export default function App() {
 
   // 변환 내역 — 머리말 메뉴 「변환 내역」(#jobs) 전용 화면 + 만들기 첫 화면의 「최근 작업」(최근 5건, 2026-11-24)
   const jobsProps = { jobs, filter: jobFilter, onFilter: setJobFilter, currentId: jobId, busy: !!loading || running, account: savesToAccount(), more: moreJobs, loading: jobsLoading, onMore: showMoreJobs, page: jobPage, total: jobsTotal, pageSize: JOB_PAGE, onPage: goJobPage, onRefresh: () => refreshJobs(true), onRemove: removeJob, trash, trashN, trashLoading, onTrashOpen: openTrash, onTrashClose: () => setTrash(null), onRestore: restoreFromTrash, onPurge: purgeFromTrash, imageServer: !!health?.upload, onEditInfo: editJobNote };
+  // 「⋯ → PSD 교체…」 — 작업 페이지(#job)에서 새 PSD 로 연다
+  const replaceFromList = (j: Job, f: File) => {
+    setView('job');
+    replacePsd(j, f);
+  };
   // 저장된 결과 보기 (PSD 없이) — 변환 내역에서 고르면 변환 내역 화면 안에서, 만들기 화면의 최근 작업에서 고르면 만들기 화면에서 연다
   const savedView = viewJob && (
     <SavedView
@@ -1732,7 +1838,7 @@ export default function App() {
       showSaved(j);
     },
   };
-  const recentJobs = showJobs && <JobsPanel {...jobsProps} mode="recent" {...openJobPage} onShowAll={() => setView('jobs')} />;
+  const recentJobs = showJobs && <JobsPanel {...jobsProps} mode="recent" {...openJobPage} onReplace={replaceFromList} onShowAll={() => setView('jobs')} />;
   const jobsPage = (
     <JobsPanel
       {...jobsProps}
@@ -1743,6 +1849,7 @@ export default function App() {
         requestAnimationFrame(() => document.getElementById('result')?.scrollIntoView({ block: 'start' }));
       }}
       {...openJobPage}
+      onReplace={replaceFromList}
     />
   );
 
@@ -1762,7 +1869,7 @@ export default function App() {
         onLogout={AUTH && session ? () => supabase.auth.signOut() : !AUTH ? () => console.info('[로컬] 로그인이 없어 로그아웃할 것이 없습니다') : undefined}
         // 첫 화면(PSD 올리기 칸이 크게 보임)에선 숨기고, PSD 를 연 뒤·저장된 결과를 볼 때만
         // 작업 페이지에서 새 PSD 를 열면 만들기 화면으로 (새 작업은 만들기에서 시작)
-        onNewPsd={allowed && (loaded || viewJob) ? (f) => (view === 'job' && setView('work'), window.scrollTo({ top: 0, behavior: 'smooth' }), openPsd(f)) : undefined}
+        onNewPsd={allowed && (loaded || viewJob) ? (f) => (view === 'job' && setView('work'), window.scrollTo({ top: 0, behavior: 'smooth' }), pickPsd(f)) : undefined}
         newPsdDisabled={running || !!loading}
         onHome={goHome}
         homeBusy={(view === 'work' || view === 'job') && (running || !!loading)}
@@ -1773,6 +1880,18 @@ export default function App() {
       />
       {/* 파일은 놓는 칸에서만 받는다 — 그 밖에 떨어뜨리면 무시 (실수로 다른 PSD 가 열리지 않게). PSD 를 연 뒤 다른 PSD 는 머리의 「새 PSD」로 */}
       <DropGuard />
+      {/* 새 PSD 를 올렸는데 같은 제품명 작업이 있을 때 — 기존 작업의 PSD 교체 · 같은 PSD 면 그 작업 열기 · 새 작업 */}
+      <ReplacePsdDialog
+        file={swapAsk?.file ?? null}
+        jobs={swapAsk?.jobs ?? []}
+        onClose={() => setSwapAsk(null)}
+        onReplace={(j, f) => replacePsd(j, f)}
+        onOpen={(j, f) => {
+          setView('job');
+          openJob(j, f);
+        }}
+        onNew={(f) => openPsd(f)}
+      />
       <main className="app__main">
         {showLogin ? (
           <LoginPanel session={session} role={role} />
@@ -1807,7 +1926,7 @@ export default function App() {
             {/* PSD 파일 카드는 결과를 보는 4단계에서 숨긴다 (단계 표시 ①을 누르면 다시 보임) · 저장 결과만 볼 때도 숨김 */}
             <div className={`prep${loaded && shown === 2 && !restoring ? ' prep--pair' : ''}`} hidden={!!viewJob || (shown === 4 && !restoring)}>
               <UploadPanel
-                onFile={(f) => openPsd(f)}
+                onFile={(f) => pickPsd(f)}
                 loading={loading}
                 error={loadError}
                 disabled={running}
@@ -1873,6 +1992,11 @@ export default function App() {
                 onCancel={() => abortRef.current?.abort()}
                 onResume={resume && canGenerate ? () => generate() : undefined}
                 onRetry={canGenerate ? () => generate() : undefined}
+                // 「다시 변환」: 구조 계획부터 새로 (Claude 1회). 막혀 있으면 이유를 함께 보여 준다
+                onReconvert={(wish) => generate(true, wish)}
+                reconvertBlocked={canGenerate ? undefined : (blockers[0] ?? waiting[0] ?? '지금은 다시 변환할 수 없습니다.')}
+                prevAt={cur?.prevPlan && cur.prevPlan.plan.bundle.plan.engine === 'code' ? cur.prevPlan.at : undefined}
+                onRestorePrev={restorePrev}
                 upload={health?.upload && result?.bundle.plan.engine === 'code' ? upload : undefined}
                 godo={!!health?.godo && result?.meta.channel === 'itket'}
                 // 작업 기록(note)은 바뀌면 잠시 뒤 저장된다 — 등록 페이지 주소도 같은 길로

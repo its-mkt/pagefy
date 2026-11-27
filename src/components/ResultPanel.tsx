@@ -17,9 +17,10 @@ import { buildZip, download, fmtBytes } from '../lib/util';
 import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, saveZipToShared, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
 import { CheckField, Fold, Seg, Tip, TipWrap } from './ui';
 import Elapsed from './Elapsed';
-import { Check as CheckMark, ChevronRight, Eye, RotateCw } from 'lucide-react';
+import { Check as CheckMark, ChevronRight, Eye, RefreshCw, RotateCw, Undo2 } from 'lucide-react';
 import { copyText, useCopy } from '../lib/clipboard';
-import { fmtDur, secMs } from '../lib/time';
+import { ago, fmtDur, secMs } from '../lib/time';
+import ReconvertDialog from './ReconvertDialog';
 import { useFrameHeight } from '../lib/useFrameHeight';
 
 interface Props {
@@ -59,6 +60,14 @@ interface Props {
   savedEdit?: string | null;
   /** 수정 저장(html) · 원래대로(null) — 작업에 남긴다 */
   onSaveEdit?: (html: string | null) => void;
+  /** 「다시 변환」: 구조 계획부터 새로 (Claude 1회). wish = 마음에 안 드는 점 (이번 요청에만 추가 지시로) */
+  onReconvert?: (wish: string) => void;
+  /** 다시 변환할 수 없는 이유 (설정 미비 등) */
+  reconvertBlocked?: string;
+  /** 되돌릴 수 있는 이전 결과가 밀려난 시각 (없으면 「이전 결과로 되돌리기」를 숨김) */
+  prevAt?: number;
+  /** 이전 결과로 되돌리기 — 남겨 둔 계획으로 다시 계산 (Claude 호출 없음), 지금 결과와 맞바꿈 */
+  onRestorePrev?: () => void;
 }
 
 export interface UploadState {
@@ -146,7 +155,8 @@ function diagnostics(result: Result, loaded: Loaded, run: RunState) {
   ].join('\n');
 }
 
-export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, onRetry, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo, regLink, onRegLink, savedEdit = null, onSaveEdit }: Props) {
+export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, onRetry, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo, regLink, onRegLink, savedEdit = null, onSaveEdit, onReconvert, reconvertBlocked, prevAt, onRestorePrev }: Props) {
+  const [reconvOpen, setReconvOpen] = useState(false);
   const [tab, setTab] = useState<Tab>('preview');
   // 「수정」 — 실수 방지로 「저장」해야만 복사에 들어간다 (2026-11-25 사용자).
   //  draft = 저장하지 않은 고침 (있으면 「HTML 복사」를 막는다) · savedEdit = 저장한 고침 (작업에 남음, 결과가 다시 만들어지면 App 이 버림)
@@ -260,7 +270,29 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
 
   return (
     <section className="panel">
-      <h2 className="panel__title">결과 {revisionCount > 0 && <small>(수정 {revisionCount}회)</small>}</h2>
+      <div className="reconv__head">
+        <h2 className="panel__title">결과 {revisionCount > 0 && <small>(수정 {revisionCount}회)</small>}</h2>
+        {/* 결과가 마음에 안 들 때 — 설정 패널을 펼치지 않고 여기서 바로 (2026-11-27) */}
+        {result && !running && (onReconvert || (prevAt && onRestorePrev)) && (
+          <div className="reconv__acts">
+            {prevAt && onRestorePrev && (
+              <Tip content={`${ago(prevAt)}까지 보던 결과로 되돌립니다. 남겨 둔 구조 계획으로 다시 계산해 비용이 들지 않고, 지금 결과는 다시 「이전 결과」로 남습니다.`}>
+                <Button type="button" size="sm" onClick={onRestorePrev}>
+                  <Undo2 className="btn__ico" />
+                  이전 결과로 되돌리기
+                </Button>
+              </Tip>
+            )}
+            {onReconvert && (
+              <Button type="button" size="sm" onClick={() => setReconvOpen(true)}>
+                <RefreshCw className="btn__ico" />
+                다시 변환
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+      {onReconvert && <ReconvertDialog open={reconvOpen} onClose={() => setReconvOpen(false)} onConfirm={onReconvert} blocked={reconvertBlocked} revisions={revisionCount} />}
 
       {running && (
         <div className="progress">

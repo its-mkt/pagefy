@@ -43,7 +43,7 @@ export function buildSystem(rulesText: string): Anthropic.Beta.BetaTextBlockPara
 
 
 const channelFolder = (m: GenerateMeta) => ({ itket: '아이티켓', oncore: '온코어', zbyhp: 'zbyhp', cadkorea: 'cadkorea', openmarket: '오픈마켓' })[m.channel];
-const htmlMode = (m: GenerateMeta) => (m.channel === 'openmarket' ? '7-3 오픈마켓 공용 (인라인 전용)' : '7-2 고도몰용 (<style> + 고유 접두사)');
+const htmlMode = (m: GenerateMeta) => (m.channel === 'openmarket' ? '7-3 오픈마켓 (섹션 이미지 + 제목 띠, 7-3-1)' : '7-2 고도몰용 (<style> + 고유 접두사)');
 
 function jobBlock(meta: GenerateMeta) {
   return `<job>
@@ -99,7 +99,8 @@ const PLAN_TASK = `<task>
   alt 를 줄 만한 사진(제품 외관·구성·사용 장면·화면·인증 배지 등)만 넣는다. 장식 배경·무늬·그라데이션은 넣지 않는다 (배경으로 남는다).
   role 은 파일명용 영문 소문자·하이픈 (예: hero-product), alt 는 그림 내용을 설명하는 한국어.
 - keepInImage: HTML 글자로 바꾸지 않고 배경 픽셀에 그대로 남길 텍스트 레이어 id(<texts> 의 id)와 사유.
-  bakeHint 가 있는 텍스트와 fx 에 stroke·colorOverlay 가 있는 텍스트는 프로그램이 자동으로 더하므로 적지 않는다 (드롭섀도는 프로그램이 text-shadow 로 옮긴다).
+  bakeHint 가 있는 텍스트는 프로그램이 자동으로 더하므로 적지 않는다. 효과가 있다는 이유만으로 적지 않는다:
+  드롭섀도·외부 광선(text-shadow)·색상 오버레이(color)·획(-webkit-text-stroke)·선형 그라데이션 오버레이(background-clip:text)는 프로그램이 값을 읽었으면 CSS 로 옮기고, 못 옮기면 자동으로 이미지에 남긴다.
   이미지·그라데이션 레이어가 클리핑 마스크로 얹힌 글자(제품명 제목 등)는 적지 않는다: 고도몰은 프로그램이 실제 글자로 두고 PSD 색을 background-clip:text 로 칠하고(4절 표, 사용자 지시 2026-11-23),
   오픈마켓은 프로그램이 자동으로 이미지에 남긴다. 그런 글자가 제목이면 headings 에 넣고, 그 글자를 덮는 사진 띠(photos)를 만들지 않는다.
   그 밖에 남겨야 할 것만 적는다: 도표·그림에 구워진 번호 라벨, 로고 타입, 사진 위에 얹혀 사진과 함께 있어야 하는 글자 등. 없으면 [].
@@ -108,6 +109,23 @@ const PLAN_TASK = `<task>
 
 plan 은 올바른 JSON 이어야 한다 (주석·끝 쉼표 금지). id 는 숫자로 쓰고, headings 의 키만 문자열이다.
 </task>`;
+
+/**
+ * 오픈마켓 출력 방식 (규칙 7-3-1 1항·1-1항) — src/lib/codegen.ts 의 OPENMARKET_SECTION_IMAGE·sectionStrips 와 같게.
+ * 계획 보고가 실제 출력과 다르게 쓰이던 것(「HTML 글자로 남는다」·「inline-block 줄」 등, 2026-11-27 ZGX 확인)을 막는다
+ */
+const OPENMARKET_TASK = `
+<openmarket_output>
+이 작업은 오픈마켓이다. 프로그램은 글자를 HTML 로 내지 않는다:
+- 섹션마다 배경과 글자를 합친 이미지로 내보내고, 제목(headings 의 2·3) 위·아래 빈 줄에서 띠로 나눠 제목 띠를 <h2>/<h3> 로 감싼다. 띠마다 그 띠의 글자 원문이 alt 가 된다.
+- 그래서 이 작업에서 중요한 것은 sections 경계(텍스트 bounds 를 가로지르지 않기)와 headings(섹션마다 대제목 2 하나, 소제목 3) 두 가지다.
+  제목과 본문이 좌우로 나란히 붙어 있으면 띠를 못 나눠 그 제목은 <hN> 이 되지 않는다 — 보고의 제목 구조에 그렇게 적는다.
+- photos·keepInImage 는 결과에 영향이 없다 (모든 글자·사진이 섹션 이미지에 들어감). photos 는 [] 로, keepInImage 는 [] 로 둔다.
+- 보고에 "HTML 글자로 남는다", "inline-block 줄", "글자 크기 고정 때 줄바꿈" 처럼 글자 HTML 을 전제로 한 문장을 쓰지 않는다.
+  검색 최적화 항목에는 "글자는 이미지 alt 와 제목 띠(<h2>/<h3>)로만 전달된다"고 적는다.
+</openmarket_output>`;
+
+const planTask = (meta: GenerateMeta) => (meta.channel === 'openmarket' ? PLAN_TASK + OPENMARKET_TASK : PLAN_TASK);
 
 export function buildPlanMessages(req: PlanRequest): Anthropic.Beta.BetaMessageParam[] {
   const { meta, summary, tiles } = req;
@@ -125,7 +143,7 @@ ${JSON.stringify(summary.texts)}
 ${extraBlock(req.extra)}
 아래는 PSD 합성 렌더 타일이다 (위에서부터 순서대로, 각 타일 위에 원본 y 범위를 적었다).`;
   // 첫 user 메시지 끝에 캐시 지점 — 수정 요청(revision)은 같은 타일·레이어를 다시 보내므로 5분 안이면 캐시로 읽는다 (비용 절감)
-  const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: [{ type: 'text', text: head }, ...tileBlocks(tiles), { type: 'text', text: PLAN_TASK, cache_control: { type: 'ephemeral' } }] }];
+  const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: 'user', content: [{ type: 'text', text: head }, ...tileBlocks(tiles), { type: 'text', text: planTask(meta), cache_control: { type: 'ephemeral' } }] }];
   if (req.revision) {
     messages.push({ role: 'assistant', content: req.revision.previous });
     messages.push({ role: 'user', content: `수정 요청:\n${req.revision.feedback}\n\n고친 구조 계획을 같은 두 블록(<plan>, <report>)으로 전체 다시 써 줘.` });

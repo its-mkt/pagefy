@@ -41,6 +41,8 @@ export interface TextRun {
   color: string;
   /** letter-spacing em */
   ls: number;
+  /** 밑줄·취소선 → text-decoration-line 값 (규칙 4-2) */
+  deco?: 'underline' | 'line-through' | 'underline line-through';
 }
 
 /** 텍스트 레이어 한 개 + 미리 계산한 CSS 값 (규칙 4절·4-1) */
@@ -93,6 +95,15 @@ export interface TextInfo {
   shadows?: { x: number; y: number; blur: number; color: string }[];
   /** 색상 오버레이(혼합 모드 보통) — 글자색을 이 색으로 덮는다. color 는 hex(# 없음), opacity 0~1 */
   overlay?: { color: string; opacity: number };
+  /** 획(색 하나, 가운데·바깥) → -webkit-text-stroke. size 는 문서 px, color 는 rgba() (2026-11-27) */
+  stroke?: { size: number; position: 'center' | 'outside'; color: string };
+  /** 외부 광선(단색) → 번짐만 있는 text-shadow. blur 문서 px, spread 0~1, color 는 rgba() (2026-11-27) */
+  glow?: { blur: number; spread: number; color: string };
+  /**
+   * 그라데이션 오버레이(선형) → background-clip:text. angle 은 포토샵 각도(°, 위쪽 +), scale·offset 은 포토샵 값(1 = 100%),
+   * stops 의 t 는 레이어 영역 기준 0~1 (반전 적용됨), opacity 는 효과 불투명도 (2026-11-27)
+   */
+  gradient?: { angle: number; scale: number; offset: [number, number]; stops: { t: number; color: string }[]; opacity: number };
   /** 웹폰트 표에 없는 폰트 */
   unmappedFont?: boolean;
 }

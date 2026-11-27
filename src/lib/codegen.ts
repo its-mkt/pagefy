@@ -8,7 +8,8 @@
 import { type GenerateMeta, type Plan, type PlanBundle, type PlanImage, type PsdSummary, type TextInfo, type TextRun, imageBaseUrl } from '../../shared/types';
 import { godoRootCss } from '../../shared/width';
 import { MARKETS, marketWidth, normMarket, type MarketSpec } from '../../shared/markets';
-import { FONT_MAP } from './psd/extract';
+import { FONT_MAP, weightOf } from './psd/extract';
+import { webFontCss, webFontOf } from './psd/fonts';
 import type { SectionOut } from './assemble';
 import type { Check } from './output';
 import { esc, escAttr } from './html';
@@ -19,9 +20,18 @@ const warn = (message: string, fix?: Check['fix']): Check => ({ level: 'warn', m
 
 /** 배경 한 장 최대 세로 (규칙 6절) */
 const BG_MAX_H = 3000;
-/** 이 효과가 켜진 글자는 효과 값(그림자 거리·획 굵기 등)을 몰라 CSS 로 같게 못 만든다 → 이미지에 남긴다 */
-const KEEP_FX = ['stroke', 'colorOverlay', 'dropShadow'];
-const PAPERLOGY_IMPORT = '@import url("https://cdn.jsdelivr.net/gh/fonts-archive/Paperlogy/Paperlogy.css");';
+/**
+ * 이 효과가 켜진 글자는 효과 값(그림자 거리·획 굵기 등)을 읽지 못했으면 CSS 로 같게 못 만든다 → 이미지에 남긴다.
+ * 값을 읽었으면 CSS 로 옮긴다: 드롭섀도·외부 광선 → text-shadow, 색상 오버레이 → color, 획 → -webkit-text-stroke,
+ * 그라데이션 오버레이 → background-clip:text (2026-11-27). 값이 없는 옛 저장 작업은 예전처럼 이미지로
+ */
+const KEEP_FX = ['stroke', 'colorOverlay', 'dropShadow', 'outerGlow', 'gradientOverlay'];
+const fxConverted = (t: TextInfo, f: string) =>
+  (f === 'dropShadow' && !!t.shadows?.length) ||
+  (f === 'colorOverlay' && !!t.overlay) ||
+  (f === 'stroke' && !!t.stroke) ||
+  (f === 'outerGlow' && !!t.glow) ||
+  (f === 'gradientOverlay' && (!!t.gradient || (!!t.overlay && t.overlay.opacity >= 0.99)));
 const FALLBACK_FAMILY = "-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif";
 
 export interface KeptText {
@@ -61,11 +71,11 @@ function familyOf(font: string): string | null {
 /** 이미지에 남길 이유 (없으면 HTML 글자로) */
 function autoKeep(t: TextInfo): string | null {
   if (t.bakeHint) return t.bakeHint;
-  // 드롭섀도는 값을 읽었으면 text-shadow 로 옮긴다 (소제목이 이미지가 되면 검색에서 빠짐)
-  // 드롭섀도는 text-shadow 로, 보통 혼합 색상 오버레이는 글자색으로 옮긴다 (규칙 4절 표)
-  const fx = (t.fx || []).filter((f) => KEEP_FX.includes(f) && !(f === 'dropShadow' && t.shadows?.length) && !(f === 'colorOverlay' && t.overlay));
+  // 값을 읽은 효과는 CSS 로 옮긴다 (소제목이 이미지가 되면 검색에서 빠짐, 규칙 4절 표)
+  const fx = (t.fx || []).filter((f) => KEEP_FX.includes(f) && !fxConverted(t, f));
   if (fx.length) return `CSS 로 같게 못 만드는 효과(${fx.join(', ')})`;
-  if (fillOf(t) === 0) return '칠 0% (외곽선 글자)';
+  // 칠 0% 글자는 획·오버레이로 보이는 것만 HTML 로 (획만 있으면 외곽선 글자 = color:transparent + text-stroke)
+  if (fillOf(t) === 0 && !t.stroke && !t.overlay && !t.gradient) return '칠 0% (효과만 보이는 글자)';
   const fonts = (t.runs?.length ? t.runs.filter((r) => r.text.trim()).map((r) => r.font) : [t.font]).filter(Boolean);
   const bad = fonts.filter((f) => !familyOf(f));
   if (bad.length) return `웹폰트 표에 없는 폰트(${[...new Set(bad)].join(', ')})`;
@@ -95,7 +105,8 @@ interface Ctx {
   lsAdj: Record<number, number>;
   /** 상자 텍스트 자동 줄바꿈 위치 (텍스트 id → 새 줄이 시작하는 글자 위치들) */
   wraps: Record<number, number[]>;
-  usesPaperlogy: boolean;
+  /** 웹폰트 표 글꼴 → 쓴 굵기 (공통 CSS 에 선언) */
+  usedFonts: Map<string, Set<number>>;
   warnings: Check[];
   /** 오픈마켓 플랫폼 출력 규칙 (shared/markets.ts — 고도몰은 없음) */
   rules?: MarketSpec['rules'];
@@ -120,12 +131,61 @@ function colorCss(hex: string, alpha: number) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${Math.round(alpha * 100) / 100})`;
 }
 
-function familyCss(font: string, ctx: Ctx) {
-  if (familyOf(font) === 'Paperlogy') {
-    ctx.usesPaperlogy = true;
-    return `'Paperlogy','Pretendard',${FALLBACK_FAMILY}`;
+/** 드롭섀도 + 외부 광선 → text-shadow 값 (광선은 위치 이동 없이 번짐만, 스프레드가 크면 진한 번짐을 하나 더) */
+function textShadowCss(t: TextInfo, u: Ctx['u']): string | null {
+  const list = (t.shadows || []).map((s) => `${u(s.x)} ${u(s.y)} ${u(s.blur)} ${s.color}`);
+  if (t.glow) {
+    list.push(`0 0 ${u(t.glow.blur)} ${t.glow.color}`);
+    if (t.glow.spread >= 0.3) list.push(`0 0 ${u(r1(t.glow.blur * (1 - t.glow.spread) * 0.6 + 0.5))} ${t.glow.color}`);
   }
-  return `'Pretendard',${FALLBACK_FAMILY}`;
+  return list.length ? list.join(',') : null;
+}
+
+/**
+ * 획 → -webkit-text-stroke. 바깥 획은 두 배 굵기로 그리고 paint-order 로 글자 칠 아래에 깔아 바깥 절반만 보이게 한다.
+ * 칠이 비치는 글자(칠 0%)는 안쪽 절반이 드러나므로 획 굵기 그대로 가운데에 (두께는 같고 위치만 반 획 안쪽)
+ */
+function strokeCss(t: TextInfo, u: Ctx['u'], hollow: boolean): Record<string, string> {
+  const s = t.stroke!;
+  const under = s.position === 'outside' && !hollow;
+  return { '-webkit-text-stroke': `${u(under ? s.size * 2 : s.size)} ${s.color}`, ...(under ? { 'paint-order': 'stroke fill' } : {}) };
+}
+
+/**
+ * 그라데이션 오버레이 → 글자 상자 배경 + background-clip:text. 포토샵은 레이어 영역(t.b) 기준으로 그라데이션을 펴므로,
+ * 같은 방향선 위에서 정지점 위치를 글자 상자 기준 % 로 바꾼다 (CSS 선형 그라데이션 길이 = |W·cos|+|H·sin|, 포토샵과 같은 식).
+ * 효과 불투명도가 1 보다 작으면 아래에 글자색을 한 겹 더 깐다
+ */
+export function gradientCss(t: TextInfo, box: { left: number; top: number; width: number; height: number }, baseColor: string | null): string | null {
+  const g = t.gradient;
+  if (!g?.stops.length) return null;
+  const a = (g.angle * Math.PI) / 180;
+  const dx = Math.cos(a);
+  const dy = -Math.sin(a); // 포토샵 각도는 위쪽이 +
+  const w = t.b[2] - t.b[0];
+  const h = t.b[3] - t.b[1];
+  const hl = ((Math.abs(w * dx) + Math.abs(h * dy)) / 2) * g.scale;
+  const HL = (Math.abs(box.width * dx) + Math.abs(box.height * dy)) / 2;
+  if (!(hl > 0) || !(HL > 0)) return null;
+  const pc = (t.b[0] + w / 2 + g.offset[0] * w) * dx + (t.b[1] + h / 2 + g.offset[1] * h) * dy;
+  const bc = (box.left + box.width / 2) * dx + (box.top + box.height / 2) * dy;
+  const pos = (tt: number) => Math.round(((pc - hl + 2 * hl * tt - (bc - HL)) / (2 * HL)) * 10000) / 100;
+  const alphaMul = (c: string) => (g.opacity >= 0.99 ? c : c.replace(/,([\d.]+)\)$/, (_, al) => `,${Math.round(Number(al) * g.opacity * 100) / 100})`));
+  const deg = Math.round((((90 - g.angle) % 360) + 360) % 360 * 100) / 100;
+  const stops = g.stops.map((s) => `${alphaMul(s.color)} ${pos(s.t)}%`).join(',');
+  const layers = [`linear-gradient(${deg}deg,${stops})`];
+  if (g.opacity < 0.99 && baseColor) layers.push(`linear-gradient(${baseColor},${baseColor})`);
+  return layers.join(',');
+}
+
+/** 웹폰트 표(fonts.ts)의 글꼴이면 그 이름 + Pretendard 대체. 쓴 굵기를 모아 공통 CSS 에 @font-face 로 선언한다 */
+function familyCss(font: string, ctx: Ctx) {
+  const wf = webFontOf(font);
+  if (!wf || wf.family === 'Pretendard') return `'Pretendard',${FALLBACK_FAMILY}`;
+  let ws = ctx.usedFonts.get(wf.family);
+  if (!ws) ctx.usedFonts.set(wf.family, (ws = new Set()));
+  ws.add(weightOf(font));
+  return `'${wf.cssName ?? wf.family}','Pretendard',${FALLBACK_FAMILY}`;
 }
 
 /** 텍스트 레이어 하나 → 상자 (build.js textBox 를 TextInfo 에 맞게 옮기고, 섞인 크기·상자 텍스트 줄바꿈·빈 줄·불투명도를 더함) */
@@ -159,8 +219,10 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
     const st: string[] = [];
     if (familyOf(r.font) !== familyOf(r0.font)) st.push(`font-family:${familyCss(r.font, ctx)}`);
     if (r.weight !== r0.weight) st.push(`font-weight:${r.weight}`);
-    if (r.color !== r0.color && !t.overlay) st.push(`color:${colorCss(r.color, alpha)}`); // 오버레이는 모든 글자를 한 색으로 덮는다
+    if (r.color !== r0.color && !t.overlay && !t.gradient) st.push(`color:${colorCss(r.color, alpha)}`); // 오버레이는 모든 글자를 한 색으로 덮는다
     if (Math.abs(r.ls - r0.ls) >= 0.0005) st.push(`letter-spacing:${Math.round((r.ls + (ctx.lsAdj[t.id] ?? 0)) * 10000) / 10000}em`);
+    // 밑줄·취소선 (규칙 4-2). 스킨 초기화(* {text-decoration:none})는 인라인이 이긴다. 단축형 대신 -line 만 (색은 글자색을 따른다)
+    if (r.deco) st.push(`text-decoration-line:${r.deco}`);
     const parts = r.text.split(/(\r\n|[\r\n\u0003])/);
     parts.forEach((part, k) => {
       if (k % 2 === 1) {
@@ -267,7 +329,7 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
   // 첫 줄 상자 위쪽 = 기준선 − (첫 줄 행간/2 + 0.35 × 첫 줄 크기) (4-1). 첫 줄에 더 큰 글자가 섞이면 그 크기 기준
   const top = t.baseline - (leadAt(0) / 2 + 0.35 * lines[0].size);
   const style: Record<string, string | null> = {
-    'font-family': familyOf(t.font) === 'Paperlogy' ? familyCss(t.font, ctx) : null,
+    'font-family': familyOf(t.font) && familyOf(t.font) !== 'Pretendard' ? familyCss(t.font, ctx) : null,
     'font-size': u(size),
     'line-height': u(L),
     'font-weight': String(t.weight),
@@ -276,10 +338,21 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
     'letter-spacing': Math.abs(lsBase) >= 0.0005 ? `${Math.round(lsBase * 10000) / 10000}em` : null,
     'text-align': align !== 'left' && !perLine ? align : null,
     'text-transform': t.caps ? 'uppercase' : null,
-    'text-shadow': t.shadows?.length ? t.shadows.map((s) => `${u(s.x)} ${u(s.y)} ${u(s.blur)} ${s.color}`).join(',') : null,
+    'text-shadow': textShadowCss(t, u),
     // 레이어·그룹 불투명도 (글자 칠 불투명도는 색에, 이것은 그림자까지 함께)
     opacity: t.opacity != null && t.opacity < 1 ? String(t.opacity) : null,
   };
+  if (t.stroke) Object.assign(style, strokeCss(t, u, alpha === 0 && !t.overlay && !t.gradient));
+  const grad = t.gradient && !t.overlay ? gradientCss(t, { left, top, width, height }, alpha > 0 ? colorCss(t.color, alpha) : null) : null;
+  if (grad) {
+    Object.assign(style, {
+      color: 'transparent',
+      '-webkit-text-fill-color': 'transparent',
+      'background-image': grad,
+      '-webkit-background-clip': 'text',
+      'background-clip': 'text',
+    });
+  }
   // 키 자체를 넣지 않는다 — null 이면 오픈마켓 기본값(white-space:nowrap)을 덮어 지워 버림
   if (cssWrap) style['white-space'] = 'normal';
   return { t, top, left, width, height, size, html, style };
@@ -394,9 +467,89 @@ function splitBg(a: number, b: number, texts: TextInfo[], maxH = BG_MAX_H): numb
   return cuts;
 }
 
-function baseCss(p: string, W: number, usesPaperlogy: boolean) {
+export interface Strip {
+  y0: number;
+  y1: number;
+  /** 이 띠에 든 글자 (위→아래, 왼→오) */
+  alt: string;
+  /** 띠 글자가 모두 제목이면 그 단계 (2·3·4) */
+  level?: number;
+}
+
+/**
+ * 오픈마켓 섹션 이미지를 띠로 나눈다 (2026-11-27). 제목 글자(계획의 headings, 섹션에 2단계가 없으면 가장 큰 글자) 위·아래
+ * 빈 줄에서 자르고, 띠마다 그 띠의 글자만 alt 로 — 한 장에 섹션 글자를 모두 몰아 넣던 것보다 검색·AI 가 문단·제목을 구분한다.
+ * 자르는 줄은 어떤 글자 상자도 지나지 않는 곳만 (그런 곳이 없으면 그 제목은 띠를 나누지 않는다). 이어 붙이면 섹션 이미지와 같다
+ */
+export function sectionStrips(
+  sec: { y0: number; y1: number },
+  st: TextInfo[],
+  all: TextInfo[],
+  headings: Record<string, number>,
+  maxH = BG_MAX_H,
+): { strips: Strip[]; autoH2?: TextInfo } {
+  const levelOf = new Map<number, number>();
+  for (const t of st) {
+    const lv = headings[String(t.id)];
+    if (lv === 2 || lv === 3 || lv === 4) levelOf.set(t.id, lv);
+  }
+  let autoH2: TextInfo | undefined;
+  if (st.length && ![...levelOf.values()].includes(2)) {
+    autoH2 = st.reduce((a, b) => (b.size > a.size ? b : a));
+    levelOf.set(autoH2.id, 2);
+  }
+  const crosses = (cy: number) => all.some((t) => t.b[1] < cy && t.b[3] > cy);
+  // 이보다 얇은 띠는 만들지 않는다 — 나란히 놓인 제목 둘 사이에 1~2px 띠가 생기던 것 (2026-11-27 ZGX 시뮬레이션)
+  const MIN = 40;
+  const cuts = new Set<number>([sec.y0, sec.y1]);
+  // 자르는 기준은 h2·h3 만 (h4 까지 자르면 띠가 너무 잘게 나뉜다 — h4 글자는 들어간 띠의 alt 에 남는다)
+  for (const h of st.filter((t) => (levelOf.get(t.id) ?? 9) <= 3)) {
+    // 위: 제목 위쪽 가장 가까운 다른 글자 아래 끝과의 가운데, 아래: 아래쪽 가장 가까운 글자 위 끝과의 가운데 (없으면 섹션 끝 쪽 여유 절반)
+    const above = Math.max(sec.y0, ...all.filter((t) => t !== h && t.b[3] <= h.b[1]).map((t) => t.b[3]));
+    const below = Math.min(sec.y1, ...all.filter((t) => t !== h && t.b[1] >= h.b[3]).map((t) => t.b[1]));
+    for (const cy of [Math.round((above + h.b[1]) / 2), Math.round((h.b[3] + below) / 2)]) {
+      if (cy - sec.y0 >= MIN && sec.y1 - cy >= MIN && !crosses(cy)) cuts.add(cy);
+    }
+  }
+  // 앞 줄과 MIN 보다 가까운 줄은 버린다 (섹션 끝은 남기고 그 앞 줄을 버림)
+  const sorted: number[] = [];
+  for (const y of [...cuts].sort((a, b) => a - b)) {
+    if (!sorted.length || y - sorted[sorted.length - 1] >= MIN) sorted.push(y);
+    else if (y === sec.y1) sorted[sorted.length - 1] = y;
+  }
+  if (sorted.length < 2 || sorted[0] !== sec.y0) sorted.unshift(sec.y0);
+  // 띠가 세로 제한(플랫폼 이미지 비율·기본 3000)을 넘으면 더 나눈다
+  const ys: number[] = [sorted[0]];
+  for (let i = 0; i < sorted.length - 1; i++) ys.push(...splitBg(sorted[i], sorted[i + 1], all, maxH).slice(1));
+  /** 자르는 기준 제목(h2·h3)이면 그 단계, 아니면 9 — h4 는 읽는 순서를 바꾸지 않는다 */
+  const cutLevel = (t: TextInfo) => {
+    const lv = levelOf.get(t.id) ?? 9;
+    return lv <= 3 ? lv : 9;
+  };
+  // 글자 상자 가운데로 띠를 정한다 (섹션 밖으로 걸친 글자는 섹션 안으로 당겨 빠지지 않게)
+  const mid = (t: TextInfo) => Math.min(sec.y1 - 0.5, Math.max(sec.y0, (t.b[1] + t.b[3]) / 2));
+  const strips: Strip[] = [];
+  for (let i = 0; i < ys.length - 1; i++) {
+    const y0 = ys[i];
+    const y1 = ys[i + 1];
+    if (y1 - y0 < 1) continue;
+    const inside = st
+      .filter((t) => mid(t) >= y0 && mid(t) < y1)
+      // 제목을 먼저 (좌우로 나란한 제목·본문은 띠를 못 나눠 한 띠에 들어간다 — alt 를 제목부터 읽게), 그다음 위→아래, 왼→오
+      .sort((p, q) => cutLevel(p) - cutLevel(q) || p.b[1] - q.b[1] || p.b[0] - q.b[0]);
+    const alt = inside.map((t) => t.text.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' · ');
+    const lvls = inside.map((t) => levelOf.get(t.id));
+    const level = inside.length && lvls.every((l) => l) ? Math.min(...(lvls as number[])) : undefined;
+    strips.push({ y0, y1, alt, level });
+  }
+  return { strips, autoH2 };
+}
+
+function baseCss(p: string, W: number, usedFonts: Map<string, Set<number>>) {
+  const wf = webFontCss(usedFonts);
   return [
-    usesPaperlogy ? PAPERLOGY_IMPORT : '',
+    ...wf.imports,
+    wf.faces.length ? `/* 웹폰트 (규칙 5절 표, 쓴 굵기만) */\n${wf.faces.join('\n')}` : '',
     `/* 최상위 폭·배율 (7-2·7-5) */\n${godoRootCss(p, W)}`,
     `/* 스킨 CSS 방어 + 기본값 */
 .${p}{font-family:'Pretendard',${FALLBACK_FAMILY};word-break:keep-all;overflow-wrap:anywhere;text-align:left;line-height:1.2;letter-spacing:normal;text-transform:none;text-indent:0;font-weight:400;font-style:normal;font-size:16px;padding:0;border:0;font-kerning:normal;font-variant-ligatures:normal;font-feature-settings:normal;font-optical-sizing:auto}
@@ -546,7 +699,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
     lsAdj,
     wraps,
     warnings,
-    usesPaperlogy: false,
+    usedFonts: new Map(),
     tabStop: tabStopPx(summary.dpi),
     scale: omScale,
     u: goodomall
@@ -572,20 +725,25 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
   for (const sec of plan.sections) {
     const sid = sec.id;
     // 오픈마켓: 섹션을 배경·글자가 합쳐진 이미지 한 장(또는 세로 제한에 맞춘 여러 장)으로 — 모든 크기가 이미지 비율로 줄어 휴대폰에서 잘리지 않는다 (7-5)
-    // 글자는 alt 에 남긴다. 검색 영향은 규칙 8-4 에서 확인되지 않았다고 본다
+    // 글자는 alt 에 남긴다. 제목 줄 기준 띠로 나눠 제목 띠는 <hN> 로 감싸고 띠마다 그 띠 글자만 alt 로 (sectionStrips, 검색·AI 용 2026-11-27)
     if (!goodomall && OPENMARKET_SECTION_IMAGE) {
       const st = summary.texts.filter((t) => t.text.trim() && t.lineTop >= sec.y0 && t.lineTop < sec.y1);
-      const altAll = [...st].sort((p, q) => p.lineTop - q.lineTop || p.b[0] - q.b[0]).map((t) => t.text.replace(/\s+/g, ' ').trim()).filter(Boolean).join(' · ');
-      const cuts = splitBg(sec.y0, sec.y1, usable, maxH);
+      const { strips, autoH2 } = sectionStrips(sec, st, usable, headings, maxH);
+      if (autoH2 && Object.keys(headings).length) warnings.push(warn(`${sid} ${sec.name}: 계획에 대제목(h2)이 없어 가장 큰 글자 "${autoH2.text.trim().slice(0, 20)}"를 h2 로 했습니다.`, 'plan'));
       const parts: string[] = [];
-      for (let i = 0; i < cuts.length - 1; i++) {
-        const c0 = cuts[i], c1 = cuts[i + 1];
+      strips.forEach((s, i) => {
         const file = `${sid}_bg${i + 1}.jpg`;
-        const alt = i === 0 ? (altAll || sec.name) : '';
-        images.push({ file, kind: 'bg', source: 'composite', x0: 0, y0: c0, x1: W, y1: c1 });
-        parts.push(`  <img src="${base}/${file}" alt="${escAttr(alt)}" width="${OW}" height="${Math.round((c1 - c0) * omScale)}" style="display:block;width:100%;height:auto;border:0">`);
-      }
-      sections.push({ id: sid, name: sec.name, html: [`<div class="${prefix}-${sid}"${altAll ? '' : ` aria-label="${escAttr(sec.name)}"`}>`, ...parts, '</div>'].join('\n'), css: '', notes: '', raw: '' });
+        // 글자 없는 띠는 섹션 이름 — 11번가·G마켓·롯데온 가이드가 모든 이미지에 alt 값을 요구한다 (2026-11-27 에디터 시뮬레이션)
+        const alt = s.alt || sec.name;
+        images.push({ file, kind: 'bg', source: 'composite', x0: 0, y0: s.y0, x1: W, y1: s.y1 });
+        // G마켓·옥션(ESM) 모바일 가이드: height 를 지우라고 권장 — height 속성이 있으면 height:auto 없이는 늘어나므로 둘 다 뺀다
+        const img = ctx.rules?.noMaxWidth
+          ? `<img src="${base}/${file}" alt="${escAttr(alt)}" width="${OW}" style="display:block;width:100%;border:0">`
+          : `<img src="${base}/${file}" alt="${escAttr(alt)}" width="${OW}" height="${Math.round((s.y1 - s.y0) * omScale)}" style="display:block;width:100%;height:auto;border:0">`;
+        // 제목 띠는 <hN> 로 감싼다 — 이미지 그대로라 안 깨지고, 검색·AI 는 alt 를 제목 글자로 읽는다 (8-2 1항). 에디터가 hN 을 지워도 이미지는 남는다
+        parts.push(s.level ? `  <h${s.level} style="margin:0;padding:0">${img}</h${s.level}>` : `  ${img}`);
+      });
+      sections.push({ id: sid, name: sec.name, html: [`<div class="${prefix}-${sid}">`, ...parts, '</div>'].join('\n'), css: '', notes: '', raw: '' });
       continue;
     }
     const inSec = (t: TextInfo) => t.baseline >= sec.y0 && t.baseline < sec.y1;
@@ -791,7 +949,10 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
     sections.push({ id: sid, name: sec.name, html: out.join('\n'), css: '', notes: '', raw: '' });
   }
 
-  const style = goodomall ? baseCss(prefix, W, ctx.usesPaperlogy) : '';
+  // G마켓·옥션(ESM): 상세 이미지 최대 100장 [공식 가이드] — 섹션 이미지를 띠로 나누면 장수가 는다
+  if (rules?.maxImgRatio && images.length > 100) warnings.push(warn(`이미지가 ${images.length}장입니다 — G마켓·옥션은 최대 100장입니다 (7-4). 섹션을 합치거나 제목 수를 줄여 주세요.`));
+
+  const style = goodomall ? baseCss(prefix, W, ctx.usedFonts) : '';
   const wrapperStyle = goodomall
     ? undefined
     : `${rules?.noMaxWidth ? (OPENMARKET_FLUID_WRAPPER ? 'width:100%' : `width:${OW}px`) : `max-width:${OW}px`};margin:0 auto;font-family:'Pretendard',${FALLBACK_FAMILY};line-height:1.2;word-break:keep-all;text-align:left;font-weight:400;letter-spacing:normal`;
