@@ -28,10 +28,29 @@ export interface JobNote {
   locked?: boolean;
 }
 
+/** 「PSD 교체」 전 PSD 한 개 */
+export interface PsdHistory {
+  fileName: string;
+  fileSize: number;
+  /** 바꾼 시각 */
+  replacedAt: number;
+}
+
 /** 등록 페이지 주소로 쓸 수 있는지 (비어 있으면 됨 — 선택 칸) */
 export const okLink = (v?: string) => !v?.trim() || /^https?:\/\/\S+$/i.test(v.trim());
 /** 쇼핑몰에 등록한 페이지 주소가 있는 작업 (빈 칸은 아님) — 변환 내역의 「등록」 표시·거르기 기준 */
 export const registered = (x: Pick<Job, 'note'>) => !!x.note?.link?.trim() && okLink(x.note.link);
+
+/** 되돌리기용으로 남긴 이전 결과 — 그 결과를 만든 계획과 설정 */
+export interface PrevPlan {
+  plan: NonNullable<Job['plan']>;
+  meta: GenerateMeta;
+  baseUrl?: string;
+  extra?: string;
+  revisionCount: number;
+  /** 이 계획으로 만든 결과가 화면에서 밀려난 시각 */
+  at: number;
+}
 
 export interface Job {
   id: string;
@@ -42,6 +61,8 @@ export interface Job {
   fileSize: number;
   /** PSD 원본을 저장하지 못함 (용량 부족 등) → 다시 올려야 열 수 있다 */
   noFile?: boolean;
+  /** 「PSD 교체」로 바꾸기 전 PSD 들 (오래된 순) — 같은 제품에 디자인을 고친 PSD 를 넣을 때. 없으면 처음 PSD 그대로 */
+  psdHistory?: PsdHistory[];
   settings: Settings;
   /** 만든 사람 (작업을 만든 로그인 계정 이름·이메일). 담당자(note.assignee)를 비우면 이 사람이 담당. 예전 작업엔 없다 */
   creator?: string;
@@ -56,6 +77,11 @@ export interface Job {
   uploadedAt?: number;
   extra?: string;
   plan?: { bundle: PlanBundle; report: string; raw: string };
+  /**
+   * 바로 전 결과의 구조 계획 (2026-11-27 「다시 변환」). 처음부터 다시 만들어 계획이 바뀔 때 옛 계획을 여기 남기고,
+   * 「이전 결과로 되돌리기」는 이것과 지금 계획을 맞바꿔 마크업을 다시 계산한다 (코드 생성이라 Claude 호출 없음). 한 단계만 남긴다
+   */
+  prevPlan?: PrevPlan;
   /** 성공한 섹션만 (id → 결과) */
   sections: Record<string, SectionOut>;
   /** 실패한 섹션 (id → 오류) */
@@ -859,6 +885,47 @@ export function forkJob(src: Job, settings: Settings, opt: { keepPlan: boolean; 
     revisionCount: 0,
     ...(keep ? { plan: src.plan, meta: opt.planMeta ?? src.meta, model: src.model } : {}),
   };
+}
+
+/**
+ * 「PSD 교체」 — 같은 작업(제품)에 디자인을 고친 PSD 를 넣는다 (2026-11-27).
+ * 작업 id·설정(제품명·판매처·슬러그·이미지 주소)·작업 기록(담당·메모·등록 링크·잠금)은 그대로 두고,
+ * 옛 PSD 로 만든 계획·결과·HTML·손보기·「완료(올림)」 표시는 비운다 — 계획이 PSD 좌표·레이어 id 에 묶여 있어 고친 PSD 에 다시 쓸 수 없다 (「마크업 만들기」로 Claude 1회).
+ * 옛 결과는 남기지 않는다: 이미지 서버는 덮어쓸 때 백업(.bak-…)을 남기고, 쇼핑몰에는 붙여 둔 옛 HTML 이 그대로 있다
+ */
+export function replacePsdJob(src: Job, file: File): Job {
+  const { plan: _p, prevPlan: _pp, meta: _m, html: _h, edited: _e, uploadedAt: _u, usage: _g, model: _o, baseUrl: _b, error: _r, info: _i, lite: _l, runningUntil: _t, ...keep } = src;
+  return {
+    ...keep,
+    fileKey: fileKeyOf(file),
+    fileName: file.name,
+    fileSize: file.size,
+    noFile: false,
+    psdHistory: [...(src.psdHistory ?? []), { fileName: src.fileName, fileSize: src.fileSize, replacedAt: Date.now() }].slice(-20),
+    state: 'ready',
+    sections: {},
+    failed: {},
+    revisionCount: 0,
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * 같은 제품명의 작업 (휴지통 빼고, 최근 순, 목록 칸만) — 새 PSD 를 올릴 때 「기존 작업의 PSD 교체」를 물어보려고 쓴다.
+ * 읽기 실패는 빈 목록 (물어보지 않고 새 작업으로 진행)
+ */
+export async function jobsForProduct(productName: string, limit = 6): Promise<Job[]> {
+  const name = productName.trim();
+  if (!name) return [];
+  const out = new Map<string, Job>();
+  if (await cloudReady()) {
+    const { data, error } = await supabase.from(TABLE).select(LIST_COLS).is('deleted_at', null).eq('data->settings->>productName', name).order('updated_at', { ascending: false }).limit(limit);
+    if (error) cloudFailed(error, '같은 제품 찾기');
+    else for (const j of (data as unknown as LiteRow[]).map(fromLite)) out.set(j.id, j);
+  }
+  const local = await listLocal().catch(() => [] as Job[]);
+  for (const j of local) if (!j.deletedAt && j.settings?.productName?.trim() === name && !out.has(j.id)) out.set(j.id, j);
+  return [...out.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
 }
 
 /** 브라우저가 공간이 모자랄 때 임의로 지우지 않게 요청 (거절돼도 동작은 같다) */

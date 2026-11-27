@@ -154,6 +154,13 @@ button:disabled, [aria-disabled='true'] { cursor: not-allowed; }
   &__dot { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; background: var(--warn); }
 
   &__status { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+  // 모델 · 남은 한도 한 칩 (2026-11-27) — 라벨은 가늘고 흐리게, 값은 굵게. 색은 칩 톤(기본·주의·빨강)을 그대로 따른다
+  &__info {
+    gap: 0.5rem;
+    &-k { font-weight: 400; opacity: 0.72; }
+    &-v { font-weight: 600; }
+    &-sep { align-self: center; width: 1px; height: 0.625rem; background: currentColor; opacity: 0.3; }
+  }
   // 모델·effort · 남은 한도 (자세한 값은 마우스를 올리면)
   &__info { cursor: help; font-variant-numeric: tabular-nums; }
   &__new {
@@ -1101,6 +1108,18 @@ h3 {
 
 // 「휴지통으로 옮기기」 확인 창 — 이미지도 지울지 고르는 칸 (기본 꺼짐)
 .trashask__img { display: grid; gap: $sp-row; margin-top: $sp-3; padding: $sp-3; background: var(--tile); }
+
+// 「PSD 교체」 확인 창 — 바꿀 작업 (여러 개면 하나 고름) · 그대로 두는 것 / 지우는 것
+.psdswap {
+  &__list { margin: $sp-3 0 0; padding: 0; list-style: none; display: grid; gap: $sp-2; max-height: 16rem; overflow: auto; }
+  &__job {
+    display: flex; align-items: flex-start; gap: $sp-2; padding: $sp-2 $sp-3; background: var(--tile); cursor: pointer;
+    &.is-on { outline: 1px solid var(--acc); }
+    input { margin-top: 0.2rem; }
+  }
+  &__name { display: grid; gap: 2px; min-width: 0; small { color: var(--sub); word-break: break-all; } }
+  &__what { display: grid; gap: $sp-row; margin-top: $sp-3; p { margin: 0; } }
+}
 
 // 「이미지 서버에서 지우기」 확인 창 내용
 .imgdel {

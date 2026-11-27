@@ -9,9 +9,10 @@ import { SHARED_ROOT, findSharedPsd } from '../lib/sharedFolder';
 import Select from './Select';
 import PeriodPicker from './PeriodPicker';
 import { CheckField, Tip, TipWrap } from './ui';
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Check, CopyPlus, Ellipsis, ExternalLink, ImageOff, Lock, LockOpen, Pencil, RotateCcw, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpDown, Check, CopyPlus, Ellipsis, ExternalLink, FileUp, ImageOff, Lock, LockOpen, Pencil, RotateCcw, Trash2, X } from 'lucide-react';
 import ImageDeleteDialog, { type DeleteAfter } from './ImageDeleteDialog';
 import JobInfoDialog from './JobInfoDialog';
+import ReplacePsdDialog from './ReplacePsdDialog';
 import { ago, clock, dayHeading, listDate, when } from '../lib/time';
 
 /** 다른 PC 에서 열 PSD 가 있는 곳 (「공유 폴더에 저장」이 PSD 를 넣는 폴더) */
@@ -46,6 +47,8 @@ interface Props {
   onCopy?: (job: Job, to: Platform) => void;
   /** 「⋯ → 작업 정보 편집」 저장 — 담당자·메모·테스트만 (PSD 없이, 결과 영향 없음). 실패하면 throw */
   onEditInfo?: (job: Job, note: JobNote) => Promise<void>;
+  /** 「⋯ → PSD 교체…」 — 같은 작업에 디자인을 고친 PSD 를 넣는다 (설정·기록은 그대로, 옛 결과는 비움) */
+  onReplace?: (job: Job, file: File) => void;
   /** PSD 원본 없이 저장된 결과(HTML) 보기 */
   onView: (job: Job) => void;
   /** 휴지통 목록 — null 이면 닫힘(최근 작업을 보여 줌) */
@@ -268,7 +271,7 @@ function CopySub({ job, all, busy, onCopy }: { job: Job; all: Job[]; busy: boole
 /**
  * 줄 끝 ⋯ 메뉴. locked = 만드는 중이라 메뉴 자체를 막음 / held = 사용자가 건 잠금 (휴지통·이미지 지우기를 막고 메뉴에서 풀 수 있음)
  */
-function RowMenu({ job, locked, held, onHold, canDeleteImages, onEdit, onDeleteImages, onTrash, copy }: { job: Job; locked: boolean; held: boolean; onHold?: (on: boolean) => void; canDeleteImages: boolean; onEdit?: () => void; onDeleteImages: () => void; onTrash: () => void; copy?: ReactNode }) {
+function RowMenu({ job, locked, held, onHold, canDeleteImages, onEdit, onReplace, onDeleteImages, onTrash, copy }: { job: Job; locked: boolean; held: boolean; onHold?: (on: boolean) => void; canDeleteImages: boolean; onEdit?: () => void; onReplace?: () => void; onDeleteImages: () => void; onTrash: () => void; copy?: ReactNode }) {
   const name = job.settings.productName || job.fileName;
   const heldSub = <small className="jobs__rowmenu-sub">잠긴 작업 — 먼저 잠금을 풀어 주세요</small>;
   return (
@@ -305,6 +308,16 @@ function RowMenu({ job, locked, held, onHold, canDeleteImages, onEdit, onDeleteI
               </DropdownMenu.Item>
             </>
           )}
+          {/* PSD 교체 — 디자인을 고친 PSD 로 같은 작업을 다시 만든다 (2026-11-27) */}
+          {onReplace && (
+            <DropdownMenu.Item className="profile__item" onSelect={onReplace}>
+              <span className="jobs__rowmenu-ico">
+                <FileUp className="btn__ico" />
+                PSD 교체…
+              </span>
+              <small className="jobs__rowmenu-sub">고친 PSD 로 · 설정·기록은 그대로</small>
+            </DropdownMenu.Item>
+          )}
           {/* 잠금 — 실수로 지우지 않게 (휴지통·이미지 지우기·일괄 선택을 막음) */}
           {onHold && (
             <DropdownMenu.Item className="profile__item" onSelect={() => onHold(!held)}>
@@ -316,7 +329,7 @@ function RowMenu({ job, locked, held, onHold, canDeleteImages, onEdit, onDeleteI
             </DropdownMenu.Item>
           )}
           {/* 구분선은 하나만 — 안전한 것(복제·편집·잠금)과 지우는 것(이미지 지우기·휴지통) 사이 */}
-          {(copy || onEdit || onHold || linkOf(job)) && <DropdownMenu.Separator className="profile__sep" />}
+          {(copy || onEdit || onReplace || onHold || linkOf(job)) && <DropdownMenu.Separator className="profile__sep" />}
           {canDeleteImages && (
             <>
               <DropdownMenu.Item className="profile__item profile__item--out" disabled={held} onSelect={onDeleteImages}>
@@ -571,7 +584,7 @@ export default function JobsPanel(props: Props) {
             held={heldOf(j)}
             // 잠금은 작업 기록(note.locked)에 저장 — 작업 정보 편집과 같은 저장 길
             onHold={props.onEditInfo && ((on) => void props.onEditInfo!(j, { ...(j.note ?? {}), locked: on }).catch((e) => console.warn('[jobs] 잠금 저장 실패', e)))}
-            copy={onCopy && j.settings?.channel ? <CopySub job={j} all={props.jobs} busy={busy} onCopy={onCopy} /> : undefined} canDeleteImages={!!props.imageServer && listInfo(j).html} onEdit={props.onEditInfo && (() => setInfoFor(j))} onDeleteImages={() => setImgDel([j])} onTrash={() => remove(j)} />
+            copy={onCopy && j.settings?.channel ? <CopySub job={j} all={props.jobs} busy={busy} onCopy={onCopy} /> : undefined} canDeleteImages={!!props.imageServer && listInfo(j).html} onEdit={props.onEditInfo && (() => setInfoFor(j))} onReplace={props.onReplace && !busy ? () => { setSwapFor(j); swapPicker.current?.click(); } : undefined} onDeleteImages={() => setImgDel([j])} onTrash={() => remove(j)} />
         </span>
   );
   // 이미지 서버에서 지울 작업 — 줄 메뉴는 1개, 고른 작업 일괄은 여러 개 (같은 확인 창)
@@ -579,6 +592,10 @@ export default function JobsPanel(props: Props) {
   // 이미지 지우기 창을 휴지통 확인 창에서 열었으면 — 다 지운 뒤 휴지통으로 옮긴다
   const [imgThenTrash, setImgThenTrash] = useState(false);
   const [infoFor, setInfoFor] = useState<Job | null>(null);
+  // 「PSD 교체」: 파일 고르기 → 확인 창 → onReplace
+  const swapPicker = useRef<HTMLInputElement>(null);
+  const [swapFor, setSwapFor] = useState<Job | null>(null);
+  const [swapFile, setSwapFile] = useState<File | null>(null);
   // 변환 내역 표 정렬 (읽어 온 작업 안에서) — 기본 최근 순. 날짜는 묶음 줄 대신 날짜 칸에 (오늘 12:16 pm · 2026.11.25)
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'time', dir: -1 });
   const rows = recent || (sort.key === 'time' && sort.dir === -1) ? jobs : [...jobs].sort((x, y) => sortCmp(sort.key, x, y) * sort.dir);
@@ -614,6 +631,18 @@ export default function JobsPanel(props: Props) {
           } else trashJobs(list);
         }}
       />
+      {props.onReplace && (
+        <ReplacePsdDialog
+          file={swapFile}
+          jobs={swapFor ? [swapFor] : []}
+          onClose={() => {
+            setSwapFile(null);
+            setSwapFor(null);
+          }}
+          onReplace={props.onReplace}
+          onOpen={(j, f) => onOpen(j, f)}
+        />
+      )}
       {props.onEditInfo && <JobInfoDialog job={infoFor} onClose={() => setInfoFor(null)} onSave={props.onEditInfo} />}
       <div className="jobs__head">
         <h2 className="panel__title">
@@ -865,6 +894,18 @@ export default function JobsPanel(props: Props) {
           </div>
         )
       )}
+      <input
+        ref={swapPicker}
+        type="file"
+        accept=".psd"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f && swapFor) setSwapFile(f);
+          else setSwapFor(null);
+        }}
+      />
       <input
         ref={picker}
         type="file"
