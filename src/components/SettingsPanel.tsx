@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Tooltip } from 'radix-ui';
 import { Button } from './Button';
-import type { Channel, HealthInfo } from '../../shared/types';
+import { GODO_BOARDS, GODO_TARGET_LABEL, boardIdOk, boardLabel, defaultBoard, pickBoard, type Channel, type GodoChannel, type GodoTarget, type HealthInfo } from '../../shared/types';
 import { SLUG_BLOCK, readLocal, toSlug } from '../lib/util';
 import Select from './Select';
 import { MARKETS, normMarket, type Market } from '../../shared/markets';
@@ -15,6 +15,10 @@ export interface Settings {
   channel: Channel;
   /** 오픈마켓일 때 플랫폼 (폭 등 기준이 마켓마다 다름) */
   market: Market;
+  /** 고도몰에서 올릴 곳 — 없으면 상품 상세 (규칙 7-2-2) */
+  target?: GodoTarget;
+  /** 게시판 폴더 이름 (올릴 곳이 게시판일 때 — 이미지 주소 /data/post/<채널>/<게시판>/<연도>/<슬러그>) */
+  board?: string;
   slug: string;
   rev: string;
   publicRoot: string;
@@ -62,6 +66,9 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => onChange({ ...s, [k]: v });
   const slugOk = /^[a-z0-9]+(-[a-z0-9]+)*$/.test(s.slug);
   const rootOk = /^https:\/\//.test(s.publicRoot.trim());
+  // 게시판: 목록이 있는 쇼핑몰(아이티켓)은 고르기, 없으면 직접 입력. 목록에 없는 값이면 첫째로 보인다
+  const boards = GODO_BOARDS[s.channel as GodoChannel];
+  const board = pickBoard(s.channel, s.board);
   const savedSlug = readLocal<Record<string, string>>('pagefy.slugs', {})[s.productName.trim()];
 
   // 서버 폴더 이름·이미지 주소는 늘 보이게 둔다 (만들기 전에 눈으로 확인). 주소 루트는 팀 공용 값이라 화면에서 바꿀 수 없다 — 업로드 서버 설정과 맞아야 해서 잘못 바뀌면 만들기가 막히거나 이미지 주소가 틀어진다. 주소가 https:// 가 아닐 때만 고칠 칸이 뜬다
@@ -143,6 +150,7 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
             <dt>판매처</dt>
             <dd>
               {groupLabel(s.channel)} · {platformLabel({ channel: s.channel, market: mk })}
+              {chGroup === 'godo' && s.target === 'board' && ` · ${GODO_TARGET_LABEL.board} · ${boardLabel(s.channel, board)}`}
             </dd>
           </div>
           <div>
@@ -202,7 +210,8 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
                 <Select<string>
                   aria-label="고도몰 쇼핑몰"
                   value={s.channel}
-                  onChange={(v) => set('channel', v as Channel)}
+                  // 쇼핑몰마다 게시판 목록이 달라 게시판은 그 쇼핑몰 기본값으로 되돌린다
+                  onChange={(v) => onChange({ ...s, channel: v as Channel, board: s.target === 'board' ? defaultBoard(v as Channel) : s.board })}
                   options={GODO.map((c) => ({ value: c, label: GODO_LABEL[c] }))}
                 />
               ) : (
@@ -215,6 +224,40 @@ export default function SettingsPanel({ settings: s, onChange, baseUrl, canGener
               )}
             </div>
           </label>
+          {/* 올릴 곳 — 고도몰만. 에디터는 같고 본문 폭(상품 상세 860 · 게시판 980)이 달라 최대 폭만 바뀐다 (규칙 7-2-2, 2026-11-27).
+              판매처 드롭다운과 따로 둔다: 게시판은 판매처가 아니라 그 쇼핑몰 안 어느 칸에 올리는지라서 (아이티켓 게시판 · 온코어 게시판) */}
+          {chGroup === 'godo' && (
+            <div className="setup__target">
+              <span>올릴 곳</span>
+              <div className="setup__channel-row">
+                <Seg<GodoTarget>
+                  aria-label="올릴 곳"
+                  value={s.target ?? 'detail'}
+                  onChange={(v) => onChange({ ...s, target: v === 'board' ? 'board' : undefined, board: v === 'board' ? s.board || defaultBoard(s.channel) : s.board })}
+                  items={[
+                    { value: 'detail', label: GODO_TARGET_LABEL.detail },
+                    { value: 'board', label: GODO_TARGET_LABEL.board },
+                  ]}
+                />
+                {/* 게시판 고르기 — 이미지 서버 폴더(/data/post/<채널>/<게시판>/)를 정한다. 목록이 없는 쇼핑몰은 폴더 이름을 직접 (2026-11-27) */}
+                {s.target === 'board' &&
+                  (boards ? (
+                    <Select<string> aria-label="게시판" value={board} onChange={(v) => set('board', v)} options={boards.map((b) => ({ value: b.id, label: b.label }))} />
+                  ) : (
+                    <input
+                      className={`setup__board${boardIdOk(board) ? '' : ' is-bad'}`}
+                      aria-label="게시판 폴더 이름 (영문)"
+                      aria-invalid={!boardIdOk(board)}
+                      value={board}
+                      onChange={(e) => set('board', e.target.value.trim().toLowerCase())}
+                      placeholder="게시판 폴더 (예: event)"
+                      spellCheck={false}
+                    />
+                  ))}
+              </div>
+              <small>{s.target === 'board' ? '공지·프로모션·구축사례 등 게시글 — 본문 최대 980px. 붙여넣은 뒤 HTML 모드에서 바로 저장하세요' : '상품 상세설명 — 상세 영역 최대 860px'}</small>
+            </div>
+          )}
         </div>
         {/* 판매처를 고르면 이미지가 올라갈 서버 폴더를 바로 아래에 보여 준다 (FTP 경로 = 공개 주소의 경로 부분) */}
         {s.channel === 'openmarket' && (

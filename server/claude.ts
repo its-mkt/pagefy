@@ -10,6 +10,8 @@ export const PLAN_EFFORT = (process.env.PAGEFY_PLAN_EFFORT || 'medium') as Effor
 /** 로컬은 시간 제한 없음 */
 export const RUN: RunConfig = { model: MODEL, effort: EFFORT, maxTokens: 32000, timeLimitMs: 0 };
 export const PLAN_RUN: RunConfig = { ...RUN, effort: PLAN_EFFORT, maxTokens: 16000 };
+/** 마크업 재검증(Claude 정밀 검토) — 글자 자료만이라 계획보다 짧다. PAGEFY_REVIEW_EFFORT 로 바꿀 수 있음 */
+export const REVIEW_RUN: RunConfig = { ...RUN, effort: (process.env.PAGEFY_REVIEW_EFFORT || 'medium') as Effort, maxTokens: 12000 };
 
 let client: Anthropic | null = null;
 export const getClient = () => (client ??= new Anthropic());

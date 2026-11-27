@@ -2,7 +2,7 @@
 // 저장 흉내·플랫폼 기준은 src/lib/editorSim.ts (규칙 7-2-1·7-3·7-4 근거). 실제 에디터가 아니므로 첫 등록은 사람이 확인한다
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './Button';
-import { EDITORS, editorOf, isGif, previewDoc, simulate, type EditorId, type EditorProfile, type Evidence, type SimChange } from '../lib/editorSim';
+import { EDITORS, editorOf, godoWidthNote, isGif, previewDoc, simulate, type EditorId, type EditorProfile, type Evidence, type SimChange } from '../lib/editorSim';
 import { copySection } from '../lib/output';
 import { readLocal, writeLocal } from '../lib/util';
 import { useCopy } from '../lib/clipboard';
@@ -22,6 +22,8 @@ export interface TesterSource {
   editor: EditorId;
   /** 이미지 주소 → 미리보기용 주소 */
   images: [string, string][];
+  /** 고도몰 게시판 글이면 'board' (폭 안내가 980px) */
+  target?: 'board';
 }
 
 const STORE_KEY = 'pagefy.tester.editor';
@@ -249,7 +251,7 @@ export default function TesterPanel({
         </div>
       </div>
 
-      <Spec p={p} />
+      <Spec p={p} target={source?.target} />
 
       <div className="tester__grid">
         {/* ── 에디터 ── */}
@@ -472,12 +474,13 @@ export default function TesterPanel({
 }
 
 /** 폭·근거·주의 사항 한 줄 */
-function Spec({ p }: { p: EditorProfile }) {
+function Spec({ p, target }: { p: EditorProfile; target?: 'board' }) {
+  const note = p.id === 'godo' && target === 'board' ? godoWidthNote(target) : p.pcWidthNote;
   return (
     <div className="tester__spec">
       <span>
         상세 폭 <b>{p.pcWidth}px</b> <em>[{p.pcWidthEv}]</em>
-        {p.pcWidthNote && <small> {p.pcWidthNote}</small>}
+        {note && <small> {note}</small>}
       </span>
       <span>
         휴대폰 <b>{p.mobile === 'capture' ? 'PC 화면을 이미지로' : p.mobile === 'smartstore' ? '내용에 따라 원본 / PC 캡처 / 미리보기 없음' : `상세 영역 ${p.mobileWidth}px`}</b> <em>[{p.mobile === 'capture' ? '공식·오래됨' : p.mobile === 'smartstore' ? '공식' : p.mobileWidthEv}]</em>

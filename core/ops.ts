@@ -93,7 +93,7 @@ export async function saveSettings(cfg: OpsConfig, req: AdminSettingsRequest, by
 
 export interface RunInfo {
   email: string;
-  action: 'plan' | 'section';
+  action: 'plan' | 'section' | 'review';
   product?: string;
   channel?: string;
 }
@@ -180,10 +180,10 @@ async function notifyFailure(cfg: OpsConfig, row: { email: string; action: strin
         action: 'pagefyNotify',
         secret: cfg.notifySecret ?? '',
         to: cfg.notifyTo,
-        subject: `[Pagefy] 생성 실패 — ${KIND[kind] ?? kind}`,
+        subject: `[Pagefy] ${row.action === 'review' ? '재검증' : '생성'} 실패 — ${KIND[kind] ?? kind}`,
         body: [
           `누가: ${row.email}`,
-          `무엇: ${row.action === 'plan' ? '구조 계획' : '섹션 생성'}${row.product ? ` · ${row.product}` : ''}`,
+          `무엇: ${row.action === 'plan' ? '구조 계획' : row.action === 'review' ? '마크업 재검증' : '섹션 생성'}${row.product ? ` · ${row.product}` : ''}`,
           `걸린 시간: ${Math.round(row.duration_ms / 1000)}초`,
           `오류: ${row.error ?? '(내용 없음)'}`,
           '',

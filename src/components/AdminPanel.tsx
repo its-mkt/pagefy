@@ -205,7 +205,7 @@ export default function AdminPanel({ onChanged }: { onChanged?: () => void }) {
                     <span className="admin__when">{when(f.at)}</span>
                     <span className="badge badge--error">{KIND[f.kind ?? 'other'] ?? f.kind}</span>
                     <span>
-                      <b>{f.product || '(제품명 없음)'}</b> · {f.email} · {f.action === 'plan' ? '구조 계획' : '섹션'}
+                      <b>{f.product || '(제품명 없음)'}</b> · {f.email} · {f.action === 'plan' ? '구조 계획' : f.action === 'review' ? '마크업 재검증' : '섹션'}
                       {f.durationMs ? ` · ${Math.round(f.durationMs / 1000)}초` : ''}
                       <small>{f.error}</small>
                     </span>

@@ -13,6 +13,46 @@ export const CHANNEL_LABEL: Record<Channel, string> = {
   openmarket: '오픈마켓 (인라인 전용)',
 };
 
+/**
+ * 고도몰에서 올릴 곳 — 상품 상세(기본) · 게시판 글(이벤트·프로모션, 규칙 7-2-2).
+ * 에디터는 같고 본문 폭(최대 860 / 980)·페이지 제목 구조가 다르다 (2026-11-27 실측)
+ */
+export type GodoTarget = 'detail' | 'board';
+export const GODO_TARGET_LABEL: Record<GodoTarget, string> = { detail: '상품 상세', board: '게시판' };
+
+/**
+ * 게시판 고르기 — 이미지 서버 폴더 /data/post/<채널>/<게시판>/<슬러그>/ 의 <게시판> (2026-11-27 사용자 결정).
+ * 폴더 이름은 사용자가 정한 영문 소문자 (2026-11-27: notice · event · case-study · archives · newsletter — 고도몰 bdId 와 다름).
+ * 순서는 사이트 메뉴 순서. 기업소식은 네이버 블로그라 없음. 기획전은 다루지 않는다 (2026-11-27 사용자).
+ * 목록이 없는 쇼핑몰은 화면에서 폴더 이름을 직접 넣는다
+ */
+export const GODO_BOARDS: Partial<Record<GodoChannel, { id: string; label: string }[]>> = {
+  itket: [
+    { id: 'notice', label: '공지사항' },
+    { id: 'event', label: '프로모션' },
+    { id: 'case-study', label: '구축사례' },
+    { id: 'archives', label: '자료실' },
+    { id: 'newsletter', label: '뉴스레터' },
+  ],
+};
+/** 처음 고를 게시판 — 가장 많이 쓸 프로모션 (목록에 없으면 첫째) */
+const BOARD_DEFAULT = 'event';
+/** 게시판 폴더 이름 규칙 (영문 소문자·숫자·하이픈, 40자까지) */
+export const BOARD_ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const boardIdOk = (id?: string) => !!id && id.length <= 40 && BOARD_ID_RE.test(id);
+/** 쇼핑몰의 기본 게시판 — 목록이 있으면 프로모션(없으면 첫째), 목록이 없으면 빈 값(직접 입력) */
+export const defaultBoard = (ch: Channel) => {
+  const list = GODO_BOARDS[ch as GodoChannel];
+  return list ? (list.find((b) => b.id === BOARD_DEFAULT) ?? list[0]).id : '';
+};
+/** 실제로 쓸 게시판 — 목록이 있는 쇼핑몰은 목록 안 값만(아니면 기본값), 없으면 넣은 값 그대로 (화면 표시와 이미지 주소가 같게) */
+export function pickBoard(ch: Channel, id?: string) {
+  const list = GODO_BOARDS[ch as GodoChannel];
+  return list ? (list.some((b) => b.id === id) ? id! : defaultBoard(ch)) : (id ?? '');
+}
+/** 게시판 이름 — 목록에 있으면 메뉴 이름, 없으면 폴더 이름 그대로 */
+export const boardLabel = (ch: Channel, id?: string) => GODO_BOARDS[ch as GodoChannel]?.find((b) => b.id === id)?.label ?? id ?? '';
+
 /** PSD 레이어 한 개 (보이는 레이어만, 그룹 계층은 path 로 표현) */
 export interface LayerInfo {
   id: number;
@@ -134,13 +174,28 @@ export interface Tile {
  * 2026-11-24 부터 날짜(rev) 폴더 없이 제품 폴더 하나에 올리고, 고친 이미지는 확인받은 뒤 같은 이름으로 덮어쓴다.
  * 2026-11-25 부터 오픈마켓은 플랫폼 폴더를 한 단계 더 — 플랫폼마다 이미지 자르는 자리가 달라 같은 이름 파일이 서로 덮어쓰지 않게
  */
-export function imageFolder(meta: { channel: Channel; slug: string; market?: string }) {
-  return meta.channel === 'openmarket' ? `openmarket/${normMarket(meta.market)}/${meta.slug}` : `${meta.channel}/${meta.slug}`;
+/** 게시판 글 연도 폴더 — 작업 판(rev, YYYYMMDD)의 연도. 작업을 만든 해로 고정돼 다음 해에 고쳐 올려도 폴더가 그대로다 */
+export const boardYear = (rev?: string) => (/^\d{4}/.test(rev || '') ? rev!.slice(0, 4) : '');
+
+export function imageFolder(meta: { channel: Channel; slug: string; market?: string; target?: 'board'; board?: string; rev?: string; year?: string }) {
+  if (meta.channel === 'openmarket') return `openmarket/${normMarket(meta.market)}/${meta.slug}`;
+  // 게시판 글: post 루트 아래 <채널>/<게시판>/<연도>/<슬러그> (2026-11-27 사용자 결정 — 같은 해 글끼리 파일 이름이 겹치지 않게 슬러그 폴더를 둔다)
+  if (meta.target === 'board') return `${meta.channel}/${meta.board || 'etc'}/${meta.year || boardYear(meta.rev) || 'etc'}/${meta.slug}`;
+  return `${meta.channel}/${meta.slug}`;
 }
 
-/** 이미지 주소 폴더 — <공개 주소 루트>/<imageFolder> */
-export function imageBaseUrl(meta: { publicRoot: string; channel: Channel; slug: string; market?: string }) {
-  return `${meta.publicRoot.replace(/\/+$/, '')}/${imageFolder(meta)}`;
+/**
+ * 올릴 곳에 따른 이미지 루트 — 상품 상세는 설정 루트(…/data/detail) 그대로, 게시판은 그 옆의 …/data/post.
+ * 공개 주소 루트·FTP 루트 모두 이 함수로 바꿔 화면 주소와 실제 올린 곳이 어긋나지 않게 한다 (core/upload.ts)
+ */
+export function rootFor(root: string, target?: 'board') {
+  const r = root.replace(/\/+$/, '');
+  return target === 'board' ? `${r.replace(/\/detail$/, '')}/post` : r;
+}
+
+/** 이미지 주소 폴더 — <공개 주소 루트(게시판은 …/post)>/<imageFolder> */
+export function imageBaseUrl(meta: { publicRoot: string; channel: Channel; slug: string; market?: string; target?: 'board'; board?: string; rev?: string }) {
+  return `${rootFor(meta.publicRoot, meta.channel === 'openmarket' ? undefined : meta.target)}/${imageFolder(meta)}`;
 }
 
 export interface GenerateMeta {
@@ -156,6 +211,10 @@ export interface GenerateMeta {
   date: string;
   /** 채널이 오픈마켓일 때 플랫폼 (shared/markets.ts — 폭 등 기준이 다름) */
   market?: import('./markets.ts').Market;
+  /** 고도몰에서 올릴 곳 — 게시판일 때만 'board' (없으면 상품 상세. 오픈마켓에는 넣지 않는다) */
+  target?: 'board';
+  /** 게시판 폴더 이름 (target 'board' 일 때만 — GODO_BOARDS 의 id 또는 직접 넣은 영문). 이미지는 /data/post/<채널>/<게시판>/<rev 연도>/<슬러그>/ */
+  board?: string;
 }
 
 export interface GenerateRequest {
@@ -258,6 +317,23 @@ export interface SectionRequest {
   extra?: string;
   /** 수정 요청: 지난 결과 + 고칠 내용 */
   revision?: { previous: string; feedback: string };
+}
+
+/**
+ * 마크업 재검증 — Claude 정밀 검토 (2026-11-27). 만든 마크업의 뼈대(스타일·class 를 뺀 HTML)와 텍스트 레이어 목록,
+ * 코드 재검증 결과를 보내 판단이 필요한 것(제목 의미·이미지로 남긴 글자가 맞는지·alt 문구·핵심 사실·읽기 순서·구조화)을 본다. 타일 이미지는 보내지 않는다 (비용)
+ */
+export interface ReviewRequest {
+  meta: GenerateMeta;
+  doc: { fileName: string; width: number; height: number };
+  /** 복사 구간에서 <style>·style·class 를 뺀 HTML (src 는 파일 이름만) */
+  markup: string;
+  /** 보이는 텍스트 레이어 (heading = 계획의 제목 단계, kept = 이미지에 남긴 사유) */
+  texts: { id: number; text: string; size: number; weight: number; heading?: number; kept?: string }[];
+  /** 잘라 낸 이미지 (alt 는 계획 값) */
+  images: { file: string; kind: string; alt?: string }[];
+  /** 코드 재검증 3단계가 찾은 것 (한 줄씩, 단계 key 를 앞에) */
+  codeFindings: string[];
 }
 
 export interface HealthInfo {

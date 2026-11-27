@@ -1,6 +1,7 @@
 // 이미지 호스팅 업로드 규칙 (규칙 6절·6-1) — 로컬 서버·Supabase 함수 공용 (node: 모듈 금지)
 // 검증본: ~/.claude/tools/psd2html/upload.js 와 같은 안전장치를 바탕으로 한다
-//  - 정해진 폴더에만: <FTP_ROOT>/<채널>/<슬러그>/<파일명>, 오픈마켓은 <FTP_ROOT>/openmarket/<플랫폼>/<슬러그>/<파일명>
+//  - 정해진 폴더에만: <FTP_ROOT>/<채널>/<슬러그>/<파일명>, 오픈마켓은 <FTP_ROOT>/openmarket/<플랫폼>/<슬러그>/<파일명>,
+//    고도몰 게시판 글은 FTP_ROOT(/data/detail) 옆 /data/post/<채널>/<게시판>/<연도>/<슬러그>/<파일명> (2026-11-27)
 //    (규칙 6-1: 2026-11-24 날짜(rev) 폴더 없음 · 2026-11-25 오픈마켓 플랫폼 폴더 — shared/types.ts imageFolder), 파일명은 6-1 규칙에 맞는 것만
 //  - 덮어쓰기는 화면이 확인받은 파일만: 같은 이름 파일이 있는데 overwrite 목록에 없으면 거절 (확인 사이에 다른 사람이 올린 것을 덮지 않게)
 //  - 덮어쓸 때는 옛 파일을 같은 폴더의 숨김 백업 .bak-<YYYYMMDD-HHmmss>-<파일명> 으로 옮겨 두고 새 파일을 올린다 (되돌리기에 씀)
@@ -8,7 +9,7 @@
 //  - 화면 설정의 이미지 공개 주소 루트가 서버 설정(PUBLIC_BASE)과 같을 때만 (HTML 주소와 실제 올린 곳이 어긋나지 않게)
 //  - 함수 150초 제한: 마감 시각이 가까우면 남은 파일은 다음 요청으로 넘긴다 (화면이 이어서 보냄)
 import { type Dial, FtpClient } from './ftp.ts';
-import { type Channel, imageFolder } from '../shared/types.ts';
+import { type Channel, boardIdOk, imageFolder, rootFor } from '../shared/types.ts';
 import { MARKETS } from '../shared/markets.ts';
 
 export interface FtpConfig {
@@ -29,6 +30,12 @@ export interface UploadTarget {
   market?: string;
   /** 화면 설정의 이미지 공개 주소 루트 */
   publicRoot: string;
+  /** 고도몰 게시판 글 — FTP·공개 루트를 …/detail 옆 …/post 로 (2026-11-27) */
+  target?: 'board';
+  /** 게시판 폴더 이름 (target 'board' 일 때 반드시) */
+  board?: string;
+  /** 게시판 글 연도 폴더 YYYY (target 'board' 일 때 반드시 — 작업 판의 연도) */
+  year?: string;
 }
 
 export interface UploadFile {
@@ -78,15 +85,21 @@ export function checkTarget(cfg: FtpConfig, t: UploadTarget): string | null {
   if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(t.slug || '') || t.slug.length > 80) return '서버 폴더 이름(제품슬러그)은 영문 소문자·숫자·하이픈만 됩니다.';
   // 오픈마켓은 플랫폼 폴더가 꼭 있어야 한다 — 없거나 모르는 값을 기본 플랫폼으로 바꿔 올리면 다른 플랫폼 파일을 덮을 수 있다
   if (t.channel === 'openmarket' && !(typeof t.market === 'string' && Object.hasOwn(MARKETS, t.market))) return '오픈마켓 플랫폼 값이 없거나 올바르지 않습니다.';
+  // 게시판 글은 게시판 폴더가 꼭 있어야 한다 — 없으면 다른 게시판 파일과 섞인다
+  if (t.target !== undefined && t.target !== 'board') return '올릴 곳 값이 올바르지 않습니다.';
+  if (t.target === 'board' && (t.channel === 'openmarket' || !boardIdOk(t.board))) return '게시판 폴더 이름은 영문 소문자·숫자·하이픈만 됩니다.';
+  if (t.target === 'board' && !/^20\d{2}$/.test(t.year || '')) return '게시판 연도 폴더 값이 올바르지 않습니다.';
   if (trimSlash(t.publicRoot || '') !== cfg.publicBase)
     return `이미지 공개 주소 루트가 업로드 서버 주소와 다릅니다 (설정: ${String(t.publicRoot).slice(0, 80)} / 서버: ${cfg.publicBase}). 고급 설정의 주소를 서버 주소로 맞춘 뒤 다시 만드세요.`;
   return null;
 }
 
 /** 제품 폴더 (루트 아래 경로는 화면의 이미지 주소와 같은 규칙 — shared/types.ts imageFolder) */
-const pathOf = (t: UploadTarget) => imageFolder({ channel: t.channel as Channel, slug: t.slug, market: t.market });
-const folderOf = (cfg: FtpConfig, t: UploadTarget) => `${cfg.root}/${pathOf(t)}`;
-export const publicUrlOf = (cfg: FtpConfig, t: UploadTarget, file: string) => `${cfg.publicBase}/${pathOf(t)}/${file}`;
+// 게시판 글은 루트를 …/detail 옆 …/post 로 바꾼다 (shared/types.ts rootFor — 화면 이미지 주소와 같은 함수)
+const tg = (t: UploadTarget) => (t.target === 'board' ? 'board' as const : undefined);
+const pathOf = (t: UploadTarget) => imageFolder({ channel: t.channel as Channel, slug: t.slug, market: t.market, target: tg(t), board: t.board, year: t.year });
+const folderOf = (cfg: FtpConfig, t: UploadTarget) => `${rootFor(cfg.root, tg(t))}/${pathOf(t)}`;
+export const publicUrlOf = (cfg: FtpConfig, t: UploadTarget, file: string) => `${rootFor(cfg.publicBase, tg(t))}/${pathOf(t)}/${file}`;
 
 function b64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64);

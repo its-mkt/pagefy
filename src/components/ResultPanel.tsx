@@ -14,6 +14,7 @@ import { imageKind, imageUse } from '../lib/imageUse';
 import { editorIdOf, editorOf } from '../lib/editorSim';
 import Select from './Select';
 import { buildZip, download, fmtBytes } from '../lib/util';
+import { IMAGE_MAX_BYTES } from '../lib/imageLimits';
 import { CHANNEL_DIR, SHARED_ROOT, canSaveToFolder, saveZipToShared, getSharedRoot, planSave, rememberedRootName, safeFolderName, saveToShared, type SaveResult } from '../lib/sharedFolder';
 import { CheckField, Fold, Seg, Tip, TipWrap } from './ui';
 import Elapsed from './Elapsed';
@@ -21,6 +22,8 @@ import { Check as CheckMark, ChevronRight, Eye, RefreshCw, RotateCw, Undo2 } fro
 import { copyText, useCopy } from '../lib/clipboard';
 import { ago, fmtDur, secMs } from '../lib/time';
 import ReconvertDialog from './ReconvertDialog';
+import ReviewPanel from './ReviewPanel';
+import { reviewText, type ClaudeReview, type ReviewPass } from '../lib/review';
 import { useFrameHeight } from '../lib/useFrameHeight';
 
 interface Props {
@@ -136,7 +139,7 @@ function runProgress(run: RunState): { step: Step; pct: number; label: string } 
 const LEVEL_ORDER = { error: 0, warn: 1, ok: 2 } as const;
 
 /** 자동으로 못 고치는 문제를 관리자에게 넘길 때 붙여넣을 진단 정보 (PSD·계획·점검·위치 어긋남) */
-function diagnostics(result: Result, loaded: Loaded, run: RunState) {
+function diagnostics(result: Result, loaded: Loaded, run: RunState, review?: { passes: ReviewPass[]; claude?: ClaudeReview }) {
   const s = loaded.summary;
   const plan = result.bundle.plan;
   const bad = (result.layout?.items ?? []).filter((i) => i.dy != null && !i.ok);
@@ -149,6 +152,7 @@ function diagnostics(result: Result, loaded: Loaded, run: RunState) {
     '',
     '점검 (오류·확인):',
     ...result.checks.filter((c) => c.level !== 'ok').map((c) => `- [${c.level === 'error' ? '오류' : '확인'}${isPlanFixable(c) ? '·자동수정대상' : ''}] ${c.message}`),
+    ...(review?.passes.length ? ['', reviewText(review.passes, review.claude)] : []),
     ...(bad.length ? ['', `위치 어긋남 ${bad.length}개 (#id "글자" 세로/가로 px, +는 PSD보다 아래·오른쪽):`, ...bad.slice(0, 30).map((i) => `- #${i.id} "${i.text}" ${i.dy}/${i.dx ?? '줄바꿈 다름'}`)] : []),
     '',
     `브라우저: ${navigator.userAgent}`,
@@ -157,6 +161,8 @@ function diagnostics(result: Result, loaded: Loaded, run: RunState) {
 
 export default function ResultPanel({ run, result, loaded, revisionCount, onRevise, onCancel, onResume, onRetry, resumeLabel, upload, onUpload, onUploadReset, onUndoUpload, onAutoFix, onOpenTester, autoFix, godo, regLink, onRegLink, savedEdit = null, onSaveEdit, onReconvert, reconvertBlocked, prevAt, onRestorePrev }: Props) {
   const [reconvOpen, setReconvOpen] = useState(false);
+  /** 마크업 재검증 3단계 결과 (진단 정보 복사에 붙인다) */
+  const [review, setReview] = useState<{ passes: ReviewPass[]; claude?: ClaudeReview }>({ passes: [] });
   const [tab, setTab] = useState<Tab>('preview');
   // 「수정」 — 실수 방지로 「저장」해야만 복사에 들어간다 (2026-11-25 사용자).
   //  draft = 저장하지 않은 고침 (있으면 「HTML 복사」를 막는다) · savedEdit = 저장한 고침 (작업에 남음, 결과가 다시 만들어지면 App 이 버림)
@@ -164,6 +170,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
   const use = useMemo(() => imageUse(result?.parsed.html ?? ''), [result?.parsed.html]);
   const [draft, setDraft] = useState<string | null>(null);
   useEffect(() => setDraft(null), [result?.parsed.html]);
+  // 결과·저장한 고침이 바뀌면 지난 재검증은 버린다 (새 검토가 끝나기 전에 진단 정보를 복사해도 옛 내용이 붙지 않게)
+  useEffect(() => setReview({ passes: [] }), [result, savedEdit]);
   // 버리기·되돌리기 때 편집 화면을 새로 그리게 (SeEditBox resetKey)
   const [editKey, setEditKey] = useState(0);
   const dropDraft = () => (setDraft(null), setEditKey((k) => k + 1));
@@ -201,6 +209,16 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
     }
     return { ...g, layoutOff: !!result?.layout?.items.some((i) => i.dy != null && !i.ok) };
   }, [result]);
+  /** 재검증(코드 3단계·Claude 정밀 검토)이 아직 도는 중 */
+  const [reviewBusy, setReviewBusy] = useState(false);
+  /** 재검증에서 나온 오류 수 (코드 단계 + Claude) */
+  const reviewErr = review.passes.reduce((n, p) => n + p.findings.filter((x) => x.level === 'error').length, 0) + Object.values(review.claude?.passes ?? {}).reduce((n, fs) => n + fs.filter((x) => x.level === 'error').length, 0);
+  const errTotal = nErr + reviewErr;
+  /** 받아 가기 상자 상태: busy = 검토 중 · blocked = 오류 남음(확인 체크해야 복사) · ready */
+  const gate: 'busy' | 'blocked' | 'ready' = errTotal > 0 ? 'blocked' : reviewBusy ? 'busy' : 'ready';
+  /** 오류가 남은 채로 복사하겠다는 확인 — 결과·고침이 바뀌면 다시 묻는다 */
+  const [copyAck, setCopyAck] = useState(false);
+  useEffect(() => setCopyAck(false), [result, savedEdit]);
   const openmarket = result?.meta.channel === 'openmarket';
   /** 이미지 서버 자동 업로드를 쓸 수 있음 (서버에 접속 정보가 있을 때만 App 이 넘겨준다) */
   const autoUpload = !!(upload && onUpload);
@@ -367,14 +385,58 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
 
       {result && !running && (
         <>
-          <div className="getit">
+          {/* 순서 (2026-11-27 사용자): ① 검토·문제 고치기 → ② 이미지 올리고 HTML 복사. 문제가 남았는데 복사부터 누르게 하지 않는다 */}
+          {/* 마크업 재검증 3단계 (2026-11-27 사용자) — 자동 점검과 따로, 만든 마크업만 다시 읽어 규칙·플랫폼 / 검색 최적화·alt·마크업 / PSD 레이어 대응을 본다 */}
+          {/* Claude 에게 구조 계획을 새로 받은 결과(run.planMs 있음)면 정밀 검토까지 자동. 「비용 없음」 다시 계산·이전 결과로 되돌리기·다시 연 작업은 단추로 (코드 리뷰 지적 2026-11-27) */}
+          <div id="pf-review" />
+          <ReviewPanel result={result} loaded={loaded} html={edited ?? result.parsed.html} onDone={(passes, claude) => setReview({ passes, claude })} onBusy={setReviewBusy} />
+
+          {issues.length > 0 && (
+            <ul className="checks">
+              {issues.map((c, i) => (
+                <li key={i} className={`check check--${c.level}`}>
+                  <CheckLine c={c} />
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* 문제 자동 수정: 고칠 수 있는 것(구조 계획)만 Claude 1회로, 나머지(코드 쪽)는 진단 정보 복사 */}
+          {codeEngine && (codeSide.length > 0 || autoFix) && (
+            <div className={`autofix ${autoFix ? (autoFix.ok ? 'is-ok' : 'is-kept') : ''}`}>
+              {autoFix && <p className="autofix__result">{autoFix.text}</p>}
+              {codeSide.length > 0 && (
+                <div className="autofix__row">
+                  <Button size="sm" onClick={() => copy('diag', diagnostics(result, loaded, run, review))}>
+                    {copied === 'diag' ? '복사됨' : copied === 'fail:diag' ? '복사 실패' : '진단 정보 복사'}
+                  </Button>
+                  <span className="autofix__note">
+                    나머지 {codeSide.length}건({layoutOff ? '위치 어긋남 등 ' : ''}마크업 코드 쪽 문제)은 Claude 에게 다시 시켜도 바뀌지 않아 자동으로 고치지 않습니다. 진단 정보를 복사해 관리자에게 보내 주세요.
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+          {passed.length > 0 && (
+            <Fold className="fold" summary={<>통과한 점검 {passed.length}개</>}>
+              <ul className="checks">
+                {passed.map((c, i) => (
+                  <li key={i} className="check check--ok">
+                    <CheckLine c={c} />
+                  </li>
+                ))}
+              </ul>
+            </Fold>
+          )}
+
+
+          <div className={`getit${gate !== 'ready' ? ' getit--hold' : ''}`}>
             {/* 머리: 제목 왼쪽, 점검 배지·걸린 시간 오른쪽 한 줄 */}
             <div className="getit__head">
             <h3 className="getit__title">
-              마크업이 준비됐습니다{nErr > 0 && <em> — 오류 {nErr}건 확인 필요</em>}
+              {gate === 'ready' ? '마크업이 준비됐습니다' : '마무리'}
             </h3>
             <div className="getit__badges">
-              {nErr > 0 && <span className="badge badge--error">오류 {nErr}</span>}
+              {errTotal > 0 && <span className="badge badge--error">오류 {errTotal}</span>}
               {nWarn > 0 && <span className="badge badge--warn">확인 {nWarn}</span>}
               <span className="badge badge--ok">통과 {passed.length}</span>
               {/* 이번 변환(또는 수정 요청)에 걸린 시간 — 대부분은 Claude 구조 계획, 나머지는 이 PC 의 코드 생성·점검 */}
@@ -388,12 +450,45 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               )}
             </div>
             </div>
-            {/* 담당자가 할 일은 「복사 → 붙여넣기」 하나. 이미지 업로드는 복사 버튼이 알아서 먼저 한다 */}
+            {/* 두 단계 (2026-11-27 사용자): ① 문제 확인 — 오류가 남았으면 고치거나 확인 체크 → ② 이미지 올리고 HTML 복사 */}
+            <ol className="getit__steps2">
+              <li className={`gstep gstep--${gate}`}>
+                <span className="gstep__no" aria-hidden="true">{gate === 'ready' ? <CheckMark className="gstep__ico" /> : 1}</span>
+                <div className="gstep__body">
+                  <p className="gstep__title">
+                    {gate === 'busy' ? <><span className="spinner" /> 재검증 진행 중 — 끝나면 결과를 보고 복사하세요</> : gate === 'blocked' ? <span>오류 <b>{errTotal}건</b>이 남아 있습니다</span> : <span>문제 없음{nWarn > 0 ? <small> · 확인 {nWarn}건은 참고만</small> : null}</span>}
+                  </p>
+                  {gate !== 'ready' && (
+                    <div className="gstep__actions">
+                      {gate === 'blocked' && fixable.length > 0 && onAutoFix && (
+                        <Button variant="primary" size="sm" disabled={running} onClick={onAutoFix}>
+                          문제 자동 수정 ({fixable.length}건)
+                        </Button>
+                      )}
+                      <Button size="sm" onClick={() => document.getElementById('pf-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>
+                        검토 내용 보기
+                      </Button>
+                    </div>
+                  )}
+                  {gate === 'blocked' && fixable.length > 0 && onAutoFix && (
+                    <p className="gstep__note">구조 계획으로 고칠 수 있는 문제만 고칩니다 · Claude 1회(1~2분) · <b>나아졌을 때만</b> 새 결과로 바꿉니다</p>
+                  )}
+                  {gate === 'blocked' && (
+                    <CheckField className="gstep__ack" checked={copyAck} onChange={setCopyAck}>
+                      오류를 확인했고, 이대로 올려도 됩니다 (오탐이거나 감수할 문제)
+                    </CheckField>
+                  )}
+                </div>
+              </li>
+              <li className={`gstep ${gate === 'blocked' && !copyAck ? 'gstep--locked' : ''}`}>
+                <span className="gstep__no" aria-hidden="true">2</span>
+                <div className="gstep__body">
+                  <p className="gstep__title"><span>이미지 올리고 HTML 복사{gate === 'blocked' && !copyAck && <small> · 1단계를 마치면 눌립니다</small>}</span></p>
             <div className="getit__main">
               <div className="getit__btns">
               <button
-                className={`btn ${autoUpload || imgReady ? 'btn--primary' : ''} getit__copy`}
-                disabled={!result.parsed.html || upBusy || (!autoUpload && !imgReady) || dirty}
+                className={`btn ${(autoUpload || imgReady) && (gate === 'ready' || (gate === 'blocked' && copyAck)) ? 'btn--primary' : ''} getit__copy`}
+                disabled={!result.parsed.html || upBusy || (!autoUpload && !imgReady) || dirty || (gate === 'blocked' && !copyAck)}
                 onClick={() => copyHtml()}
               >
                 {upBusy ? (
@@ -420,7 +515,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
               </div>
               <p className="getit__paste">
                 <span className="getit__where">
-                  <b>{openmarket ? '오픈마켓 상세 편집기의 HTML 입력' : '고도몰 상품 상세설명 (HTML 모드)'}</b>
+                  <b>{openmarket ? '오픈마켓 상세 편집기의 HTML 입력' : result.meta.target === 'board' ? '고도몰 게시글 내용 (HTML 모드)' : '고도몰 상품 상세설명 (HTML 모드)'}</b>
                   {autoUpload ? '에 붙여넣으면 끝입니다.' : '에 붙여넣습니다 — 그 전에 아래 3단계로 이미지를 먼저 올려 주세요.'}
                 </span>
                 {dirty ? (
@@ -452,6 +547,9 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 )}
               </p>
             </div>
+                </div>
+              </li>
+            </ol>
             {missing.length > 0 && (
               <p className="msg msg--error" role="alert">
                 복사하지 않았습니다 — 이 HTML 이 쓰는 이미지 {missing.length}장이 만들어지지 않았습니다 ({missing.slice(0, 3).join(', ')}{missing.length > 3 ? ' …' : ''}). 그대로 붙여넣으면 그림이 빈칸으로 나옵니다. 아래 점검의 「이미지 자르기 실패」를 확인하고 다시 만들어 주세요.
@@ -549,54 +647,8 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
           </div>
 
           {/* 등록한 페이지 링크 — 복사·붙여넣기(받아 가기 상자)가 끝난 뒤의 일이라 상자 밖에 따로 둔다 */}
-          {godo && <GodoCheckBox html={copySection(result.parsed.html)} folder={`/${result.meta.channel}/${result.meta.slug}/`} link={regLink} onLink={onRegLink} />}
-
-          {issues.length > 0 && (
-            <ul className="checks">
-              {issues.map((c, i) => (
-                <li key={i} className={`check check--${c.level}`}>
-                  <CheckLine c={c} />
-                </li>
-              ))}
-            </ul>
-          )}
-          {/* 문제 자동 수정: 고칠 수 있는 것(구조 계획)만 Claude 1회로, 나머지(코드 쪽)는 진단 정보 복사 */}
-          {codeEngine && (fixable.length > 0 || codeSide.length > 0 || autoFix) && (
-            <div className={`autofix ${autoFix ? (autoFix.ok ? 'is-ok' : 'is-kept') : ''}`}>
-              {autoFix && <p className="autofix__result">{autoFix.text}</p>}
-              {fixable.length > 0 && onAutoFix && (
-                <div className="autofix__row">
-                  <Button variant="primary" size="sm" disabled={running} onClick={onAutoFix}>
-                    문제 자동 수정 ({fixable.length}건)
-                  </Button>
-                  <span className="autofix__note">
-                    빠진 글자·제목 구조처럼 구조 계획으로 고칠 수 있는 문제만 고칩니다 · Claude 1회(1~2분, 새로 만들 때와 비슷한 비용) · <b>나아졌을 때만</b> 새 결과로 바꿉니다
-                  </span>
-                </div>
-              )}
-              {codeSide.length > 0 && (
-                <div className="autofix__row">
-                  <Button size="sm" onClick={() => copy('diag', diagnostics(result, loaded, run))}>
-                    {copied === 'diag' ? '복사됨' : copied === 'fail:diag' ? '복사 실패' : '진단 정보 복사'}
-                  </Button>
-                  <span className="autofix__note">
-                    나머지 {codeSide.length}건({layoutOff ? '위치 어긋남 등 ' : ''}마크업 코드 쪽 문제)은 Claude 에게 다시 시켜도 바뀌지 않아 자동으로 고치지 않습니다. 진단 정보를 복사해 관리자에게 보내 주세요.
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-          {passed.length > 0 && (
-            <Fold className="fold" summary={<>통과한 점검 {passed.length}개</>}>
-              <ul className="checks">
-                {passed.map((c, i) => (
-                  <li key={i} className="check check--ok">
-                    <CheckLine c={c} />
-                  </li>
-                ))}
-              </ul>
-            </Fold>
-          )}
+          {/* 등록 확인은 상품 상세설명(오픈 API)과 비교한다 — 게시판 글은 상품이 아니라 뺀다 (7-2-2) */}
+          {godo && result.meta.target !== 'board' && <GodoCheckBox html={copySection(result.parsed.html)} folder={`/${result.meta.channel}/${result.meta.slug}/`} link={regLink} onLink={onRegLink} />}
 
           <Tabs.Root value={tab} onValueChange={(v) => setTab(v as Tab)}>
           <Tabs.List className="tabs" aria-label="결과 보기">
@@ -671,7 +723,7 @@ export default function ResultPanel({ run, result, loaded, revisionCount, onRevi
                 const k = imageKind(im.file, use.get(im.file));
                 const alt = use.get(im.file)?.alt ?? im.alt;
                 return (
-                  <figure key={im.file} className={`images__item${im.blob.size > 1024 * 1024 ? ' is-big' : ''}`}>
+                  <figure key={im.file} className={`images__item${im.blob.size > IMAGE_MAX_BYTES ? ' is-big' : ''}`}>
                     <img className="images__thumb" src={im.url} alt={alt || ''} />
                     <figcaption className="images__cap">
                       <em className={`images__kind images__kind--${k.tone}`}>{k.label}</em>
@@ -748,7 +800,7 @@ function Preview({ result, loaded }: { result: Result; loaded: Loaded }) {
   // 고도몰은 상세 영역이 최대 860px(7-2) → 결과물은 860px 로 줄어든다. 미리보기 칸도 그 폭으로 열어 양옆 흰 여백이 생기지 않게 하고,
   // PSD 이미지와 같은 크기로 보이도록 그만큼 키워 보여 준다 (오픈마켓은 PSD 폭 그대로)
   // 오픈마켓은 플랫폼 폭(shared/markets.ts)으로 줄여 만들었으니 그 폭으로 연다 (고도몰은 860 상한)
-  const width = result.meta.channel === 'openmarket' ? marketWidth(result.meta.market, W) : godoMaxWidth(W);
+  const width = result.meta.channel === 'openmarket' ? marketWidth(result.meta.market, W) : godoMaxWidth(W, result.meta.target);
   const fit = W / width;
   const [zoom, setZoom] = useState(0.5);
   const frame = useRef<HTMLIFrameElement>(null);

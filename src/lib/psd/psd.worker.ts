@@ -5,6 +5,7 @@ import type { Tile } from '../../../shared/types';
 import { extractSummary, isUsable } from './extract';
 import { isBlank, pixelsToCanvas, renderDocument } from './composite';
 import { hybridBackground } from './hybrid';
+import { encodeJpegUnder } from './jpeg444';
 import type { CutResult, WorkerIn, WorkerOut } from './protocol';
 
 // 워커에는 DOM 캔버스가 없으므로 OffscreenCanvas 로 대신한다 (패턴·썸네일 등 일부 데이터가 캔버스를 씀)
@@ -145,7 +146,7 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
     }
 
     if (msg.type === 'cut') {
-      // plan.images 대로 자른다. 사진·배경 JPG 품질 82 (규칙 6절 80~85)
+      // plan.images 대로 자른다
       const results: CutResult[] = [];
       const errors: string[] = [];
       for (const im of msg.images) {
@@ -154,8 +155,9 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
           const h = Math.round(im.y1 - im.y0);
           if (w <= 0 || h <= 0) throw new Error('영역이 비어 있음');
           const c = new OffscreenCanvas(w, h);
-          const ctx = c.getContext('2d')!;
           const isJpg = /\.jpe?g$/i.test(im.file);
+          // JPG 는 픽셀을 한 번 읽어 인코딩한다 → CPU 캔버스로 두어 GPU 왕복을 피한다
+          const ctx = c.getContext('2d', { willReadFrequently: isJpg })!;
           if (isJpg) {
             ctx.fillStyle = '#fff';
             ctx.fillRect(0, 0, w, h);
@@ -180,12 +182,8 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
               }
             }
           }
-          // JPG 는 1MB(규칙 6절 목표)를 넘으면 품질을 조금씩 낮춰 다시 만든다 (업로드 한도 5MB 에 걸리지 않게)
-          let blob = await c.convertToBlob(isJpg ? { type: 'image/jpeg', quality: 0.82 } : { type: 'image/png' });
-          for (const q of [0.75, 0.68, 0.6]) {
-            if (!isJpg || blob.size <= 1024 * 1024) break;
-            blob = await c.convertToBlob({ type: 'image/jpeg', quality: q });
-          }
+          // JPG 는 브라우저 인코더(늘 4:2:0) 대신 4:4:4 인코더로 — 이유·품질 순서는 jpeg444.ts
+          const blob = isJpg ? new Blob([encodeJpegUnder(ctx.getImageData(0, 0, w, h))], { type: 'image/jpeg' }) : await c.convertToBlob({ type: 'image/png' });
           results.push({ file: im.file, blob, width: w, height: h });
         } catch (err) {
           errors.push(`${im.file}: ${err instanceof Error ? err.message : String(err)}`);

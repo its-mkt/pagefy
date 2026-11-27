@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from './Button';
 import { Dialog, DropdownMenu } from 'radix-ui';
 import { filterOn, groupLabel, listInfo, okLink, platformLabel, sameGroup, samePlatform, type Job, type JobFilter, type JobNote, type JobState, type Platform } from '../lib/jobs';
-import { CHANNEL_LABEL } from '../../shared/types';
+import { CHANNEL_LABEL, boardLabel, pickBoard } from '../../shared/types';
 import { MARKETS, type Market } from '../../shared/markets';
 import { fmtBytes } from '../lib/util';
 import { SHARED_ROOT, findSharedPsd } from '../lib/sharedFolder';
@@ -153,6 +153,12 @@ function NameLine({ j }: { j: Job }) {
       {ch && (
         <Tip content={`${om ? '오픈마켓' : '고도몰'} 판매처\n${ch}용으로 만든 결과입니다`} delay={BADGE_TIP_DELAY}>
           <span className={`badge badge--${om ? 'om' : 'godo'} jobs__group jobs__tipbadge`}>{ch}</span>
+        </Tip>
+      )}
+      {/* 고도몰 게시판용 (규칙 7-2-2) — 상품 상세가 기본이라 게시판일 때만 표시 */}
+      {!om && j.settings?.target === 'board' && (
+        <Tip content={'고도몰 게시판용\n본문 최대 980px · 이미지는 /data/post/<채널>/<게시판>/<연도>/ 아래 (상품 상세는 860px · /data/detail/)'} delay={BADGE_TIP_DELAY}>
+          <span className="badge badge--godo jobs__group jobs__tipbadge">{boardLabel(j.settings.channel, pickBoard(j.settings.channel, j.settings.board)) || '게시판'}</span>
         </Tip>
       )}
       {j.note?.test && (

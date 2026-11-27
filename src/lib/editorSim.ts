@@ -2,7 +2,14 @@
 // 근거는 규칙 원본 7-2-1·7-3·7-4 표와 2026-11-25 조사(공식 문서·에디터/사이트 코드·실물·커뮤니티). 각 처리에 근거 수준을 붙여, 확인된 것과 안전 기준(추정)을 구분해 보여 준다.
 // 표를 고치면 여기도 맞춘다 (폭은 shared/markets.ts · shared/width.ts 를 그대로 쓴다). 실제 에디터 코드가 아니므로 첫 등록은 사람이 확인한다 (규칙 9절).
 import { MARKETS, normMarket, type Market } from '../../shared/markets';
-import { GODO_MAX_W } from '../../shared/width';
+import { GODO_MAX_W, godoCap } from '../../shared/width';
+
+/** 고도몰 폭 안내 — 게시판 글은 최대 980px (규칙 7-2-2), 상품 상세는 860px (7-2) */
+export function godoWidthNote(target?: 'board') {
+  return target === 'board'
+    ? `게시판 글 본문 (창 폭 따라) — Pagefy 결과는 최대 ${godoCap(target)}px 로 가운데 (규칙 7-2-2)`
+    : `실제 상세 영역 (아이티켓 1200px·온코어 1280px) — Pagefy 결과는 그 안에서 최대 ${GODO_MAX_W}px 로 가운데 (규칙 7-2)`;
+}
 import type { Channel } from '../../shared/types';
 
 export type EditorId = 'godo' | 'smartstore' | 'coupang' | 'st11' | 'gmarket' | 'auction' | 'lotteon' | 'himart' | 'compuzone';
@@ -286,7 +293,7 @@ export const EDITORS: EditorProfile[] = [
     // 실측(2026-11-25, 화면 1440): 아이티켓 .txt-manual 1200px 안에 Pagefy 결과(ZGX)가 860px 로 가운데 · 온코어 .oc-gv-desc 1280px → 좁은 아이티켓 기준
     pcWidth: 1200,
     pcWidthEv: '관찰',
-    pcWidthNote: '실제 상세 영역 (아이티켓 1200px·온코어 1280px) — Pagefy 결과는 그 안에서 최대 ' + GODO_MAX_W + 'px 로 가운데 (규칙 7-2)',
+    pcWidthNote: godoWidthNote(),
     // 360px 폰에서 아이티켓 323px · 온코어 332px → 좁은 쪽
     mobileWidth: 323,
     mobileWidthEv: '관찰',

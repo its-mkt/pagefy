@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from './components/Button';
 import type { Session } from '@supabase/supabase-js';
-import { type GenerateMeta, type HealthInfo, type PlanBundle, type PsdSummary, type SectionRequest, type UsageInfo, imageBaseUrl } from '../shared/types';
-import { AUTH, CLOUD, collect, fetchHealth, isNoResponse, uploadCheck, uploadFiles, uploadRemove, uploadVerify, type UploadedItem, type UploadTarget } from './lib/api';
+import { GODO_TARGET_LABEL, boardIdOk, boardLabel, pickBoard, type GenerateMeta, type HealthInfo, type PlanBundle, type PsdSummary, type SectionRequest, type UsageInfo, imageBaseUrl } from '../shared/types';
+import { AUTH, CLOUD, collect, fetchHealth, isNoResponse, uploadCheck, uploadFiles, uploadTargetFor, uploadRemove, uploadVerify, type UploadedItem, type UploadTarget } from './lib/api';
 import { canUse, fetchRole, supabase, type Role } from './lib/supabase';
 import { bitmapToUrl, cutImages, localizeHtml, type CutImage } from './lib/images';
 import { checkOutput, copySection, parsePlanOutput, parseSectionOutput, type Check, type ParsedOutput } from './lib/output';
@@ -474,7 +474,7 @@ export default function App() {
       for (const j of todo) {
         if (stop) return;
         const s = j.settings;
-        const target: UploadTarget = { channel: s.channel, slug: s.slug, ...(s.channel === 'openmarket' ? { market: normMarket(s.market) } : {}), publicRoot: s.publicRoot };
+        const target: UploadTarget = uploadTargetFor(s);
         try {
           const remote = await uploadCheck(target);
           if (remote.exists && remote.files.length) {
@@ -706,7 +706,8 @@ export default function App() {
     }
     const settings: Settings = { ...src.settings, channel: to.channel, market: to.channel === 'openmarket' ? normMarket(to.market) : normMarket(src.settings.market) };
     // 같은 묶음이면 계획을 옮기고 설정만 새 판매처로 → 열자마자 비용 없이 그 판매처 마크업이 계산된다
-    const planMeta: GenerateMeta | undefined = src.meta && { ...src.meta, channel: to.channel, market: to.channel === 'openmarket' ? settings.market : undefined };
+    // 올릴 곳(게시판)은 고도몰끼리만 따라간다 — 오픈마켓에는 게시판이 없다
+    const planMeta: GenerateMeta | undefined = src.meta && { ...src.meta, channel: to.channel, market: to.channel === 'openmarket' ? settings.market : undefined, target: to.channel === 'openmarket' ? undefined : src.meta.target, board: to.channel === 'openmarket' ? undefined : src.meta.board };
     const nj = forkJob(src, settings, { keepPlan: true, planMeta, creator: me });
     await putJob(nj).catch((e) => console.warn('[jobs]', e));
     refreshJobs(true);
@@ -989,7 +990,8 @@ export default function App() {
       // 규칙 6-1: 슬러그는 한 번 정하면 바꾸지 않는다 → 이 PC 에서 그 제품에 썼던 슬러그를 다시 쓴다
       const savedSlug = readLocal<Record<string, string>>('pagefy.slugs', {})[name];
       // 추가 지시는 그 PSD 에만 쓰는 값이라 새 PSD 로 가져오지 않는다 (채널·판매처·주소 루트만 이어 쓴다, 2026-11-27)
-      const next: Settings = { ...settings, productName: name, slug: savedSlug || toSlug(name), rev: todayRev(), extra: '' };
+      // 올릴 곳(게시판)은 이어받지 않는다 — 대부분 상품 상세라 새 PSD 는 기본값으로 (2026-11-27)
+      const next: Settings = { ...settings, productName: name, slug: savedSlug || toSlug(name), rev: todayRev(), extra: '', target: undefined, board: undefined };
       // 새 PSD 면 읽는 동안 보이는 설정 칸에도 이전 작업의 담당자·메모가 남지 않게 바로 비운다
       if (!job) setNote(freshNote());
       /** 먼저 띄운 화면 (PSD 확인·합성 미리보기) — 글자 뺀 배경은 아직 */
@@ -1053,7 +1055,7 @@ export default function App() {
   }
 
   const meta: GenerateMeta = useMemo(
-    () => ({ productName: settings.productName.trim(), channel: settings.channel, ...(settings.channel === 'openmarket' ? { market: settings.market } : {}), slug: settings.slug, rev: settings.rev, publicRoot: settings.publicRoot.trim(), date: kstDate() }),
+    () => ({ productName: settings.productName.trim(), channel: settings.channel, ...(settings.channel === 'openmarket' ? { market: settings.market } : settings.target === 'board' ? { target: 'board' as const, board: pickBoard(settings.channel, settings.board) } : {}), slug: settings.slug, rev: settings.rev, publicRoot: settings.publicRoot.trim(), date: kstDate() }),
     [settings],
   );
   const baseUrl = imageBaseUrl(meta);
@@ -1131,11 +1133,11 @@ export default function App() {
     const kept = bundle.plan.engine === 'code' ? new Set(keepMap(L.summary, bundle.plan, m.channel === 'openmarket').keys()) : undefined;
     pushStatus('PSD 위치 대조 중 (PSD 폭 렌더·모바일 360px)…');
     try {
-      layout = await checkLayout(previewHtml, L.summary, kept, marketWidth(m.market, L.summary.width));
+      layout = await checkLayout(previewHtml, L.summary, kept, marketWidth(m.market, L.summary.width), m.target);
     } catch (e) {
       extraChecks.push({ level: 'warn', message: `위치 대조 실패: ${(e as Error).message}` });
     }
-    const checks = [...extraChecks, ...(layout?.checks ?? []), ...checkOutput(parsed, L.summary, base, kept)];
+    const checks = [...extraChecks, ...(layout?.checks ?? []), ...checkOutput(parsed, L.summary, base, kept, m.target)];
     const next: Result = { meta: m, baseUrl: base, bundle, planReport, planRaw, sections, parsed, images, previewHtml, checks, layout };
     if (commit) showResult(next);
     return next;
@@ -1551,6 +1553,10 @@ export default function App() {
       set({ phase: 'checking', done: 0, total });
       const want = await Promise.all(r.images.map(async (im) => ({ file: im.file, size: im.blob.size, sha256: await sha256Hex(im.blob) })));
       const remote = await uploadCheck(target, ac.signal);
+      // 안전장치: 서버가 올릴 폴더가 HTML 속 이미지 주소와 다르면 멈춘다 — 다른 작업(예: 같은 슬러그의 상품 상세) 이미지를 덮어쓰지 않게.
+      // 2026-11-27 게시판 결과가 /data/detail/ 로 올라가려던 일 (화면 코드가 옛 것이었던 것으로 보임) 뒤에 넣음
+      if (remote.base.replace(/\/+$/, '') !== r.baseUrl.replace(/\/+$/, ''))
+        throw new Error(`올릴 폴더(${remote.base}/)가 HTML 이미지 주소(${r.baseUrl}/)와 달라 올리지 않았습니다. 화면을 새로고침(Ctrl+Shift+R)한 뒤 다시 눌러 주세요. 그래도 같으면 서버(yarn dev)를 껐다 켜 주세요.`);
       const onServer = new Set(remote.files.map((f) => f.file));
       // 같은 이름이 서버에 있는 것: 내용이 같으면 건너뛰고, 다르면 덮어쓸 목록
       const same = new Set<string>();
@@ -1726,11 +1732,15 @@ export default function App() {
         result.meta.productName !== meta.productName ? `제품명 「${result.meta.productName}」 → 「${meta.productName}」` : '',
         result.meta.slug !== meta.slug || result.meta.publicRoot !== meta.publicRoot ? '이미지 폴더·주소' : '',
         result.meta.rev !== meta.rev ? '작업 판(rev)' : '',
+        (result.meta.target ?? '') !== (meta.target ?? '') || (result.meta.board ?? '') !== (meta.board ?? '')
+          ? `올릴 곳 ${GODO_TARGET_LABEL[result.meta.target ?? 'detail']}${result.meta.target === 'board' ? ` · ${boardLabel(result.meta.channel, result.meta.board)}` : ''} → ${GODO_TARGET_LABEL[meta.target ?? 'detail']}${meta.target === 'board' ? ` · ${boardLabel(meta.channel, meta.board)}` : ''}`
+          : '',
       ].filter(Boolean)
     : [];
   // 만들기 버튼이 왜 안 눌리는지 담당자에게 알려 준다 — 계속 막는 이유(blockers)와 몇 초면 풀리는 상태(waiting)를 나눈다
   const blockers = [
     !meta.productName && '제품명을 입력하세요.',
+    meta.target === 'board' && !boardIdOk(meta.board) && '게시판 폴더 이름을 영문 소문자·숫자·하이픈으로 넣으세요.',
     !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(meta.slug) && SLUG_BLOCK,
     !/^https:\/\//.test(meta.publicRoot) && '이미지 공개 주소 루트는 https:// 로 시작해야 합니다.',
     healthError && '생성 서버에 연결하지 못했습니다. 위쪽 빨간 표시를 확인하세요.',
@@ -1967,7 +1977,7 @@ export default function App() {
                   <Button
                     type="button"
                     size="sm"
-                    onClick={() => setSettings((s) => ({ ...s, productName: result.meta.productName, channel: result.meta.channel, ...(result.meta.market ? { market: result.meta.market } : {}), slug: result.meta.slug, rev: result.meta.rev, publicRoot: result.meta.publicRoot }))}
+                    onClick={() => setSettings((s) => ({ ...s, productName: result.meta.productName, channel: result.meta.channel, ...(result.meta.market ? { market: result.meta.market } : {}), slug: result.meta.slug, rev: result.meta.rev, publicRoot: result.meta.publicRoot, target: result.meta.target, board: result.meta.board }))}
                   >
                     설정을 결과대로 되돌리기
                   </Button>
@@ -2043,12 +2053,12 @@ async function sha256Hex(b: Blob): Promise<string> {
  * images = [이미지 서버 주소, 미리보기 주소] (업로드 전 이미지는 브라우저 안 그림으로 보이게. 저장된 결과는 서버 주소 그대로라 빈 목록)
  */
 function testerSourceOf(html: string, m: GenerateMeta, images: [string, string][]): TesterSource {
-  return { html: copySection(html), label: `${m.productName} · ${platformLabel(m)}`, product: m.productName, editor: editorFor(m), images };
+  return { html: copySection(html), label: `${m.productName} · ${platformLabel(m)}`, product: m.productName, editor: editorFor(m), images, ...(m.target === 'board' ? { target: 'board' as const } : {}) };
 }
 
 /** 업로드할 곳: <채널>/<슬러그>/, 오픈마켓은 openmarket/<플랫폼>/<슬러그>/ (규칙 6-1 — shared/types.ts imageFolder 와 같은 규칙) */
 function uploadTargetOf(r: { meta: GenerateMeta }): UploadTarget {
-  return { channel: r.meta.channel, slug: r.meta.slug, ...(r.meta.channel === 'openmarket' ? { market: normMarket(r.meta.market) } : {}), publicRoot: r.meta.publicRoot };
+  return uploadTargetFor(r.meta);
 }
 
 /** 이미 서버에 있는 그림의 크기 (덮어쓰기 안내에서 크기가 바뀌는지 보려고). 열리지 않으면 null */

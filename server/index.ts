@@ -4,12 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
-import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from '../shared/types.ts';
-import { buildPlanMessages, buildSectionMessages, buildSystem } from '../core/prompt.ts';
+import type { HealthInfo, PlanRequest, ReviewRequest, SectionRequest, StreamEvent } from '../shared/types.ts';
+import { buildPlanMessages, buildReviewMessages, buildSectionMessages, buildSystem } from '../core/prompt.ts';
 import { runClaude, usageOfError } from '../core/run.ts';
-import { validatePlan, validateSection } from '../core/validate.ts';
-import { EFFORT, MODEL, PLAN_RUN, RUN, describeError, getClient } from './claude.ts';
-import { mockPlanOutput, mockSectionOutput, mockStream } from './mock.ts';
+import { validatePlan, validateReview, validateSection } from '../core/validate.ts';
+import { EFFORT, MODEL, PLAN_RUN, REVIEW_RUN, RUN, describeError, getClient } from './claude.ts';
+import { mockPlanOutput, mockReviewOutput, mockSectionOutput, mockStream } from './mock.ts';
 import { loadRules } from './rules.ts';
 import { type UploadFile, type UploadTarget, checkFolder, checkTarget, deleteFiles, putFiles, undoUpload, verifyFiles, type UploadedItem } from '../core/upload.ts';
 import { localFtpConfig, nodeDial, readSecretsFile } from './ftpNode.ts';
@@ -107,6 +107,17 @@ api.post('/section', express.json({ limit: '40mb' }), async (req, res) => {
   await streamTo(res, async (send, signal) => {
     if (MOCK) return mockStream(mockSectionOutput(body), send, signal);
     await runClaude(getClient(), RUN, buildSystem(loadRules().text), buildSectionMessages(body), timed(`section ${body.sectionId}`, RUN.effort, send), signal);
+  });
+});
+
+// 마크업 재검증 — Claude 정밀 검토 (core/prompt.ts buildReviewMessages)
+api.post('/review', express.json({ limit: '10mb' }), async (req, res) => {
+  const body = req.body as ReviewRequest;
+  if (!precheck(res, validateReview(body))) return;
+  await streamTo(res, async (send, signal) => {
+    if (MOCK) return mockStream(mockReviewOutput(body), send, signal);
+    send({ type: 'status', message: `정밀 검토 요청 중… (마크업 ${Math.round(body.markup.length / 1000)}천 자, 텍스트 ${body.texts.length}개)` });
+    await runClaude(getClient(), REVIEW_RUN, buildSystem(loadRules().text), buildReviewMessages(body), timed('review', REVIEW_RUN.effort, send), signal);
   });
 });
 
@@ -216,7 +227,13 @@ app.use(`${BASE_PATH}/api`, api);
 
 // 빌드한 화면(dist)이 있으면 /pagefy/ 에서 같이 서비스 (yarn build → yarn start 로 한 포트에서 사용)
 const dist = path.join(HERE, '..', 'dist');
-if (fs.existsSync(dist)) {
+// yarn dev 중에는 dist 를 내주지 않고 개발 화면(localhost:1100)으로 보낸다.
+// dist 는 배포용 빌드라 모든 요청을 배포된 Supabase 함수로 보낸다 → 로컬에서 고친 서버 기능이 안 쓰인다
+// (2026-11-27: localhost:1101/pagefy/ 에서 게시판 업로드가 배포 함수(옛 코드)로 가 /data/detail 로 잡히고 재검증이 404 난 원인)
+const DEV_RUN = /^dev/.test(process.env.npm_lifecycle_event || '');
+if (DEV_RUN) {
+  app.get(['/', BASE_PATH, new RegExp(`^${BASE_PATH}/(?!api/).*$`)], (req, res) => res.redirect(`http://localhost:1100/${req.originalUrl.slice(BASE_PATH.length).replace(/^\/+/, '')}`)); // 작업 주소(?markup=…)는 그대로 넘긴다
+} else if (fs.existsSync(dist)) {
   app.get('/', (_req, res) => res.redirect(`${BASE_PATH}/`));
   app.use(BASE_PATH, express.static(dist));
   app.get(new RegExp(`^${BASE_PATH}(/(?!api/).*)?$`), (_req, res) => res.sendFile(path.join(dist, 'index.html')));
