@@ -4,6 +4,7 @@ import { fontFaces, pretendardChars } from './fontLock';
 import { INLINE_ROW_STYLE, keepMap } from './codegen';
 import { GODO_MAX_W, godoMaxWidth } from '../../shared/width';
 import { UPLOAD_FILE_RE } from '../../core/upload';
+import { MARKETS, type Market } from '../../shared/markets';
 
 /** 합친 결과 (점검·미리보기·저장에 쓰는 모양) */
 export interface ParsedOutput {
@@ -225,7 +226,10 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     if (/naver\.me|bit\.ly|han\.gl/i.test(copy)) add('error', '외부 단축 URL (7-1 금지)');
     const imgs = [...copy.matchAll(/<img\b[^>]*>/gi)].map((m) => m[0]);
     const noAlt = imgs.filter((t) => !/\salt=/.test(t));
-    const noSize = imgs.filter((t) => !/\swidth=/.test(t) || !/\sheight=/.test(t));
+    // G마켓·옥션(ESM)은 가이드대로 height 를 일부러 뺀다 (codegen 섹션 이미지) — 이미지 주소 폴더 openmarket/<플랫폼>/ 로 안다
+    const market = /\/openmarket\/([a-z0-9]+)\//.exec(baseUrl)?.[1] as Market | undefined;
+    const noHeightOk = !!(market && MARKETS[market]?.rules?.noMaxWidth);
+    const noSize = imgs.filter((t) => !/\swidth=/.test(t) || (!noHeightOk && !/\sheight=/.test(t)));
     if (noAlt.length) add('error', `alt 없는 <img> ${noAlt.length}개`);
     if (noSize.length) add('warn', `width·height 속성 없는 <img> ${noSize.length}개 (7-1)`);
     const h2 = (copy.match(/<h2[\s>]/gi) || []).length;

@@ -4,6 +4,7 @@ import { initializeCanvas, readPsd, type Layer, type Psd } from 'ag-psd';
 import type { Tile } from '../../../shared/types';
 import { extractSummary, isUsable } from './extract';
 import { isBlank, pixelsToCanvas, renderDocument } from './composite';
+import { hybridBackground } from './hybrid';
 import type { CutResult, WorkerIn, WorkerOut } from './protocol';
 
 // 워커에는 DOM 캔버스가 없으므로 OffscreenCanvas 로 대신한다 (패턴·썸네일 등 일부 데이터가 캔버스를 씀)
@@ -94,6 +95,16 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
       if (!compositeCanvas) {
         summary.warnings.unshift('PSD 안에 합성 이미지가 없어(최대 호환성 꺼짐) 레이어를 직접 합성했습니다. 효과·조정 레이어가 빠질 수 있으니, 가능하면 Photoshop에서 "최대 호환성"을 켜고 다시 저장한 PSD를 쓰세요.');
         compositeCanvas = renderDocument(psd, { skipText: false });
+      } else {
+        // 원본 합성이 있으면 글자 뺀 배경도 원본을 기본으로 하고, 텍스트 자리만 브라우저 합성으로 덮는다 (hybrid.ts, 2026-11-27)
+        const hy = hybridBackground(compositeCanvas, notextCanvas, summary.texts);
+        notextCanvas = hy.canvas;
+        // 조정 레이어·표준 외 혼합 모드·못 그리는 효과는 이제 글자 둘레에서만 문제가 된다 → 그 경우는 아래 경계 경고가 잡으므로 일반 경고는 뺀다
+        summary.warnings = summary.warnings.filter((w) => !/^조정 레이어 \d+개|^표준 외 혼합모드|^"글자 뺀 배경"에 못 그리는 효과/.test(w));
+        if (hy.seams.length)
+          summary.warnings.push(
+            `글자 ${hy.seams.length}개 둘레는 배경을 브라우저가 다시 그린 색이 원본과 달라 네모 경계가 보일 수 있습니다: ${hy.seams.slice(0, 5).map((s) => `"${s.text}"`).join(', ')}${hy.seams.length > 5 ? ' …' : ''}. 결과 미리보기에서 확인하고, 보이면 그 글자를 이미지로 남기도록 수정 요청하세요.`,
+          );
       }
       psd.imageData = undefined;
       // 큰 PSD 는 레이어 픽셀만 수 GB 라 PC 가 느려진다. 합성이 끝났으니 나중에 "layer" 소스로 자를 수 있는
