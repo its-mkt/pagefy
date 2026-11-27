@@ -87,6 +87,9 @@ function enabledEffects(layer: Layer): string[] | undefined {
   return out.length ? out : undefined;
 }
 
+/** 그룹에 걸려 있어도 글자 효과로 넘겨 CSS 로 옮길 수 있는 효과 (codegen KEEP_FX 와 같은 목록) */
+const LIFT_FX = ['dropShadow', 'outerGlow', 'colorOverlay', 'stroke', 'gradientOverlay'];
+
 function kindOf(layer: Layer): LayerInfo['kind'] {
   if (layer.children) return 'group';
   if (layer.text) return 'text';
@@ -541,7 +544,12 @@ export function extractSummary(psd: Psd, fileName: string): PsdSummary {
   // groupOpacity: 바깥 그룹들의 불투명도 곱 (텍스트 글자색 투명도에 반영)
   // groupWhy: 바깥 그룹의 효과·혼합 모드 — 안의 글자는 PSD 에서 그 영향을 받아 보이므로 CSS 글자로 같게 못 낸다 → 이미지로
   // maskOwners: 마스크가 있는 바깥 그룹들 — 마스크가 그 글자를 실제로 가릴 때만 이미지로 (레이아웃용 사각 마스크는 글자를 안 가림)
-  const walk = (children: Layer[] | undefined, path: string, groupOpacity = 1, groupWhy: string | null = null, maskOwners: Layer[] = []) => {
+  /**
+   * groupFx: 바깥 그룹에 걸린 효과가 모두 CSS 로 옮길 수 있는 것(그림자·외부 광선·색상 오버레이·획·그라데이션 오버레이)일 때 그 효과.
+   * 효과 없는 글자에는 그룹 효과를 글자 효과로 넘긴다 — 치수선+글자 묶음(ZGX "150mm") 처럼 그룹에 획·색을 건 글자가 이미지가 되지 않게 (2026-11-27, 재검증 지적).
+   * 옮기지 못하는 값이면 textInfo 가 예전처럼 이미지로 남긴다
+   */
+  const walk = (children: Layer[] | undefined, path: string, groupOpacity = 1, groupWhy: string | null = null, maskOwners: Layer[] = [], groupFx: { fx: Layer['effects']; name: string } | null = null) => {
     let baseOk = true; // 클리핑 기준(아래쪽 클리핑 아닌 레이어)이 보이는지 — 숨긴 기준에 클리핑된 레이어는 화면에 안 나온다
     for (const layer of children || []) {
       const name = layer.name ?? '';
@@ -578,7 +586,9 @@ export function extractSummary(psd: Psd, fileName: string): PsdSummary {
       layers.push(info);
 
       if (kind === 'text') {
-        const ti = textInfo(layer, path, psd.imageResources?.globalAngle ?? 120);
+        const ownFx = enabledEffects(layer);
+        const ti = textInfo(groupFx && !ownFx ? { ...layer, effects: groupFx.fx } : layer, path, psd.imageResources?.globalAngle ?? 120);
+        if (ti && groupFx && ownFx && !ti.bakeHint) ti.bakeHint = `그룹 "${groupFx.name}"의 효과와 글자 자신의 효과가 겹친 글자`;
         if (ti) {
           const op = r2(groupOpacity * (layer.opacity ?? 1));
           if (op < 1) ti.opacity = op;
@@ -593,15 +603,18 @@ export function extractSummary(psd: Psd, fileName: string): PsdSummary {
       }
       if (layer.children) {
         const gfx = (enabledEffects(layer) || []).filter((f) => !f.startsWith('fill '));
+        const plainBlend = !layer.blendMode || ['normal', 'pass through'].includes(layer.blendMode);
+        // 바깥 그룹 효과를 이미 넘겨받는 중에 또 효과 그룹이 있으면 겹친 효과라 이미지로
+        const liftFx = !groupWhy && !groupFx && gfx.length > 0 && plainBlend && gfx.every((f) => LIFT_FX.includes(f));
         const why =
           groupWhy ??
-          (gfx.length
+          (gfx.length && !liftFx
             ? `그룹 "${name}"의 효과(${gfx.join(', ')})가 걸린 글자`
             : layer.blendMode && !['normal', 'pass through'].includes(layer.blendMode)
               ? `그룹 "${name}"의 혼합 모드(${layer.blendMode}) 안 글자`
               : null);
         const hasMask = (layer.mask && !layer.mask.disabled) || (layer.vectorMask && !layer.vectorMask.disable);
-        walk(layer.children, path ? `${path}/${name}` : name, groupOpacity * (layer.opacity ?? 1), why, hasMask ? [...maskOwners, layer] : maskOwners);
+        walk(layer.children, path ? `${path}/${name}` : name, groupOpacity * (layer.opacity ?? 1), why, hasMask ? [...maskOwners, layer] : maskOwners, liftFx ? { fx: layer.effects, name } : gfx.length ? null : groupFx);
       }
     }
   };

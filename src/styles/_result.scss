@@ -171,13 +171,20 @@
 
   &__actions.actions { margin-top: $sp-4; gap: $sp-2; }
 
-  // 할 일 하나: HTML 복사 → 붙여넣기
+  // 두 단계 (2026-11-27 사용자): ① 문제 확인 → ② 이미지 올리고 HTML 복사. 왼쪽 번호 원 + 세로 이음선
+  &__steps2 {
+    margin: $sp-4 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 0;
+  }
+
+  // 할 일: HTML 복사(버튼 줄) → 붙여넣을 곳 안내(아래 줄)
   &__main {
-    margin-top: $sp-4;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 0.5rem 1rem;
+    margin-top: $sp-2;
+    display: grid;
+    gap: $sp-2;
   }
   // 복사(주) + 에디터 미리보기(보조) 버튼 묶음 — 좁으면 안내 글이 아래로
   &__btns { display: flex; flex-wrap: wrap; gap: 0.5rem; }
@@ -185,7 +192,7 @@
   &__copy.btn { font-weight: 600; }
   &__paste {
     margin: 0;
-    flex: 1 1 16rem;
+
     display: grid;
     gap: 0.125rem;
     font-size: 0.8125rem;
@@ -219,7 +226,7 @@
     b { color: var(--red-12); }
   }
   &__undo-check { display: flex; gap: 0.5rem; align-items: center; cursor: pointer; color: var(--ink); }
-  &__undo-warn { color: var(--red-11); font-weight: 600; }
+  &__undo-warn { color: var(--err); font-weight: 600; }
   &__undo-actions { display: flex; gap: 0.5rem; }
   // 덮어쓰기 안내 — 되돌리기 상자와 같은 모양, 주의(노랑) 색
   &__over {
@@ -286,6 +293,62 @@
   word-break: break-all;
 }
 
+// 받아 가기 단계 한 칸 — 번호 원(28px) + 내용. 다음 단계와 세로선으로 잇는다
+.gstep {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1.75rem 1fr;
+  gap: $sp-3;
+  padding-bottom: $sp-5;
+  &:last-child { padding-bottom: 0; }
+  &:not(:last-child)::before {
+    content: '';
+    position: absolute;
+    left: calc(0.875rem - 0.5px);
+    top: 2rem;
+    bottom: 0.25rem;
+    width: 1px;
+    background: var(--line);
+  }
+
+  &__no {
+    width: 1.75rem;
+    height: 1.75rem;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    font-size: 0.8125rem;
+    font-weight: 700;
+    background: var(--indigo-9);
+    color: #fff;
+  }
+  &__ico { width: 1rem; height: 1rem; }
+  &__body { min-width: 0; display: grid; gap: $sp-2; align-content: start; padding-top: 0.25rem; }
+  &__title {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--ink);
+    b { color: var(--err); }
+    small { font-weight: 400; color: var(--sub); font-size: 0.75rem; }
+  }
+  &__actions { display: flex; flex-wrap: wrap; gap: $sp-2; }
+  &__note { margin: 0; font-size: 0.75rem; color: var(--sub); b { color: var(--ink2); } }
+  &__ack { color: var(--ink); font-size: 0.8125rem; }
+
+  // 상태: 검토 중(회색) · 오류 남음(빨강) · 문제 없음(초록 체크)
+  &--busy &__no { background: var(--slate-a4); color: var(--ink2); }
+  &--blocked &__no { background: var(--red-9); }
+  &--ready &__no { background: var(--green-9); }
+  &--ready { padding-bottom: $sp-4; }
+  // 1단계를 마치기 전 2단계는 흐리게 (단추는 disabled 로 막혀 있음)
+  &--locked &__no { background: var(--slate-a4); color: var(--sub); }
+  &--locked .getit__paste { opacity: 0.6; }
+}
+
 // ---- 점검 결과 ----
 .checks {
   margin: 1rem 0 0;
@@ -312,6 +375,101 @@
   &--ok { border-color: var(--green-a7); background: var(--green-a2); }
   &--warn { border-color: var(--amber-a8); background: var(--amber-a2); }
   &--error { border-color: var(--red-a8); background: var(--red-a2); }
+}
+
+// ---- 마크업 재검증 3단계 (ReviewPanel, 2026-11-27) — 점검 목록 위. 왼쪽 굵은 선이 전체 상태 ----
+.review {
+  margin-top: 1rem;
+  padding: 0.75rem 0.875rem;
+  display: grid;
+  gap: 0.5rem;
+  background: var(--tile);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--indigo-a7);
+
+  &.is-ok { border-left-color: var(--green-a8); }
+  &.is-warn { border-left-color: var(--amber-a8); }
+  &.is-error { border-left-color: var(--red-a8); }
+
+  &__head { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+  &__ico { width: 1rem; height: 1rem; color: var(--acc); flex: none; }
+  &__title { margin: 0; font-size: 0.875rem; font-weight: 700; }
+  &__sum { font-size: 0.75rem; color: var(--ink2); font-weight: 600; }
+  &.is-ok &__sum { color: var(--ok); }
+  &.is-warn &__sum { color: var(--warn); }
+  &.is-error &__sum { color: var(--err); }
+  &__again { margin-left: auto; }
+
+  &__busy {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--acc);
+  }
+  &__done { font-weight: 400; color: var(--sub); font-size: 0.75rem; }
+
+  &__passes { margin: 0; padding: 0; list-style: none; display: grid; gap: $sp-row; }
+  &__pass {
+    padding: 0.5rem 0.625rem;
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--line);
+    &.is-run { border-left-color: var(--acc); }
+    &.is-wait { opacity: 0.6; }
+    &.is-ok { border-left-color: var(--green-a8); }
+    &.is-warn { border-left-color: var(--amber-a8); }
+    &.is-error { border-left-color: var(--red-a8); }
+  }
+  &__row { display: flex; align-items: center; gap: 0.5rem; }
+  &__num {
+    width: 1.125rem; height: 1.125rem; flex: none;
+    display: inline-grid; place-items: center;
+    border-radius: 50%;
+    font-size: 0.6875rem; font-weight: 700;
+    background: var(--accbg); color: var(--accink);
+  }
+  &__name { font-size: 0.8125rem; }
+  &__state { margin-left: auto; font-size: 0.75rem; color: var(--sub); }
+  &__pass.is-ok &__state { color: var(--ok); }
+  &__pass.is-warn &__state { color: var(--warn); }
+  &__pass.is-error &__state { color: var(--red-11); font-weight: 600; }
+  &__scope { margin: 0.25rem 0 0 1.625rem; font-size: 0.75rem; color: var(--sub); }
+  &__fold { margin: 0.25rem 0 0 1.625rem; .sum { font-size: 0.75rem; padding: 0; } }
+  &__list { margin: 0.375rem 0 0; padding: 0; list-style: none; display: grid; gap: 0.375rem; }
+  &__item {
+    display: flex; gap: 0.375rem; align-items: flex-start;
+    font-size: 0.75rem; color: var(--ink);
+    > div { min-width: 0; }
+  }
+  &__lv { width: 0.875rem; height: 0.875rem; flex: none; margin-top: 0.125rem; }
+  &__item.is-error &__lv { color: var(--err); }
+  &__item.is-warn &__lv { color: var(--warn); }
+  &__item.is-info &__lv { color: var(--sub); }
+  &__samples { display: block; margin-top: 0.125rem; color: var(--sub); word-break: break-all; }
+}
+
+// 마크업 재검증 4단계 — Claude 정밀 검토
+.review {
+  &__spark { width: 0.875rem; height: 0.875rem; margin-right: 0.25rem; vertical-align: -0.125rem; color: var(--acc); }
+  &__ask { margin: 0.5rem 0 0 1.625rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.375rem 0.75rem; .btn { flex: none; } }
+  &__err { flex: 1 1 18rem; min-width: 0; font-size: 0.75rem; color: var(--err); }
+  &__claude { margin: 0.375rem 0 0 1.625rem; display: grid; gap: 0.375rem; justify-items: start; }
+  &__summary { margin: 0; font-size: 0.8125rem; color: var(--ink); }
+  &__claude &__fold { margin-left: 0; }
+  &__by {
+    display: inline-block;
+    margin-right: 0.375rem;
+    padding: 0 0.3125rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    line-height: 1.25rem;
+    border-radius: 3px;
+    background: var(--accbg);
+    color: var(--accink);
+  }
+  &__fix { display: block; margin-top: 0.125rem; color: var(--ink2); }
 }
 
 // ---- 문제 자동 수정 (점검 목록 바로 아래) ----

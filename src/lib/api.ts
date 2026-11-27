@@ -1,5 +1,7 @@
 // 생성 API 호출. 배포(its.itket.com/pagefy)는 Supabase 함수, 개발(yarn dev)은 로컬 서버(/api)
-import type { GodoGoods, HealthInfo, PlanRequest, SectionRequest, StreamEvent } from '../../shared/types';
+import { normMarket } from '../../shared/markets';
+import { boardYear } from '../../shared/types';
+import type { Channel, GodoGoods, HealthInfo, PlanRequest, ReviewRequest, SectionRequest, StreamEvent } from '../../shared/types';
 import type { AdminSettingsRequest, AdminStats, BudgetInfo } from '../../shared/ops';
 import { SUPABASE_ANON_KEY, SUPABASE_URL, currentToken } from './supabase';
 
@@ -42,7 +44,7 @@ export const NO_RESPONSE_MSG = '서버에 연결하지 못했습니다 — 서�
 const noResponse = () => Object.assign(new Error(NO_RESPONSE_MSG), { noResponse: true });
 export const isNoResponse = (e: unknown) => !!(e && typeof e === 'object' && (e as { noResponse?: boolean }).noResponse);
 
-async function stream(path: 'plan' | 'section', body: PlanRequest | SectionRequest, onEvent: (e: StreamEvent) => void, signal: AbortSignal) {
+async function stream(path: 'plan' | 'section' | 'review', body: PlanRequest | SectionRequest | ReviewRequest, onEvent: (e: StreamEvent) => void, signal: AbortSignal) {
   let r: Response;
   try {
     r = await fetch(`${BASE}/${path}`, { method: 'POST', headers: await headers(true), body: JSON.stringify(body), signal });
@@ -96,8 +98,8 @@ export interface StreamResult {
 
 /** 스트림을 끝까지 받아 글 전체를 돌려준다 (status·thinking 은 콜백으로) */
 export async function collect(
-  path: 'plan' | 'section',
-  body: PlanRequest | SectionRequest,
+  path: 'plan' | 'section' | 'review',
+  body: PlanRequest | SectionRequest | ReviewRequest,
   cb: { status?: (m: string) => void; thinking?: (t: string) => void; text?: (all: string) => void },
   signal: AbortSignal,
 ): Promise<StreamResult> {
@@ -137,6 +139,17 @@ export interface UploadTarget {
   /** 오픈마켓 플랫폼 — channel 이 openmarket 이면 꼭 보낸다 (서버가 없으면 거절) */
   market?: string;
   publicRoot: string;
+  /** 고도몰 게시판 글 — …/data/post/<채널>/<게시판>/<슬러그>/ 에 올린다 (2026-11-27) */
+  target?: 'board';
+  board?: string;
+  /** 게시판 글 연도 폴더 YYYY (작업 판의 연도) */
+  year?: string;
+}
+
+/** 작업 설정·결과 meta → 업로드할 곳 (shared/types.ts imageFolder·rootFor 와 같은 규칙) */
+export function uploadTargetFor(m: { channel: Channel; slug: string; market?: string; publicRoot: string; target?: string; board?: string; rev?: string }): UploadTarget {
+  if (m.channel === 'openmarket') return { channel: m.channel, slug: m.slug, market: normMarket(m.market), publicRoot: m.publicRoot };
+  return { channel: m.channel, slug: m.slug, publicRoot: m.publicRoot, ...(m.target === 'board' ? { target: 'board' as const, board: m.board ?? '', year: boardYear(m.rev) } : {}) };
 }
 
 /** 올린 파일 하나 — backup 이 있으면 같은 이름 파일을 덮어쓴 것 (서버에 옛 파일을 그 숨김 이름으로 보관) */

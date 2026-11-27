@@ -14,7 +14,7 @@ import { Tip, TipWrap } from './ui';
 import { SeEditBox } from './SeEditor';
 import { Check, CircleAlert, CircleCheck, Copy, Download, Ellipsis, Eye, FileUp, FolderOpen, FolderSearch, X } from 'lucide-react';
 import { DropdownMenu, Tabs } from 'radix-ui';
-import { uploadCheck } from '../lib/api';
+import { uploadCheck, uploadTargetFor } from '../lib/api';
 import { findSharedPsd } from '../lib/sharedFolder';
 
 /** 공유 폴더에서 찾은 PSD 상태 — 작업을 열 때 한 번 확인한다 (권한이 없으면 찾지 못한 것으로 본다) */
@@ -46,7 +46,7 @@ type ImgCheck = { state: 'checking'; done: number; total: number } | { state: 'o
 async function findMissing(job: Job, base: string, files: string[], server: boolean, onProgress: (done: number) => void, signal: AbortSignal): Promise<string[]> {
   if (server && job.meta && imageBaseUrl(job.meta) === base) {
     try {
-      const { files: listed } = await uploadCheck({ channel: job.meta.channel, slug: job.meta.slug, publicRoot: job.meta.publicRoot }, signal);
+      const { files: listed } = await uploadCheck(uploadTargetFor(job.meta), signal); // 오픈마켓 플랫폼·게시판 폴더까지 (shared/types imageFolder 와 같은 규칙)
       const have = new Set(listed.map((f) => f.file));
       return files.filter((f) => !have.has(f));
     } catch (e) {
@@ -295,7 +295,7 @@ export default function SavedView({ job, onClose, godo, onOpenTester, onPickPsd,
         {copied === 'fail:html' && <p className="msg msg--error">이 브라우저에서 복사가 막혔습니다. 「⋯ → HTML 파일 받기」로 파일을 받아 여세요.</p>}
 
         <Tabs.Content value="preview">
-          {godo && job.meta && <GodoCheckBox html={copySection(html)} folder={`/${job.meta.channel}/${job.meta.slug}/`} link={job.note?.link} onLink={onSaveLink} />}
+          {godo && job.meta && job.meta.target !== 'board' && <GodoCheckBox html={copySection(html)} folder={`/${job.meta.channel}/${job.meta.slug}/`} link={job.note?.link} onLink={onSaveLink} />}
           <div className="saved__frame">
             <iframe ref={frame} title="저장된 HTML 미리보기" sandbox="allow-same-origin" scrolling="no" srcDoc={html} style={{ height }} />
           </div>

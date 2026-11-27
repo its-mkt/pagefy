@@ -833,7 +833,7 @@ export async function busyJobIds(): Promise<Set<string>> {
 export const sameFile = (job: Pick<Job, 'fileName' | 'fileSize'>, f: File) => f.name === job.fileName && f.size === job.fileSize;
 
 export const sameMeta = (a: GenerateMeta, b: GenerateMeta) =>
-  a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot && (a.market ?? '') === (b.market ?? '');
+  a.productName === b.productName && a.channel === b.channel && a.slug === b.slug && a.rev === b.rev && a.publicRoot === b.publicRoot && (a.market ?? '') === (b.market ?? '') && (a.target ?? '') === (b.target ?? '') && (a.board ?? '') === (b.board ?? '');
 /** 같은 묶음(고도몰끼리 · 오픈마켓끼리) — 구조 계획은 고도몰/오픈마켓 방식에만 달려 있어 묶음이 같으면 계획을 다시 쓸 수 있다 */
 export const sameGroup = (a: Pick<GenerateMeta, 'channel'>, b: Pick<GenerateMeta, 'channel'>) => (a.channel === 'openmarket') === (b.channel === 'openmarket');
 

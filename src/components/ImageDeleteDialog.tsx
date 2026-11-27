@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from './Button';
 import { Dialog } from 'radix-ui';
 import { imageBaseUrl } from '../../shared/types';
-import { normMarket } from '../../shared/markets';
 import { fullJob, jobsInFolder, setUploaded, type Job } from '../lib/jobs';
-import { uploadCheck, uploadDelete, uploadVerify, type UploadTarget } from '../lib/api';
+import { uploadCheck, uploadDelete, uploadTargetFor, uploadVerify, type UploadTarget } from '../lib/api';
 import { planDelete } from '../lib/imageDelete';
 
 /** 이미지 폴더 하나에서 지울 계획 — 같은 폴더(채널·플랫폼·슬러그)를 쓰는 고른 작업은 하나로 묶는다 */
@@ -30,7 +29,7 @@ type Step =
 const nameOf = (j: Job) => `${j.settings?.productName || j.fileName}${j.settings?.rev ? ` (${j.settings.rev})` : ''}`;
 /** 지우기 전에 직접 입력해야 하는 확인 문구 */
 const CONFIRM_WORD = '제거합니다';
-const keyOf = (t: UploadTarget) => `${t.channel}/${t.market ?? ''}/${t.slug}`;
+const keyOf = (t: UploadTarget) => `${t.channel}/${t.market ?? ''}/${t.board ?? ''}/${t.year ?? ''}/${t.slug}`;
 const uniq = <T,>(a: T[]) => [...new Set(a)];
 
 /**
@@ -104,7 +103,7 @@ export default function ImageDeleteDialog({ jobs, onClose, after, onChanged }: {
           skipped.push({ name: nameOf(job), reason: '예전 주소 규칙(날짜 폴더 등)으로 만든 결과라 여기서는 지울 수 없습니다' });
           continue;
         }
-        const target: UploadTarget = { channel: meta.channel, slug: meta.slug, ...(meta.channel === 'openmarket' ? { market: normMarket(meta.market) } : {}), publicRoot: meta.publicRoot };
+        const target: UploadTarget = uploadTargetFor(meta);
         const key = keyOf(target);
         if (!remoteOf.has(key)) remoteOf.set(key, uploadCheck(target, ac.signal).then((r) => new Set(r.files.map((f) => f.file))));
         // 같은 폴더를 쓰는 다른 작업 — 이번에 같이 고른 작업은 「남겨야 할 이유」에서 뺀다 (같이 지우니까)

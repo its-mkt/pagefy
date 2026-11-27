@@ -2,9 +2,9 @@
 // 현재 생성 방식 = 구조 계획(plan, engine "code") 한 번 → 마크업은 화면 프로그램이 PSD 값으로 만든다 (psd2html build.js 방식, 2026-11-23~).
 // 섹션별 마크업(section)은 옛 방식으로 저장된 작업(engine 없음)을 이어 하거나 고칠 때만 쓴다.
 import type Anthropic from '@anthropic-ai/sdk';
-import { type GenerateMeta, type PlanRequest, type SectionRequest, type Tile, imageBaseUrl } from '../shared/types.ts';
+import { type GenerateMeta, type PlanRequest, type ReviewRequest, type SectionRequest, type Tile, imageBaseUrl } from '../shared/types.ts';
 import { trimRules } from './rules.ts';
-import { GODO_MAX_W, godoRootCss } from '../shared/width.ts';
+import { GODO_BOARD_MAX_W, GODO_MAX_W, godoRootCss } from '../shared/width.ts';
 
 /** 두 단계 공통 지시 (시스템 프롬프트 앞부분). 규칙 본문은 원본 그대로 뒤에 붙인다 → 두 단계가 같은 캐시를 쓴다 */
 const SERVICE_PREFACE = `너는 통이미지 디자인(상품 상세페이지·랜딩·콘텐츠) PSD를 HTML 마크업으로 바꾸는 웹 서비스 "Pagefy" 안에서 일한다.
@@ -49,7 +49,7 @@ function jobBlock(meta: GenerateMeta) {
   return `<job>
 제품명(폴더명): ${meta.productName}
 채널 폴더: ${channelFolder(meta)} (${meta.channel}) → HTML 작성 방식: ${htmlMode(meta)}
-제품슬러그: ${meta.slug} / rev: ${meta.rev} / 작성일: ${meta.date}
+${meta.channel !== 'openmarket' && meta.target === 'board' ? `올릴 곳: 고도몰 게시판 글 (규칙 7-2-2 — 최대 ${GODO_BOARD_MAX_W}px, h1 없음·글 제목 h3, 상품 상세 기준인 h3 숨김·상품명 h1 은 적용하지 않음)\n` : ''}제품슬러그: ${meta.slug} / rev: ${meta.rev} / 작성일: ${meta.date}
 image_base_url: ${imageBaseUrl(meta)}
 결과 파일: ${meta.productName}.html (이미지: img/)
 </job>`;
@@ -217,4 +217,67 @@ ${JSON.stringify(req.texts)}
     messages.push({ role: 'user', content: `수정 요청:\n${req.revision.feedback}\n\n고친 결과를 같은 세 블록(<section_html>, <section_css>, <section_notes>)으로 전체 다시 써 줘.` });
   }
   return messages;
+}
+
+// ───── 마크업 재검증 — Claude 정밀 검토 (2026-11-27 사용자 지시) ─────
+// 코드 재검증(src/lib/review.ts)은 태그·속성·포함 여부처럼 셀 수 있는 것을 본다. 여기서는 판단이 필요한 것만 본다.
+// 타일 이미지 없이 글자 자료만 보낸다 — 시스템 프롬프트(규칙)는 계획과 같아 5분 안이면 캐시로 읽는다
+
+const REVIEW_TASK = `<task>
+지금은 마크업 재검증 단계다. 프로그램이 만든 마크업을 규칙(<rules>)에 비춰 정밀하게 검토한다. 마크업을 다시 쓰지 않는다.
+<code_findings> 는 프로그램이 이미 센 결과다 (태그·속성·alt 유무·텍스트 포함 여부). 같은 말을 되풀이하지 말고, 판단이 필요한 것을 본다.
+
+세 관점으로 나눠 본다:
+1. rules (규칙·플랫폼): 채널 방식(7-2 고도몰 / 7-3·7-3-1 오픈마켓)과 7-4 플랫폼 제약에 비춰, 프로그램이 셀 수 없는 문제
+   — 예: 섹션 나눔이 주제와 맞지 않음, 고도몰인데 붙여넣으면 스킨과 부딪칠 구조, 오픈마켓에서 지워지면 의미가 사라지는 곳
+2. seo (SEO·GEO·AEO·alt·마크업): 8-2·8-3·8-4
+   — 제목이 그 섹션 주제를 나타내는지 (장식 영문 문구가 h2 이고 실제 주제가 p 인 경우 등), 제목 단계가 의미와 맞는지
+   — alt 가 보이는 것을 구체적으로 말하는지, 정식 모델명 표기 통일, 키워드 나열, 장식 이미지에 의미 없는 alt
+   — 핵심 사실(모델명·부품·용량·크기·무게·포트·OS·보증)이 글자로 있는지, 스펙·나열이 표·목록 구조인지
+   — CSS 를 끄고 읽었을 때 순서가 의미대로인지, 한 문단만 떼어 읽어도 무엇의 정보인지 알 수 있는지
+3. layers (PSD 레이어 대응): <texts> 와 마크업을 대조
+   — kept(이미지에 남긴 사유)가 있는 글자 중 사유가 약하거나, 제목·본문·수치라서 글자로 두는 게 맞는 것 (4절: 텍스트 레이어는 텍스트로가 원칙)
+   — 마크업에서 글자가 다른 레이어와 합쳐져 문장이 끊기거나 순서가 바뀐 곳, 같은 글이 두 번 나오는 곳
+   — PSD 문구의 오탈자는 고치지 말고 info 로만 알린다 (10절: 문구는 PSD 에서만)
+
+출력은 아래 블록 하나만 (블록 밖에 다른 글 없이):
+<review>
+{"summary":"검토 결론 한두 문장",
+ "passes":[
+  {"key":"rules","findings":[{"level":"warn","message":"무엇이 왜 문제인지 (규칙 절 번호)","where":"섹션 이름·레이어 id·글자 일부","fix":"어떻게 고치면 되는지"}]},
+  {"key":"seo","findings":[]},
+  {"key":"layers","findings":[]}],
+ "falsePositives":[{"finding":"code_findings 의 해당 줄 일부","why":"오탐이라고 보는 이유"}]}
+</review>
+
+기준:
+- level: error = 규칙 위반이 확실하고 붙여넣기 전에 고쳐야 함 / warn = 고치는 게 좋음 / info = 참고 (오탈자·PSD 기획 제안 등).
+- 근거가 자료에 있는 것만 적는다. 추측으로 문제를 만들지 않는다. 문제가 없으면 findings 를 [] 로 둔다.
+- 한 관점에 findings 는 많아야 8개. 같은 종류는 하나로 묶고 where 에 예를 적는다.
+- message·fix 는 디자이너도 알아듣게 짧은 한국어로. 규칙 절 번호는 괄호로.
+- 너는 사진을 보지 못한다. 사진 내용과 alt 가 맞는지는 판단하지 말고, alt 문구 자체만 본다.
+- <markup> 에서 style·class·width·height 를 뺐으므로 크기·위치·스킨 CSS 문제는 판단하지 않는다 (그건 프로그램 점검 몫).
+  프로그램은 이미지에 남긴 글자 <img> 에 인라인 폭·높이와 스킨 방어 CSS(.prefix 범위 margin·max-width 초기화)를 넣는다 — 스킨이 작은 img 를 늘린다는 지적은 하지 않는다.
+- 줄마다 나뉜 글자(블록 span)는 사이에 줄바꿈이 들어가 글자만 뽑아도 붙지 않는다.
+- JSON 은 올바르게 (주석·끝 쉼표 금지).
+</task>`;
+
+export function buildReviewMessages(req: ReviewRequest): Anthropic.Beta.BetaMessageParam[] {
+  const head = `${jobBlock(req.meta)}
+<psd>파일: ${req.doc.fileName} / ${req.doc.width}×${req.doc.height}px</psd>
+<texts>
+텍스트 레이어 (id·글자·크기·굵기, heading = 계획의 제목 단계, kept = 이미지에 남긴 사유):
+${JSON.stringify(req.texts)}
+</texts>
+<images>
+${JSON.stringify(req.images)}
+</images>
+<code_findings>
+${req.codeFindings.length ? req.codeFindings.join('\n') : '(없음)'}
+</code_findings>
+<markup>
+복사 구간 뼈대 (<style>·style·class 는 뺐고 이미지 src 는 파일 이름만):
+${req.markup}
+</markup>`;
+  return [{ role: 'user', content: [{ type: 'text', text: head }, { type: 'text', text: REVIEW_TASK }] }];
 }

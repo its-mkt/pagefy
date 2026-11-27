@@ -2,9 +2,9 @@
 // - 각 텍스트 레이어 첫 줄의 기준선(baseline)·가로 위치를 PSD 값과 비교: 세로 ±3px, 가로 ±6px
 // - 모바일 360px 에서 가로 스크롤 여부
 // 화면 밖 iframe 에서 재므로 미리보기에는 영향 없음
-import type { PsdSummary, TextInfo } from '../../shared/types';
+import type { GodoTarget, PsdSummary, TextInfo } from '../../shared/types';
 import type { Check } from './output';
-import { GODO_MAX_W } from '../../shared/width';
+import { godoMaxWidth } from '../../shared/width';
 import { PRETENDARD_CSS_URL } from './fontLock';
 import { OM_FIXED_PX_NOTE } from './checkNotes';
 
@@ -107,11 +107,11 @@ function cmpDesc(a: CharPos, b: CharPos) {
  * skip: 이미지에 일부러 남긴 글자(keepMap) — HTML 에 없는 게 맞으므로 대조·「못 찾음」에서 뺀다
  * marketW: 오픈마켓 출력 폭 (shared/markets.ts marketWidth — 코드 생성이 쓴 폭과 같은 값). 없으면 PSD 폭
  */
-export async function checkLayout(html: string, summary: PsdSummary, skip: ReadonlySet<number> = new Set(), marketW?: number): Promise<LayoutResult> {
+export async function checkLayout(html: string, summary: PsdSummary, skip: ReadonlySet<number> = new Set(), marketW?: number, target?: GodoTarget): Promise<LayoutResult> {
   const W = summary.width;
   // 고도몰 상세 영역은 최대 860px (규칙 7-2) → PSD 가 더 넓으면 860px 로 렌더하고 잰 값을 PSD px 로 되돌린다 (k 배)
   // 오픈마켓은 플랫폼 폭으로 줄여 만들었으면 그 폭으로 렌더한다
-  const VW = isGoodomall(html) ? Math.min(W, GODO_MAX_W) : Math.min(W, marketW ?? W);
+  const VW = isGoodomall(html) ? godoMaxWidth(W, target) : Math.min(W, marketW ?? W);
   const k = W / VW;
   const f = document.createElement('iframe');
   f.setAttribute('sandbox', 'allow-same-origin');

@@ -1,8 +1,8 @@
 // Claude 응답 해석(계획 <plan>/<report> — 옛 방식은 <style>/<notes> 도, 섹션 <section_html>/<section_css>/<section_notes>) + 자동 점검
-import type { Plan, PsdSummary } from '../../shared/types';
+import type { GodoTarget, Plan, PsdSummary } from '../../shared/types';
 import { fontFaces, pretendardChars } from './fontLock';
 import { INLINE_ROW_STYLE, keepMap } from './codegen';
-import { GODO_MAX_W, godoMaxWidth } from '../../shared/width';
+import { godoCap, godoMaxWidth } from '../../shared/width';
 import { UPLOAD_FILE_RE } from '../../core/upload';
 import { MARKETS, type Market } from '../../shared/markets';
 
@@ -181,7 +181,7 @@ export interface Check {
 
 /** 규칙 6-1·7절·8-4 중 코드로 확인할 수 있는 것만 자동 점검 (화면 대조는 사람이 한다) */
 /** kept: 이미지에 일부러 남긴 글자 id (코드 생성 방식) — 텍스트 누락 검사에서 뺀다 */
-export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: string, kept?: Set<number>): Check[] {
+export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: string, kept?: Set<number>, target?: GodoTarget): Check[] {
   const checks: Check[] = [];
   const add = (level: Check['level'], message: string, fix?: Check['fix']) => checks.push({ level, message, fix });
   const { plan, html } = out;
@@ -241,10 +241,11 @@ export function checkOutput(out: ParsedOutput, summary: PsdSummary, baseUrl: str
     const goodomall = /<style[\s>]/i.test(copy);
     if (goodomall) {
       // 7-2: 고도몰 상세 영역은 최대 860px → 최상위 max-width 는 min(PSD 폭, 860)px
-      const maxW = godoMaxWidth(summary.width);
+      const cap = godoCap(target); // 상품 상세 860 · 게시판 980 (7-2-2)
+      const maxW = godoMaxWidth(summary.width, target);
       const widths = [...copy.matchAll(/max-width\s*:\s*(\d+(?:\.\d+)?)px/gi)].map((m) => +m[1]);
-      if (!widths.includes(maxW)) add('warn', `최상위 max-width:${maxW}px 가 없음 — 고도몰 상세 영역 최대 ${GODO_MAX_W}px (7-2)${summary.width > GODO_MAX_W ? `, PSD 폭 ${summary.width}px 는 ${GODO_MAX_W}px 안에서 비율대로 줄임` : ''}`);
-      if (widths.some((w) => w > GODO_MAX_W)) add('warn', `max-width ${Math.max(...widths)}px — 고도몰 상세 영역은 최대 ${GODO_MAX_W}px (7-2)`);
+      if (!widths.includes(maxW)) add('warn', `최상위 max-width:${maxW}px 가 없음 — 고도몰 ${target === 'board' ? '게시판 본문' : '상세 영역'} 최대 ${cap}px (7-2)${summary.width > cap ? `, PSD 폭 ${summary.width}px 는 ${cap}px 안에서 비율대로 줄임` : ''}`);
+      if (widths.some((w) => w > cap)) add('warn', `max-width ${Math.max(...widths)}px — 고도몰 ${target === 'board' ? '게시판 본문' : '상세 영역'}은 최대 ${cap}px (7-2)`);
       // 7-6: 글자 선택 막기 — 상세 영역 안 전부, 예외 없음
       if (!/user-select\s*:\s*none\s*!important/i.test(copy)) add('warn', '글자 선택 막기(user-select:none!important)가 없음 (7-6)');
       if (/user-select\s*:\s*(text|auto|all)/i.test(copy)) add('warn', '선택을 다시 허용하는 user-select:text/auto/all 이 있음 — 7-6: 예외 없이 모두 막음');

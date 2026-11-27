@@ -5,10 +5,10 @@
 // - 규칙: 저장소의 rules/pagefy.md (공유 폴더 원본을 yarn sync:rules 로 복사해 push, 옛 이름 detail_to_markup.md 도 읽음) 를 읽어 10분간 기억한다
 // - core/·shared/ 는 저장소의 같은 폴더를 yarn build:function 으로 복사한 것 (직접 고치지 않는다)
 import Anthropic from '@anthropic-ai/sdk';
-import { buildPlanMessages, buildSectionMessages, buildSystem } from './core/prompt.ts';
+import { buildPlanMessages, buildReviewMessages, buildSectionMessages, buildSystem } from './core/prompt.ts';
 import { describeError, runClaude, usageOfError, type Effort, type RunConfig } from './core/run.ts';
-import { validatePlan, validateSection } from './core/validate.ts';
-import type { HealthInfo, PlanRequest, SectionRequest, StreamEvent } from './shared/types.ts';
+import { validatePlan, validateReview, validateSection } from './core/validate.ts';
+import type { HealthInfo, PlanRequest, ReviewRequest, SectionRequest, StreamEvent } from './shared/types.ts';
 import type { Dial } from './core/ftp.ts';
 import { adminStats, budgetBlock, checkFeedback, getBudget, opsConfigFrom, saveFeedback, saveSettings, trackRun } from './core/ops.ts';
 import type { AdminSettingsRequest, FeedbackRequest } from './shared/ops.ts';
@@ -98,6 +98,8 @@ const EFFORT = (Deno.env.get('PAGEFY_EFFORT') || 'medium') as Effort;
 const RUN: RunConfig = { model: MODEL, effort: EFFORT, maxTokens: 32000, timeLimitMs: 140_000 };
 /** 계획 effort. 2026-11-20(옛 방식: 계획이 CSS·지침까지 씀)엔 medium 이 140초를 넘었지만, 2026-11-23 구조 계획만 쓰는 지금 방식은 ZGX(860×17455) medium 95초 — 품질을 위해 medium. 시간 초과가 잦으면 PAGEFY_PLAN_EFFORT=low */
 const PLAN_RUN: RunConfig = { ...RUN, effort: (Deno.env.get('PAGEFY_PLAN_EFFORT') || 'medium') as Effort, maxTokens: 16000 };
+/** 마크업 재검증(Claude 정밀 검토) — 글자 자료만이라 계획보다 짧다 */
+const REVIEW_RUN: RunConfig = { ...RUN, effort: (Deno.env.get('PAGEFY_REVIEW_EFFORT') || 'medium') as Effort, maxTokens: 12000 };
 const hasKey = () => !!Deno.env.get('ANTHROPIC_API_KEY');
 
 let client: Anthropic | null = null;
@@ -192,6 +194,8 @@ Deno.serve(async (req) => {
       ? 'plan'
       : path.endsWith('/section')
         ? 'section'
+        : path.endsWith('/review')
+        ? 'review'
         : path.endsWith('/upload/check')
           ? 'upload-check'
           : path.endsWith('/upload/files')
@@ -357,6 +361,18 @@ Deno.serve(async (req) => {
       send({ type: 'status', message: `계획 요청 중… (타일 ${b.tiles.length}장, 텍스트 ${b.summary.texts.length}개)` });
       const system = buildSystem((await loadRules()).text);
       await tracked({ email: emailOf(token), action: 'plan', product: b.meta?.productName, channel: b.meta?.channel }, send, signal, (s) => runClaude(getClient(), within(PLAN_RUN, t0), system, buildPlanMessages(b), s, signal));
+    });
+  }
+
+  // 마크업 재검증 — Claude 정밀 검토 (월 상한·권한 확인은 생성과 같다)
+  if (action === 'review') {
+    const b = body as ReviewRequest;
+    const problem = validateReview(b);
+    if (problem) return json(req, 400, { error: problem });
+    return sse(req, async (send, signal) => {
+      send({ type: 'status', message: `정밀 검토 요청 중… (마크업 ${Math.round(b.markup.length / 1000)}천 자, 텍스트 ${b.texts.length}개)` });
+      const system = buildSystem((await loadRules()).text);
+      await tracked({ email: emailOf(token), action: 'review', product: b.meta?.productName, channel: b.meta?.channel }, send, signal, (s) => runClaude(getClient(), within(REVIEW_RUN, t0), system, buildReviewMessages(b), s, signal));
     });
   }
 

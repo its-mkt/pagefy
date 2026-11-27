@@ -1,6 +1,6 @@
 // MOCK=1 일 때: Claude 를 부르지 않고 받은 자료로 단순한 예시 결과를 만들어 스트리밍한다 (화면 흐름 점검용, 비용 없음)
 // 결과 품질은 실제 Claude 결과와 다르다. 레이아웃 공식만 대략 맞춘 예시다
-import type { Plan, PlanRequest, SectionRequest, StreamEvent, TextInfo } from '../shared/types.ts';
+import type { Plan, PlanRequest, ReviewRequest, SectionRequest, StreamEvent, TextInfo } from '../shared/types.ts';
 import { godoRootCss } from '../shared/width.ts';
 import { imageBaseUrl } from '../shared/types.ts';
 
@@ -96,7 +96,7 @@ export function mockLegacyPlanOutput(req: PlanRequest): string {
 ${godoRootCss(prefix, W)}
 .${prefix} { font-family:'Pretendard','Noto Sans KR','Malgun Gothic',sans-serif; word-break:keep-all; overflow-wrap:anywhere; }
 .${prefix} * { margin:0; padding:0; font:inherit; color:inherit; letter-spacing:inherit; }
-.${prefix} .${prefix}-sec { display:flow-root; background-size:100% auto; background-repeat:no-repeat; }`;
+.${prefix} .${prefix}-sec { display:flow-root; background-repeat:no-repeat; }`;
   const report = `- 원본: ${s.fileName} (${s.width}×${s.height}) / 채널: ${meta.channel}\n- 섹션 ${plan.sections.length}개 (1500px 단위로 기계적으로 나눔)\n- ※ MOCK 모드 예시 결과입니다. Claude 를 부르지 않았습니다.\n- 미검증 항목: 전부`;
   return `<plan>\n${JSON.stringify(plan, null, 1)}\n</plan>\n<style>\n${style}\n</style>\n<notes>\nMOCK: 글자는 PSD 위치대로 흐름 배치.\n</notes>\n<report>\n${report}\n</report>`;
 }
@@ -131,10 +131,12 @@ export function mockSectionOutput(req: SectionRequest): string {
         .join(';');
       return `    <p style="${style}">${t.lines.map(esc).join('<br>')}</p>`;
     });
-  const bgStyle = bg ? `background-image:url('${base}/${bg.file}');` : '';
+  // 배경 세로 크기는 min-height 와 같은 값으로 (`100% auto` 는 반올림 차이로 이음매에 흰 줄 — codegen.ts 와 같은 규칙 7-2)
+  const hu = unit(sec.y1 - sec.y0);
+  const bgStyle = bg ? `background-image:url('${base}/${bg.file}');background-size:100% ${hu};` : '';
   const html = inline
-    ? `<!-- ${sec.id} ${sec.name} -->\n<div class="${prefix}-${sec.id}" style="${bgStyle}background-size:100% auto;background-repeat:no-repeat;min-height:${sec.y1 - sec.y0}px;overflow:hidden">\n${rows.join('\n')}\n</div>`
-    : `<!-- ${sec.id} ${sec.name} -->\n<section class="${prefix}-sec ${prefix}-${sec.id}" style="${bgStyle}min-height:calc(${sec.y1 - sec.y0} * var(--u))">\n${rows.join('\n')}\n</section>`;
+    ? `<!-- ${sec.id} ${sec.name} -->\n<div class="${prefix}-${sec.id}" style="${bgStyle}background-repeat:no-repeat;min-height:${hu};overflow:hidden">\n${rows.join('\n')}\n</div>`
+    : `<!-- ${sec.id} ${sec.name} -->\n<section class="${prefix}-sec ${prefix}-${sec.id}" style="${bgStyle}min-height:${hu}">\n${rows.join('\n')}\n</section>`;
   void W;
   return `<section_html>\n${html}\n</section_html>\n<section_css>\n</section_css>\n<section_notes>\nMOCK 섹션${req.revision ? ' (수정 요청 받음 — MOCK 은 내용을 바꾸지 않음)' : ''}\n</section_notes>`;
 }
@@ -148,4 +150,21 @@ export async function mockStream(out: string, send: (e: StreamEvent) => void, si
     await new Promise((r) => setTimeout(r, 30));
   }
   send({ type: 'done', stopReason: 'end_turn', model: 'mock', usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 } });
+}
+
+/** MOCK 재검증 — 형식만 맞춘 예시 (Claude 호출 없음) */
+export function mockReviewOutput(req: ReviewRequest): string {
+  const kept = req.texts.filter((t) => t.kept);
+  const review = {
+    summary: `MOCK 모드 예시입니다 (Claude 호출 안 함). 텍스트 레이어 ${req.texts.length}개 · 코드 점검 ${req.codeFindings.length}건을 받았습니다.`,
+    passes: [
+      { key: 'rules', findings: [] },
+      { key: 'seo', findings: [{ level: 'info', message: 'MOCK: 실제 Claude 검토는 API 키가 있는 서버에서 나옵니다', where: req.meta.productName, fix: 'MOCK=0 으로 서버를 켜고 다시 검토' }] },
+      { key: 'layers', findings: kept.length ? [{ level: 'info', message: `MOCK: 이미지에 남긴 글자 ${kept.length}개를 받았습니다`, where: kept.slice(0, 3).map((t) => `#${t.id}`).join(', '), fix: '' }] : [] },
+    ],
+    falsePositives: [],
+  };
+  return `<review>
+${JSON.stringify(review)}
+</review>`;
 }

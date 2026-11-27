@@ -5,7 +5,7 @@
 //  - 글자 상자: 규칙 4-1 (줄 상자 위쪽 = 기준선 − (행간/2 + 0.35×크기), 줄마다 다른 행간, 문단 간격, 끝 공백 보존)
 //  - 세로가 겹치는 상자끼리 한 줄(고도몰 flex / 오픈마켓 table)로 묶는다
 //  - 고도몰: 모든 크기 calc(N * var(--u)) (7-5), 스타일은 <style> 클래스 + 인라인 / 오픈마켓: 인라인·px 고정 (7-3)
-import { type GenerateMeta, type Plan, type PlanBundle, type PlanImage, type PsdSummary, type TextInfo, type TextRun, imageBaseUrl } from '../../shared/types';
+import { type GenerateMeta, type GodoTarget, type Plan, type PlanBundle, type PlanImage, type PsdSummary, type TextInfo, type TextRun, imageBaseUrl } from '../../shared/types';
 import { godoRootCss } from '../../shared/width';
 import { MARKETS, marketWidth, normMarket, type MarketSpec } from '../../shared/markets';
 import { FONT_MAP, weightOf } from './psd/extract';
@@ -313,7 +313,9 @@ function textBox(t: TextInfo, ctx: Ctx): Box {
         if (Math.abs(mt) > 0.05) st.push(`margin-top:${u(mt)}`);
         return `<span style="${st.join(';')}">${htmlOf(ln, ln.size) || '&nbsp;'}</span>`; // 빈 줄도 높이를 갖게
       })
-      .join('');
+      // 블록 줄 사이 줄바꿈 — 화면은 그대로(블록 사이 공백은 그려지지 않음)지만 글자만 뽑을 때 줄끼리 붙지 않게
+      // (예전에는 'NVIDIA®GB10Superchip' 처럼 붙어 검색·AI 가 잘못 읽음 — 2026-11-27 재검증 지적, 규칙 8-3 2항)
+      .join('\n');
   }
 
   const align = t.align === 'center' ? 'center' : t.align === 'right' ? 'right' : 'left';
@@ -545,17 +547,17 @@ export function sectionStrips(
   return { strips, autoH2 };
 }
 
-function baseCss(p: string, W: number, usedFonts: Map<string, Set<number>>) {
+function baseCss(p: string, W: number, usedFonts: Map<string, Set<number>>, target?: GodoTarget) {
   const wf = webFontCss(usedFonts);
   return [
     ...wf.imports,
     wf.faces.length ? `/* 웹폰트 (규칙 5절 표, 쓴 굵기만) */\n${wf.faces.join('\n')}` : '',
-    `/* 최상위 폭·배율 (7-2·7-5) */\n${godoRootCss(p, W)}`,
+    `/* 최상위 폭·배율 (7-2·7-5) */\n${godoRootCss(p, W, target)}`,
     `/* 스킨 CSS 방어 + 기본값 */
 .${p}{font-family:'Pretendard',${FALLBACK_FAMILY};word-break:keep-all;overflow-wrap:anywhere;text-align:left;line-height:1.2;letter-spacing:normal;text-transform:none;text-indent:0;font-weight:400;font-style:normal;font-size:16px;padding:0;border:0;font-kerning:normal;font-variant-ligatures:normal;font-feature-settings:normal;font-optical-sizing:auto}
 .${p}.${p} *{box-sizing:border-box;margin:0;padding:0;border:0;font:inherit;color:inherit;letter-spacing:inherit;text-transform:inherit;text-decoration:none;vertical-align:baseline}
 .${p} .${p}-s{display:block}
-.${p} .${p}-sec{background-repeat:no-repeat;background-size:100% auto;background-position:center top;overflow:hidden}
+.${p} .${p}-sec{background-repeat:no-repeat;background-position:center top;overflow:hidden}
 .${p} .${p}-row{display:flex;align-items:flex-start}
 .${p} .${p}-row>*{flex:none;white-space:nowrap}
 .${p} img.${p}-img{display:block;width:100%;max-width:none;height:auto;float:none}
@@ -935,13 +937,18 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
       const r = emitRows(blk.boxes, ctx, tagOf, '    ');
       // 마지막 줄 상자가 블록 높이보다 내려오면 다음 블록이 밀린다 → 넘친 만큼 아래 여백을 당긴다
       const over = r.prevBottom - h;
-      if (goodomall) {
-        out.push(`  <div class="${prefix}-sec" style="${over > 0 ? `margin-bottom:${ctx.u(-over)};` : ''}background-image:url('${url}');min-height:${ctx.u(h)};padding-top:${ctx.u(r.first)}">`);
-      } else {
-        out.push(
-          `  <div style="background-image:url('${url}');background-repeat:no-repeat;background-position:center top;background-size:100% auto;min-height:${ctx.u(h)};padding-top:${ctx.u(r.first)};${over > 0 ? `margin-bottom:${ctx.u(-over)};` : ''}overflow:hidden;box-sizing:border-box">`,
-        );
-      }
+      // 배경 세로 크기는 min-height 와 같은 식으로 적는다 — `100% auto` 는 폭×비율로 따로 계산돼 소수점 반올림 차이(0.x~1px)로
+      // 블록 이음매에 흰 줄이 생기고, `100% 100%` 는 글자가 넘쳐 블록이 커지면(over>0) 배경이 세로로 늘어난다 (2026-11-27, 규칙 7-2)
+      // 단, 폭이 화면 따라 바뀌는 오픈마켓 래퍼(width:100%)에서는 세로만 px 로 고정하면 배경이 가로로만 늘어 찌그러지므로 비율 유지(100% auto)
+      const hu = ctx.u(h);
+      const fluidOm = !goodomall && !!rules?.noMaxWidth && OPENMARKET_FLUID_WRAPPER;
+      const bgStyle = `${over > 0 ? `margin-bottom:${ctx.u(-over)};` : ''}background-image:url('${url}');background-size:100% ${fluidOm ? 'auto' : hu};min-height:${hu};padding-top:${ctx.u(r.first)}`;
+      // 고도몰은 나머지(no-repeat·위치·overflow)를 공통 CSS .-sec 에, 오픈마켓은 <style> 을 못 써서 인라인으로
+      out.push(
+        goodomall
+          ? `  <div class="${prefix}-sec" style="${bgStyle}">`
+          : `  <div style="background-repeat:no-repeat;background-position:center top;overflow:hidden;box-sizing:border-box;${bgStyle}">`,
+      );
       out.push(...r.lines);
       out.push('  </div>');
     }
@@ -952,7 +959,7 @@ export function generateMarkup(meta: GenerateMeta, summary: PsdSummary, plan0: P
   // G마켓·옥션(ESM): 상세 이미지 최대 100장 [공식 가이드] — 섹션 이미지를 띠로 나누면 장수가 는다
   if (rules?.maxImgRatio && images.length > 100) warnings.push(warn(`이미지가 ${images.length}장입니다 — G마켓·옥션은 최대 100장입니다 (7-4). 섹션을 합치거나 제목 수를 줄여 주세요.`));
 
-  const style = goodomall ? baseCss(prefix, W, ctx.usedFonts) : '';
+  const style = goodomall ? baseCss(prefix, W, ctx.usedFonts, meta.target) : '';
   const wrapperStyle = goodomall
     ? undefined
     : `${rules?.noMaxWidth ? (OPENMARKET_FLUID_WRAPPER ? 'width:100%' : `width:${OW}px`) : `max-width:${OW}px`};margin:0 auto;font-family:'Pretendard',${FALLBACK_FAMILY};line-height:1.2;word-break:keep-all;text-align:left;font-weight:400;letter-spacing:normal`;

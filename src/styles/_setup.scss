@@ -430,3 +430,15 @@
 
 // 고도몰 쇼핑몰 사이 구분선 — 아이티켓 · zbyhp · cadkorea | 온코어 (SettingsPanel GODO_SPLIT)
 .chopt__sep { align-self: stretch; width: 1px; margin: 0.25rem $sp-row; background: var(--line2); }
+
+// 올릴 곳 (고도몰 상품 상세 · 게시판) — 판매처 칸과 같은 모양 (칸 이름 → 토글 → 도움말, 규칙 7-2-2)
+.form .setup__target {
+  display: grid;
+  gap: $sp-2;
+  align-content: start;
+  > span { font-size: 0.75rem; color: var(--sub); font-weight: 500; }
+  > .seg { justify-self: start; }
+  > small { margin-top: calc(#{$sp-row} - #{$sp-2}); }
+}
+// 게시판 폴더 직접 입력 (목록이 없는 쇼핑몰) — 드롭다운(.sel)과 같은 폭으로 토글 옆에
+.form .setup__channel-row > .setup__board { flex: 0 1 15rem; width: auto; min-width: 0; }
